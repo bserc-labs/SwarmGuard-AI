@@ -9,3 +9,9 @@ venv/
 .coverage
 htmlcov/
 .DS_Store
+
+# SQLite database
+backend/swarmguard.db
+
+# Local admin creation script (optional)
+backend/create_admin.py
