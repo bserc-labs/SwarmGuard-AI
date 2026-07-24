@@ -3,29 +3,16 @@ from typing import Dict, Any, List
 
 class ThreatIntelligenceService:
     def calculate_threat_score(self, anomaly_score: float, attack_type: str) -> int:
-        """Calculate threat score from 0 to 100 based on anomaly and attack type."""
-        base_score = int(anomaly_score * 100)
-        
-        # Categorization multipliers
-        multipliers = {
-            "GPS_SPOOFING": 1.5,
-            "JAMMING": 1.2,
-            "DOS": 1.8,
-            "REPLAY_ATTACK": 1.3
-        }
-        
-        multiplier = multipliers.get(attack_type, 1.0)
-        final_score = int(base_score * multiplier)
-        
-        return min(max(final_score, 0), 100)
+        """Calculate threat score from 0 to 100 based on anomaly."""
+        return min(100, max(0, int(abs(anomaly_score) * 200)))
 
     def map_severity(self, threat_score: int) -> str:
         """Severity mapping based on score."""
-        if threat_score < 30:
+        if threat_score <= 25:
             return "LOW"
-        elif threat_score < 60:
+        elif threat_score <= 50:
             return "MEDIUM"
-        elif threat_score < 85:
+        elif threat_score <= 75:
             return "HIGH"
         else:
             return "CRITICAL"
