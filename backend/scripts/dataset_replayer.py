@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.logger import logger
 import time
 import random
 import requests
@@ -20,7 +23,7 @@ def generate_telemetry(drone_id: str, is_anomaly: bool = False):
         # Generate anomalous spikes (e.g. erratic speed and altitude drop)
         speed = random.uniform(50.0, 100.0)
         altitude = random.uniform(10.0, 20.0)
-        print(f"\n⚠️  Injecting ANOMALY for {drone_id} (Speed: {speed:.2f}, Alt: {altitude:.2f})")
+        logger.info(f"\n⚠️  Injecting ANOMALY for {drone_id} (Speed: {speed:.2f}, Alt: {altitude:.2f})")
     
     return {
         "drone_id": drone_id,
@@ -34,8 +37,8 @@ def generate_telemetry(drone_id: str, is_anomaly: bool = False):
     }
 
 def run_replayer():
-    print(f"🚀 Starting Dataset Replayer... Sending data to {API_URL}")
-    print("Sending exactly 10 packets for testing...\n")
+    logger.info(f"🚀 Starting Dataset Replayer... Sending data to {API_URL}")
+    logger.info("Sending exactly 10 packets for testing...\n")
     drones = ["drone_alpha", "drone_beta", "drone_gamma"]
     
     try:
@@ -52,20 +55,20 @@ def run_replayer():
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("threat_level", 0) > 0:
-                        print(f"🚨 ALERT Triggered! Threat: {data.get('threat_level')} | Explanation: {data.get('explanation')}")
+                        logger.info(f"🚨 ALERT Triggered! Threat: {data.get('threat_level')} | Explanation: {data.get('explanation')}")
                     else:
-                        print(f"✅ Packet sent OK for {drone_id}")
+                        logger.info(f"✅ Packet sent OK for {drone_id}")
                 else:
-                    print(f"❌ Server returned {response.status_code}: {response.text}")
+                    logger.info(f"❌ Server returned {response.status_code}: {response.text}")
             except requests.exceptions.ConnectionError:
-                print(f"❌ Connection Failed. Is the backend running at {API_URL}?")
+                logger.info(f"❌ Connection Failed. Is the backend running at {API_URL}?")
                 break
             
             time.sleep(2) # Continuous loop
             
             
     except KeyboardInterrupt:
-        print("\n🛑 Replayer stopped.")
+        logger.info("\n🛑 Replayer stopped.")
 
 if __name__ == "__main__":
     run_replayer()

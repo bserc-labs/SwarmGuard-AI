@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.logger import logger
 import sys
 import os
 from pathlib import Path
@@ -16,7 +19,7 @@ def seed_users():
     # Check if admin already exists
     admin = db.query(models.User).filter(models.User.username == "admin").first()
     if admin:
-        print("✅ Admin user already exists!")
+        logger.info("✅ Admin user already exists!")
         return
         
     # Create new admin user
@@ -30,7 +33,7 @@ def seed_users():
     
     db.add(new_user)
     db.commit()
-    print("✅ Admin user created successfully (username: 'admin', password: 'admin')")
+    logger.info("✅ Admin user created successfully (username: 'admin', password: 'admin')")
     
     db.close()
 
