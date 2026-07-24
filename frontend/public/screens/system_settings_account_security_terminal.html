@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SwarmGuard-AI | Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=Courier+Prime&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "tertiary-container": "#ffbb2a",
+                    "surface-variant": "#2f3638",
+                    "inverse-on-surface": "#2a3234",
+                    "error": "#ffb4ab",
+                    "tertiary": "#ffdeaa",
+                    "surface-dim": "#0e1417",
+                    "secondary-container": "#0053db",
+                    "on-tertiary-container": "#6e4d00",
+                    "inverse-primary": "#00687b",
+                    "surface-container": "#1a2123",
+                    "surface-container-low": "#161d1f",
+                    "on-secondary": "#002a78",
+                    "outline-variant": "#3c494d",
+                    "on-primary-fixed-variant": "#004e5d",
+                    "surface-container-lowest": "#080f11",
+                    "error-container": "#93000a",
+                    "on-surface": "#dde4e6",
+                    "inverse-surface": "#dde4e6",
+                    "on-secondary-container": "#cdd7ff",
+                    "on-tertiary-fixed": "#271900",
+                    "tertiary-fixed-dim": "#febb29",
+                    "secondary-fixed-dim": "#b4c5ff",
+                    "on-surface-variant": "#bbc9ce",
+                    "surface-container-high": "#242b2d",
+                    "surface-bright": "#333a3d",
+                    "surface": "#0e1417",
+                    "on-tertiary-fixed-variant": "#5e4100",
+                    "on-primary-fixed": "#001f26",
+                    "surface-container-highest": "#2f3638",
+                    "on-secondary-fixed": "#00174b",
+                    "on-error-container": "#ffdad6",
+                    "on-primary": "#003641",
+                    "on-background": "#dde4e6",
+                    "surface-tint": "#00d9ff",
+                    "outline": "#859398",
+                    "secondary": "#b4c5ff",
+                    "primary-fixed": "#aeecff",
+                    "on-tertiary": "#422d00",
+                    "primary-container": "#00d9ff",
+                    "on-primary-container": "#005b6c",
+                    "primary": "#afecff",
+                    "on-error": "#690005",
+                    "background": "#0e1417",
+                    "secondary-fixed": "#dbe1ff",
+                    "tertiary-fixed": "#ffdea9",
+                    "primary-fixed-dim": "#00d9ff",
+                    "on-secondary-fixed-variant": "#003ea8"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "unit": "4px",
+                    "gutter": "16px",
+                    "container-padding": "24px",
+                    "card-gap": "20px"
+            },
+            "fontFamily": {
+                    "body-sm": ["Inter"],
+                    "mono-data": ["Courier Prime"],
+                    "headline-lg-mobile": ["Inter"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "title-md": ["Inter"],
+                    "headline-lg": ["Inter"]
+            },
+            "fontSize": {
+                    "body-sm": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                    "title-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #0b0f1a;
+            color: #dde4e6;
+            margin: 0;
+            padding: 0;
+        }
+        .settings-card {
+            background-color: #111827;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .input-dark {
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #dde4e6;
+        }
+        .input-dark:focus {
+            border-color: #00d9ff;
+            outline: none;
+            box-shadow: 0 0 0 1px #00d9ff;
+        }
+        .switch-toggle {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .switch-toggle input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #2f3638; transition: .4s; border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background-color: white; transition: .4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #00d9ff; }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body class="font-body-md text-body-md overflow-hidden">
+<!-- Top Command Bar -->
+<header class="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-container-padding h-16 bg-surface-container-low/80 backdrop-blur-md border-b border-white/10 shadow-sm">
+<div class="flex items-center gap-4">
+<span class="font-headline-lg text-headline-lg font-bold text-primary">SwarmGuard-AI</span>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="hover:text-primary-fixed-dim transition-colors scale-95 active:opacity-80 transition-transform">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="hover:text-primary-fixed-dim transition-colors scale-95 active:opacity-80 transition-transform text-primary font-bold border-b-2 border-primary">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+<button class="hover:text-primary-fixed-dim transition-colors scale-95 active:opacity-80 transition-transform">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<div class="flex h-screen pt-16">
+<!-- Sidebar Navigation -->
+<aside class="hidden lg:flex flex-col py-8 px-4 fixed left-0 top-16 h-full w-[280px] bg-surface-container-lowest/90 backdrop-blur-xl border-r border-white/5 z-40">
+<div class="mb-8 px-2">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-secondary-container/20 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="shield">shield</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Analyst Terminal</h3>
+<p class="text-xs text-on-surface-variant font-mono-data uppercase">Sector 7-G</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="analytics">analytics</span>
+<span class="font-body-md text-body-md">Live Telemetry</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+<span class="font-body-md text-body-md">Drone Monitoring</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="security">security</span>
+<span class="font-body-md text-body-md">Threat Intelligence</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+<span class="font-body-md text-body-md">Incidents</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="settings_input_component">settings_input_component</span>
+<span class="font-body-md text-body-md">Drone Management</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-secondary-container/20 text-primary border-r-4 border-primary transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-white/5 hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-body-md text-body-md">Profile</span>
+</a>
+</nav>
+<div class="mt-auto space-y-4 pt-6 border-t border-white/5">
+<button class="w-full bg-primary-container text-on-primary-container py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95">
+<span class="material-symbols-outlined text-xl" data-icon="warning">warning</span>
+                    Deploy Countermeasures
+                </button>
+<div class="space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-primary transition-colors text-sm" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="shield">shield</span>
+                        Security Settings
+                    </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-primary transition-colors text-sm" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="help">help</span>
+                        Help Center
+                    </a>
+</div>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 ml-0 lg:ml-[280px] overflow-y-auto bg-surface p-8 pb-20">
+<div class="max-w-6xl mx-auto">
+<header class="mb-10">
+<h1 class="font-headline-lg text-headline-lg text-on-surface mb-1">Settings</h1>
+<p class="text-on-surface-variant text-body-md">Manage your account and platform preferences.</p>
+</header>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-card-gap">
+<!-- Card 1: Account -->
+<section class="settings-card p-6 rounded-lg flex flex-col">
+<div class="flex items-center justify-between mb-6">
+<h2 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="manage_accounts">manage_accounts</span>
+                                Account
+                            </h2>
+<span class="px-3 py-1 bg-primary-container/10 text-primary-fixed-dim text-label-caps border border-primary/20 rounded">ADMIN</span>
+</div>
+<div class="space-y-4 flex-1">
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-2">FULL NAME</label>
+<input class="w-full input-dark rounded-lg px-4 py-2.5 font-body-md" type="text" value="Alexander Vance"/>
+</div>
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-2">EMAIL ADDRESS</label>
+<input class="w-full input-dark rounded-lg px-4 py-2.5 font-body-md" type="email" value="a.vance@swarmguard.ai"/>
+</div>
+</div>
+<div class="mt-8 pt-6 border-t border-white/5">
+<button class="bg-primary-container text-on-primary-container px-6 py-2.5 rounded font-bold transition-all hover:brightness-110 active:scale-95">Save Changes</button>
+</div>
+</section>
+<!-- Card 2: Notifications -->
+<section class="settings-card p-6 rounded-lg">
+<h2 class="font-title-md text-title-md text-on-surface mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="notifications_active">notifications_active</span>
+                            Notifications
+                        </h2>
+<div class="space-y-6">
+<div class="flex items-center justify-between">
+<div>
+<h4 class="font-semibold text-on-surface">Email Alerts</h4>
+<p class="text-body-sm text-[#9BB0CC]">Receive critical mission updates via email.</p>
+</div>
+<label class="switch-toggle">
+<input checked="" type="checkbox"/>
+<span class="slider"></span>
+</label>
+</div>
+<div class="flex items-center justify-between">
+<div>
+<h4 class="font-semibold text-on-surface">Critical Threat Push</h4>
+<p class="text-body-sm text-[#9BB0CC]">Instant browser notifications for Priority-1 threats.</p>
+</div>
+<label class="switch-toggle">
+<input checked="" type="checkbox"/>
+<span class="slider"></span>
+</label>
+</div>
+<div class="flex items-center justify-between">
+<div>
+<h4 class="font-semibold text-on-surface">Weekly Report Digest</h4>
+<p class="text-body-sm text-[#9BB0CC]">A summary of fleet performance and log metrics.</p>
+</div>
+<label class="switch-toggle">
+<input type="checkbox"/>
+<span class="slider"></span>
+</label>
+</div>
+</div>
+</section>
+<!-- Card 3: Security -->
+<section class="settings-card p-6 rounded-lg">
+<h2 class="font-title-md text-title-md text-on-surface mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="security">security</span>
+                            Security
+                        </h2>
+<div class="space-y-4 mb-6">
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-2">CURRENT PASSWORD</label>
+<input class="w-full input-dark rounded-lg px-4 py-2.5 font-body-md" placeholder="••••••••••••" type="password"/>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-2">NEW PASSWORD</label>
+<input class="w-full input-dark rounded-lg px-4 py-2.5 font-body-md" type="password"/>
+</div>
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-2">CONFIRM NEW</label>
+<input class="w-full input-dark rounded-lg px-4 py-2.5 font-body-md" type="password"/>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-between py-4 border-y border-white/5 mb-6">
+<div class="flex items-center gap-3">
+<span class="font-semibold text-on-surface">Two-Factor Authentication</span>
+<span class="px-2 py-0.5 bg-tertiary-container/10 text-tertiary-fixed-dim text-[10px] font-bold border border-tertiary/20 rounded">ENABLED</span>
+</div>
+<label class="switch-toggle">
+<input checked="" type="checkbox"/>
+<span class="slider"></span>
+</label>
+</div>
+<button class="w-full border border-error text-error py-2.5 rounded font-bold hover:bg-error/5 transition-colors mb-4">Revoke All Active Sessions</button>
+<p class="text-[11px] text-[#9BB0CC] italic flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="info">info</span>
+                            Note: Platform-wide security protocols are managed by Admin role.
+                        </p>
+</section>
+<!-- Card 4: Appearance -->
+<section class="settings-card p-6 rounded-lg">
+<h2 class="font-title-md text-title-md text-on-surface mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="palette">palette</span>
+                            Appearance
+                        </h2>
+<div class="space-y-8">
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-4">THEME MODE</label>
+<div class="grid grid-cols-2 gap-4">
+<button class="flex flex-col items-center gap-3 p-4 border-2 border-primary bg-primary/5 rounded-lg transition-all group">
+<div class="w-full h-12 bg-[#0b0f1a] rounded border border-white/10 flex items-center px-2">
+<div class="h-2 w-12 bg-white/10 rounded"></div>
+</div>
+<span class="text-on-surface font-semibold text-sm">Dark Mode</span>
+</button>
+<button class="flex flex-col items-center gap-3 p-4 border-2 border-transparent bg-white/5 rounded-lg transition-all hover:bg-white/10 group">
+<div class="w-full h-12 bg-white rounded border border-black/10 flex items-center px-2">
+<div class="h-2 w-12 bg-black/10 rounded"></div>
+</div>
+<span class="text-on-surface-variant font-semibold text-sm">Light Mode</span>
+</button>
+</div>
+</div>
+<div>
+<label class="block text-label-caps text-on-surface-variant mb-4">VIEW DENSITY</label>
+<div class="flex gap-2 p-1 bg-surface-container-highest rounded-lg w-fit">
+<button class="px-6 py-2 rounded-md bg-primary-container text-on-primary-container font-bold text-sm shadow-sm transition-all">Comfortable</button>
+<button class="px-6 py-2 rounded-md text-on-surface-variant hover:text-on-surface transition-colors font-semibold text-sm">Compact</button>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</div>
+<!-- Footer Security Banner -->
+<footer class="fixed bottom-0 w-full flex justify-between items-center px-container-padding py-4 bg-transparent border-t border-white/5 z-50">
+<div class="flex items-center gap-4">
+<span class="font-label-caps text-label-caps text-on-surface uppercase tracking-widest">System Status: Optimal</span>
+<span class="w-2 h-2 rounded-full bg-[#00d9ff] animate-pulse"></span>
+</div>
+<div class="flex items-center gap-8">
+<p class="font-mono-data text-mono-data text-on-surface-variant">© 2024 SwarmGuard-AI Security Protocols Active.</p>
+<div class="flex gap-4">
+<a class="text-on-surface-variant hover:text-primary transition-colors font-mono-data text-mono-data" href="#">Privacy Policy</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors font-mono-data text-mono-data" href="#">Security Audit</a>
+</div>
+</div>
+</footer>
+<script>
+        // Simple micro-interactions
+        document.querySelectorAll('button, a').forEach(el => {
+            el.addEventListener('mousedown', () => {
+                el.style.transform = 'scale(0.98)';
+            });
+            el.addEventListener('mouseup', () => {
+                el.style.transform = '';
+            });
+            el.addEventListener('mouseleave', () => {
+                el.style.transform = '';
+            });
+        });
+
+        // Theme selector logic (visual only)
+        const themeButtons = document.querySelectorAll('.group');
+        themeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                themeButtons.forEach(b => {
+                    b.classList.remove('border-primary', 'bg-primary/5');
+                    b.classList.add('border-transparent', 'bg-white/5');
+                    b.querySelector('span').classList.replace('text-on-surface', 'text-on-surface-variant');
+                });
+                btn.classList.add('border-primary', 'bg-primary/5');
+                btn.classList.remove('border-transparent', 'bg-white/5');
+                btn.querySelector('span').classList.replace('text-on-surface-variant', 'text-on-surface');
+            });
+        });
+    </script>
+<script src="/screens/_wiring.js"></script></body></html>
