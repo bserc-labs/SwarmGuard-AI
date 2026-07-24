@@ -1,0 +1,98 @@
+import { getToken, logout } from "./auth";
+
+const API_BASE = "http://localhost:8000";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function fetchWithAuth<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    ...options,
+    headers: {
+      ...getAuthHeaders(),
+      ...options?.headers,
+    },
+  });
+
+  if (res.status === 401) {
+    logout();
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: "Request failed" }));
+    throw new Error(error.detail || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+// === API Methods ===
+
+export interface TelemetryPacket {
+  drone_id: string;
+  latitude: number;
+  longitude: number;
+  altitude: number;
+  speed: number;
+  battery: number;
+  packet_sequence: number;
+}
+
+export interface Incident {
+  id: number;
+  drone_id: string;
+  attack_type: string;
+  threat_level: number;
+  severity: string;
+  shap_values: Array<{ feature: string; value: number }> | null;
+  explanation: string;
+  created_at: string;
+}
+
+export interface DetectionResult {
+  is_anomaly: boolean;
+  anomaly_score: number;
+  attack_type: string | null;
+  threat_level: number | null;
+  severity: string | null;
+  shap_top3: Array<{ feature: string; value: number }> | null;
+  explanation: string | null;
+}
+
+export interface UserInfo {
+  id: number;
+  username: string;
+  email: string | null;
+  role: string;
+  created_at: string;
+}
+
+export interface HealthResponse {
+  status: string;
+  service: string;
+}
+
+export const api = {
+  getHealth: (): Promise<HealthResponse> =>
+    fetch(`${API_BASE}/health`).then((r) => r.json()),
+
+  getTelemetryLive: (): Promise<TelemetryPacket[]> =>
+    fetchWithAuth("/telemetry/live"),
+
+  getIncidents: (severity?: string, limit = 50): Promise<Incident[]> => {
+    const params = new URLSearchParams();
+    if (severity) params.set("severity", severity);
+    params.set("limit", String(limit));
+    return fetchWithAuth(`/incidents/?${params.toString()}`);
+  },
+
+  getIncident: (id: number): Promise<Incident> =>
+    fetchWithAuth(`/incidents/${id}`),
+
+  getMe: (): Promise<UserInfo> =>
+    fetchWithAuth("/users/me"),
+};
