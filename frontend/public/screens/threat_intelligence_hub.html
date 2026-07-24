@@ -466,4 +466,94 @@
 
 
 
+<script>
+    document.addEventListener('DOMContentLoaded', async () => {
+        const token = localStorage.getItem('swarmguard_token');
+        if (!token) {
+            window.location.href = 'login.html';
+            return;
+        }
+        
+        try {
+            const response = await fetch('http://localhost:8000/incidents/', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (response.status === 401) {
+                window.location.href = 'login.html';
+                return;
+            }
+            
+            const incidents = await response.json();
+            
+            const totalThreats = incidents.length;
+            const attackTypes = {};
+            let totalThreatLevel = 0;
+            
+            incidents.forEach(i => {
+                attackTypes[i.attack_type] = (attackTypes[i.attack_type] || 0) + 1;
+                totalThreatLevel += (i.threat_level || 0);
+            });
+            
+            const totalEventsEl = document.querySelector('.absolute.flex.flex-col.items-center span.text-2xl');
+            if (totalEventsEl) totalEventsEl.textContent = totalThreats;
+            
+            const typesEls = document.querySelectorAll('.grid.grid-cols-3.gap-2.mt-4 > div');
+            if (typesEls.length >= 3 && totalThreats > 0) {
+                const sortedTypes = Object.entries(attackTypes).sort((a,b)=>b[1]-a[1]);
+                for (let i = 0; i < 3; i++) {
+                    if (sortedTypes[i]) {
+                        typesEls[i].querySelector('p.text-xs').textContent = sortedTypes[i][0];
+                        typesEls[i].querySelector('p.text-sm').textContent = Math.round((sortedTypes[i][1]/totalThreats)*100) + '%';
+                    }
+                }
+            }
+            
+            const threatFeedContainer = document.querySelector('.space-y-6 > .grid.grid-cols-1.gap-4');
+            if (threatFeedContainer) {
+                threatFeedContainer.innerHTML = '';
+                incidents.forEach(incident => {
+                    let sevClass = '';
+                    let icon = '';
+                    if (incident.severity === 'CRITICAL') { sevClass = 'border-l-error glow-red'; icon = 'security_update_warning'; }
+                    else if (incident.severity === 'HIGH') { sevClass = 'border-l-tertiary'; icon = 'location_disabled'; }
+                    else { sevClass = 'border-l-primary/40 opacity-80'; icon = 'wifi_off'; }
+                    
+                    const card = document.createElement('div');
+                    card.className = `glass-card rounded-xl p-5 border-l-4 ${sevClass} flex items-start gap-6 group`;
+                    card.innerHTML = `
+                        <div class="w-12 h-12 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0">
+                            <span class="material-symbols-outlined text-white">${icon}</span>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex justify-between items-start mb-2">
+                                <div>
+                                    <span class="px-2 py-0.5 bg-white/10 text-white text-[10px] font-bold rounded uppercase mr-3">${incident.severity}</span>
+                                    <h4 class="inline-block text-body-md font-bold">${incident.attack_type}</h4>
+                                </div>
+                                <span class="text-xs opacity-50">${new Date(incident.created_at).toLocaleString()}</span>
+                            </div>
+                            <div class="grid grid-cols-4 gap-4 mb-3">
+                                <div>
+                                    <p class="text-[10px] uppercase text-on-surface-variant">Target Asset</p>
+                                    <p class="text-sm font-mono-data text-primary">${incident.drone_id}</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] uppercase text-on-surface-variant">Threat Level</p>
+                                    <p class="text-sm font-bold text-white">${(incident.threat_level || 0.0).toFixed(2)}</p>
+                                </div>
+                            </div>
+                            <div class="bg-black/40 rounded-lg p-3 border border-white/5">
+                                <p class="text-sm text-on-surface-variant italic">${incident.explanation || 'No details.'}</p>
+                            </div>
+                        </div>
+                    `;
+                    threatFeedContainer.appendChild(card);
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    });
+</script>
 <script src="/screens/_wiring.js"></script></body></html>

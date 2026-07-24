@@ -94,6 +94,22 @@
     return null;
   }
 
+  // Auth Guard
+  if (window.location.pathname.indexOf('secure_login') === -1) {
+    if (!localStorage.getItem('swarmguard_token')) {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'swarmguard:navigate', slug: 'secure_login' }, '*');
+      } else {
+        window.location.href = '/screens/secure_login';
+      }
+    }
+  }
+
+  // Global Auth Headers Helper
+  window.getAuthHeaders = function() {
+    return { 'Authorization': 'Bearer ' + localStorage.getItem('swarmguard_token') };
+  };
+
   document.addEventListener(
     'click',
     function (ev) {
@@ -102,14 +118,7 @@
 
       // Login form submit button on secure_login
       if (target.tagName === 'BUTTON' && target.type === 'submit') {
-        ev.preventDefault();
-        var form = target.closest('form');
-        if (form) {
-          try {
-            form.dispatchEvent(new Event('submit', { cancelable: true }));
-          } catch (e) {}
-        }
-        navigateTo('dashboard_with_logout_modal_overlay');
+        // Let the secure_login.html handle its own submit logic
         return;
       }
 
@@ -122,18 +131,6 @@
         if (href === '#' || href === '') {
           ev.preventDefault();
         }
-      }
-    },
-    true,
-  );
-
-  document.addEventListener(
-    'submit',
-    function (ev) {
-      ev.preventDefault();
-      var path = (window.location.pathname || '').toLowerCase();
-      if (path.indexOf('secure_login') !== -1) {
-        navigateTo('dashboard_with_logout_modal_overlay');
       }
     },
     true,

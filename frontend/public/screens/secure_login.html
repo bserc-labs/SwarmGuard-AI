@@ -170,13 +170,13 @@
 <h2 class="text-title-md font-title-md text-primary">Terminal Authentication</h2>
 <p class="text-on-surface-variant text-body-sm mt-1">Authorized access only. Logging active.</p>
 </div>
-<form class="space-y-6" onsubmit="event.preventDefault();">
+<form id="loginForm" class="space-y-6">
 <!-- Identity Input -->
 <div class="space-y-2">
 <label class="text-label-caps font-label-caps text-on-surface-variant block ml-1">Username</label>
 <div class="relative group">
 <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">alternate_email</span>
-<input class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="Enter your username" type="email">
+<input id="usernameInput" class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="Enter your username" type="email">
 </div>
 </div>
 <!-- Credential Input -->
@@ -187,7 +187,7 @@
 </div>
 <div class="relative group">
 <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">lock</span>
-<input class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="••••••••" type="password">
+<input id="passwordInput" class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="••••••••" type="password">
 </div>
 </div>
 <!-- Remember & Security Options -->
@@ -195,8 +195,9 @@
 <!-- Primary Action -->
 <button class="w-full bg-primary-container text-on-primary-container py-4 rounded-lg font-headline-lg-mobile text-headline-lg-mobile primary-glow flex items-center justify-center gap-2 active:scale-95" type="submit">
 <span class="material-symbols-outlined" data-weight="fill">login</span>
-                    Sign In
+                    <span id="submitText">Sign In</span>
                 </button>
+                <div id="loginError" class="text-error text-sm mt-2 hidden text-center"></div>
 </form>
 <div class="mt-8 pt-6 border-t border-white/5 flex flex-col items-center gap-4">
 <div class="flex items-center gap-3">
@@ -293,4 +294,53 @@
     </script>
 
 
+<script>
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const username = document.getElementById('usernameInput').value;
+        const password = document.getElementById('passwordInput').value;
+        const submitBtn = document.querySelector('button[type="submit"]');
+        const submitText = document.getElementById('submitText');
+        const errorDiv = document.getElementById('loginError');
+        
+        // Loading state
+        const originalText = submitText.innerText;
+        submitText.innerText = 'Authenticating...';
+        submitBtn.disabled = true;
+        errorDiv.classList.add('hidden');
+        
+        const formData = new URLSearchParams();
+        formData.append('username', username);
+        formData.append('password', password);
+        
+        try {
+            const res = await fetch('http://localhost:8000/auth/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: formData
+            });
+            
+            if (!res.ok) {
+                throw new Error('Invalid credentials');
+            }
+            
+            const data = await res.json();
+            localStorage.setItem('swarmguard_token', data.access_token);
+            if(data.role) localStorage.setItem('swarmguard_role', data.role);
+            
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'swarmguard:navigate', slug: 'dashboard_with_logout_modal_overlay' }, '*');
+            } else {
+                window.location.href = '/screens/dashboard_with_logout_modal_overlay';
+            }
+        } catch (err) {
+            errorDiv.textContent = 'Authentication failed. Please check credentials.';
+            errorDiv.classList.remove('hidden');
+        } finally {
+            submitText.innerText = originalText;
+            submitBtn.disabled = false;
+        }
+    });
+</script>
 <script src="/screens/_wiring.js"></script></body></html>

@@ -431,4 +431,103 @@
 
 
 
+<script>
+    document.addEventListener('DOMContentLoaded', async () => {
+        const token = localStorage.getItem('swarmguard_token');
+        if (!token) {
+            window.location.href = 'login.html';
+            return;
+        }
+
+        const fetchIncidents = async () => {
+            try {
+                const response = await fetch('http://localhost:8000/incidents/', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+                
+                const incidents = await response.json();
+                renderIncidents(incidents);
+            } catch (err) {
+                console.error('Failed to fetch incidents', err);
+            }
+        };
+
+        const tbody = document.querySelector('tbody');
+        const filterSelects = document.querySelectorAll('select');
+        const sevFilter = filterSelects[0];
+        const statusFilter = filterSelects[1];
+        
+        let allIncidents = [];
+
+        const renderIncidents = (incidents) => {
+            allIncidents = incidents.length ? incidents : allIncidents;
+            let displayIncidents = incidents;
+            
+            if (sevFilter && statusFilter) {
+                const sVal = sevFilter.value;
+                const stVal = statusFilter.value;
+                
+                if (stVal === 'Resolved') {
+                    displayIncidents = [];
+                } else {
+                    if (sVal === 'Critical') displayIncidents = allIncidents.filter(i => i.severity === 'CRITICAL');
+                    else if (sVal === 'Warning' || sVal === 'High' || sVal === 'Medium') displayIncidents = allIncidents.filter(i => i.severity === 'HIGH' || i.severity === 'MEDIUM');
+                }
+            }
+
+            tbody.innerHTML = '';
+            
+            if (displayIncidents.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-5 text-center text-on-surface-variant">No active incidents</td></tr>';
+                return;
+            }
+            
+            displayIncidents.forEach(incident => {
+                const tr = document.createElement('tr');
+                tr.className = 'incident-row group cursor-pointer transition-all duration-200';
+                
+                let sevColorClass = 'bg-primary/10 text-primary border-primary/20'; 
+                if (incident.severity === 'CRITICAL') sevColorClass = 'bg-error-container/20 text-error border-error/20';
+                else if (incident.severity === 'HIGH') sevColorClass = 'bg-tertiary-container/20 text-tertiary border-tertiary/20';
+                else if (incident.severity === 'MEDIUM') sevColorClass = 'bg-tertiary/20 text-tertiary border-tertiary/20';
+                else if (incident.severity === 'LOW') sevColorClass = 'bg-secondary/10 text-secondary border-secondary/20';
+                
+                tr.innerHTML = `
+                    <td class="px-6 py-5">
+                        <span class="font-mono-data text-mono-data text-primary tracking-wider">#${incident.id}</span>
+                    </td>
+                    <td class="px-6 py-5">
+                        <div class="flex items-center gap-3">
+                            <span class="text-body-md font-semibold text-on-surface">${incident.drone_id}</span>
+                        </div>
+                    </td>
+                    <td class="px-6 py-5 text-on-surface-variant">${incident.attack_type}</td>
+                    <td class="px-6 py-5">
+                        <span class="px-2.5 py-1 rounded ${sevColorClass} text-[10px] font-bold uppercase tracking-widest border">${incident.severity}</span>
+                    </td>
+                    <td class="px-6 py-5">
+                        <div class="flex items-center gap-2">
+                            <span class="text-label-caps font-label-caps text-on-surface">Open</span>
+                        </div>
+                    </td>
+                    <td class="px-6 py-5 text-mono-data text-on-surface-variant">${new Date(incident.created_at).toLocaleString()}</td>
+                    <td class="px-6 py-5 text-right">
+                        <span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        };
+
+        if (sevFilter) sevFilter.addEventListener('change', () => renderIncidents(allIncidents));
+        if (statusFilter) statusFilter.addEventListener('change', () => renderIncidents(allIncidents));
+        
+        fetchIncidents();
+    });
+</script>
 <script src="/screens/_wiring.js"></script></body></html>

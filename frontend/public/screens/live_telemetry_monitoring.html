@@ -514,4 +514,111 @@
 
 
 
+<script>
+    let ws;
+    
+    function updateTelemetryCards(data) {
+        let avgAlt = 0, avgSpeed = 0, num = 0;
+        const process = (drone) => {
+            avgAlt += drone.altitude;
+            avgSpeed += drone.speed;
+            num++;
+        };
+        
+        if (Array.isArray(data)) {
+            if(data.length === 0) return;
+            data.forEach(process);
+        } else {
+            process(data);
+        }
+        
+        avgAlt = (avgAlt / num).toFixed(1);
+        avgSpeed = (avgSpeed / num).toFixed(1);
+
+        const altLabel = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('CURRENT ALTITUDE'));
+        if (altLabel && altLabel.nextElementSibling) {
+            altLabel.nextElementSibling.innerHTML = `${avgAlt}<span class="text-title-md font-title-md ml-1 opacity-60">m</span>`;
+        }
+
+        const speedLabel = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('AVERAGE VELOCITY'));
+        if (speedLabel && speedLabel.nextElementSibling) {
+            speedLabel.nextElementSibling.innerHTML = `${avgSpeed}<span class="text-title-md font-title-md ml-1 opacity-60">km/h</span>`;
+        }
+    }
+
+    function connectWebSocket() {
+        const token = localStorage.getItem('swarmguard_token');
+        if (!token) {
+            window.location.href = 'secure_login.html';
+            return;
+        }
+
+        ws = new WebSocket(`ws://localhost:8000/ws/telemetry?token=${token}`);
+        
+        const badge = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('LIVE DATA STREAM'));
+        const dot = badge ? badge.previousElementSibling : null;
+
+        ws.onopen = () => {
+            if (badge) {
+                badge.classList.remove('text-error');
+                badge.classList.add('text-primary');
+            }
+            if (dot) {
+                dot.classList.remove('bg-error', 'pulse-red');
+                dot.classList.add('bg-primary', 'glow-cyan');
+            }
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                updateTelemetryCards(data);
+            } catch (e) {
+                console.error("Error parsing WS data", e);
+            }
+        };
+
+        ws.onclose = () => {
+            if (badge) {
+                badge.classList.remove('text-primary');
+                badge.classList.add('text-error');
+            }
+            if (dot) {
+                dot.classList.remove('bg-primary', 'glow-cyan');
+                dot.classList.add('bg-error', 'pulse-red');
+            }
+            setTimeout(connectWebSocket, 5000);
+        };
+        
+        ws.onerror = (err) => {
+            console.error('WebSocket error:', err);
+            ws.close();
+        };
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const token = localStorage.getItem('swarmguard_token');
+        if (!token) {
+            window.location.href = 'secure_login.html';
+            return;
+        }
+
+        // Fetch initial
+        fetch('http://localhost:8000/telemetry/live', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(res => {
+            if (res.status === 401) {
+                window.location.href = 'secure_login.html';
+                throw new Error("Unauthorized");
+            }
+            return res.json();
+        })
+        .then(data => {
+            updateTelemetryCards(data);
+            connectWebSocket();
+        })
+        .catch(console.error);
+    });
+</script>
 <script src="/screens/_wiring.js"></script></body></html>

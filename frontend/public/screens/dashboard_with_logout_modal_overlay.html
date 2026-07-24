@@ -544,4 +544,97 @@
             });
         });
     </script>
+<script>
+    function updateDashboard() {
+        const token = localStorage.getItem('swarmguard_token');
+        if (!token) {
+            window.location.href = 'secure_login.html';
+            return;
+        }
+        
+        const headers = { 'Authorization': `Bearer ${token}` };
+
+        // Telemetry
+        fetch('http://localhost:8000/telemetry/live', { headers })
+            .then(res => {
+                if (res.status === 401) {
+                    window.location.href = 'secure_login.html';
+                    throw new Error("Unauthorized");
+                }
+                return res.json();
+            })
+            .then(telemetry => {
+                const uniqueDrones = new Set(telemetry.map(t => t.drone_id)).size;
+                const activeDronesLabel = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('Active Drones'));
+                if (activeDronesLabel && activeDronesLabel.previousElementSibling) {
+                    activeDronesLabel.previousElementSibling.innerText = uniqueDrones;
+                }
+
+                const fleetHeaders = Array.from(document.querySelectorAll('h2')).find(el => el.textContent.includes('Fleet Operational Status'));
+                if (fleetHeaders && fleetHeaders.nextElementSibling && telemetry.length > 0) {
+                    const fleetContainer = fleetHeaders.nextElementSibling;
+                    fleetContainer.innerHTML = '';
+                    const droneMap = new Map();
+                    telemetry.forEach(t => droneMap.set(t.drone_id, t));
+                    
+                    Array.from(droneMap.values()).slice(0, 3).forEach(drone => {
+                        const batteryColor = drone.battery < 20 ? 'error' : (drone.battery < 50 ? 'tertiary' : 'primary');
+                        fleetContainer.innerHTML += `
+                            <div class="bg-black/20 p-3 rounded-lg border border-white/5 flex items-center gap-4 group">
+                                <div class="w-10 h-10 rounded-lg bg-surface flex items-center justify-center border border-white/10">
+                                    <span class="material-symbols-outlined text-${batteryColor} text-xl">precision_manufacturing</span>
+                                </div>
+                                <div class="flex-1">
+                                    <div class="flex justify-between items-center mb-1">
+                                        <span class="text-sm font-bold font-mono-data">${drone.drone_id}</span>
+                                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-${batteryColor}/10 text-${batteryColor} border border-${batteryColor}/20">${drone.speed.toFixed(1)} km/h</span>
+                                    </div>
+                                    <div class="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+                                        <div class="bg-${batteryColor} h-full" style="width: ${drone.battery}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+            }).catch(console.error);
+
+        // Incidents
+        fetch('http://localhost:8000/incidents/', { headers })
+            .then(res => {
+                if (res.status === 401) {
+                    window.location.href = 'secure_login.html';
+                    throw new Error("Unauthorized");
+                }
+                return res.json();
+            })
+            .then(incidents => {
+                const threatsLabel = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('Threats Detected Today') || el.textContent.includes('Threats Detected'));
+                if (threatsLabel && threatsLabel.previousElementSibling) {
+                    threatsLabel.previousElementSibling.innerText = incidents.length;
+                }
+
+                const activeIncidentsLabel = Array.from(document.querySelectorAll('.text-label-caps')).find(el => el.textContent.includes('Active Incidents'));
+                if (activeIncidentsLabel && activeIncidentsLabel.previousElementSibling) {
+                    const highCritCount = incidents.filter(i => i.severity === 'CRITICAL' || i.severity === 'HIGH').length;
+                    activeIncidentsLabel.previousElementSibling.innerText = highCritCount;
+                }
+            }).catch(console.error);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        updateDashboard();
+        setInterval(updateDashboard, 30000);
+
+        const logoutBtns = Array.from(document.querySelectorAll('a')).filter(el => el.textContent.includes('Logout'));
+        logoutBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                localStorage.removeItem('swarmguard_token');
+                localStorage.removeItem('swarmguard_role');
+                window.location.href = 'secure_login.html';
+            });
+        });
+    });
+</script>
 <script src="/screens/_wiring.js"></script></body></html>
