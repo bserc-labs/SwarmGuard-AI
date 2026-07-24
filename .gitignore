@@ -1,11 +1,6 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
 .env
-.vscode/
-.idea/
-.pytest_cache/
-.coverage
-htmlcov/
-.DS_Store
+backend/.venv
+frontend/node_modules
+frontend/dist
+__pycache__
+*.db
