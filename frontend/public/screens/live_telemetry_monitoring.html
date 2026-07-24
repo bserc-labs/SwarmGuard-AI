@@ -1,0 +1,517 @@
+<!DOCTYPE html><html class="dark" lang="en"><head></head><body class="bg-background overflow-hidden" data-mode="connect"><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>SwarmGuard-AI | Live Telemetry</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=Courier+Prime&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary-fixed-variant": "#004e5d",
+                    "on-tertiary": "#422d00",
+                    "tertiary-container": "#ffbb2a",
+                    "on-tertiary-container": "#6e4d00",
+                    "tertiary": "#ffdeaa",
+                    "surface-container-low": "#161d1f",
+                    "on-background": "#dde4e6",
+                    "primary-fixed-dim": "#00d9ff",
+                    "surface": "#0e1417",
+                    "primary": "#afecff",
+                    "on-tertiary-fixed-variant": "#5e4100",
+                    "surface-bright": "#333a3d",
+                    "on-secondary": "#002a78",
+                    "tertiary-fixed-dim": "#febb29",
+                    "surface-container-high": "#242b2d",
+                    "primary-fixed": "#aeecff",
+                    "on-error": "#690005",
+                    "surface-dim": "#0e1417",
+                    "on-surface": "#dde4e6",
+                    "on-secondary-fixed-variant": "#003ea8",
+                    "on-primary-fixed": "#001f26",
+                    "on-secondary-container": "#cdd7ff",
+                    "secondary-fixed": "#dbe1ff",
+                    "secondary": "#b4c5ff",
+                    "surface-container": "#1a2123",
+                    "secondary-container": "#0053db",
+                    "on-tertiary-fixed": "#271900",
+                    "error": "#ffb4ab",
+                    "surface-tint": "#00d9ff",
+                    "outline-variant": "#3c494d",
+                    "secondary-fixed-dim": "#b4c5ff",
+                    "surface-container-highest": "#2f3638",
+                    "on-primary": "#003641",
+                    "on-error-container": "#ffdad6",
+                    "on-primary-container": "#005b6c",
+                    "on-surface-variant": "#bbc9ce",
+                    "inverse-on-surface": "#2a3234",
+                    "error-container": "#93000a",
+                    "surface-variant": "#2f3638",
+                    "surface-container-lowest": "#080f11",
+                    "tertiary-fixed": "#ffdea9",
+                    "inverse-surface": "#dde4e6",
+                    "inverse-primary": "#00687b",
+                    "primary-container": "#00d9ff",
+                    "background": "#0e1417",
+                    "on-secondary-fixed": "#00174b",
+                    "outline": "#859398"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "gutter": "16px",
+                    "unit": "4px",
+                    "card-gap": "20px",
+                    "container-padding": "24px"
+            },
+            "fontFamily": {
+                    "headline-lg": ["Inter"],
+                    "body-sm": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "title-md": ["Inter"],
+                    "mono-data": ["Courier Prime"],
+                    "display-lg": ["Inter"],
+                    "body-md": ["Inter"]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        body {
+            background-color: #0B0F1A;
+            color: #dde4e6;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .glass-card {
+            background: rgba(22, 29, 31, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .glow-cyan {
+            box-shadow: 0 0 15px rgba(0, 217, 255, 0.1);
+        }
+
+        .pulse-red {
+            box-shadow: 0 0 0 0 rgba(255, 180, 171, 0.7);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 180, 171, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(255, 180, 171, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 180, 171, 0); }
+        }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    </style>
+
+
+<!-- Sidebar -->
+<aside class="fixed left-0 top-0 h-screen w-[280px] border-r border-white/10 bg-surface/80 dark:bg-surface/80 backdrop-blur-xl flex flex-col py-6 z-50">
+<div class="px-6 mb-10 flex flex-col gap-1">
+<h1 class="text-title-md font-title-md font-bold text-primary tracking-tight">SwarmGuard</h1>
+<p class="text-[10px] uppercase tracking-widest text-on-surface-variant/60 font-bold">Autonomous Security</p>
+</div>
+<nav class="flex-1 space-y-1">
+<!-- Navigation Items Mapping from JSON -->
+<!-- Dashboard -->
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</a>
+<!-- Live Telemetry - ACTIVE -->
+<a class="flex items-center gap-3 px-6 py-3 bg-primary/10 text-primary border-r-2 border-primary scale-[0.98] transition-transform" href="#">
+<span class="material-symbols-outlined">sensors</span>
+<span class="font-body-md text-body-md">Live Telemetry</span>
+</a>
+<!-- Drone Monitoring -->
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">screenshot_monitor</span>
+<span class="font-body-md text-body-md">Drone Monitoring</span>
+</a>
+<!-- Threat Intelligence -->
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">policy</span>
+<span class="font-body-md text-body-md">Threat Intelligence</span>
+</a>
+<!-- Incidents -->
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">warning</span>
+<span class="font-body-md text-body-md">Incidents</span>
+</a>
+<!-- Drone Management -->
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">settings_remote</span>
+<span class="font-body-md text-body-md">Drone Management</span>
+</a>
+</nav>
+<div class="px-6 pt-6 border-t border-white/5 space-y-1">
+<a class="flex items-center gap-3 px-4 py-2 text-on-surface-variant hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-caps text-label-caps">Settings</span>
+</a><a class="flex items-center gap-3 px-4 py-2 text-on-surface-variant hover:text-error transition-colors" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-label-caps text-label-caps">Logout</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 text-on-surface-variant hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-primary">account_circle</span>
+<span class="bg-primary/20 text-primary font-mono-data text-xs px-2 py-0.5 rounded-full">Admin</span>
+</a>
+</div>
+</aside>
+<!-- Top Navbar -->
+<header class="fixed top-0 right-0 w-[calc(100%-280px)] h-16 z-40 bg-surface/40 backdrop-blur-md border-b border-white/5 flex justify-between items-center px-10">
+<div class="flex items-center bg-black/20 rounded-full px-4 py-1.5 border border-white/5">
+<span class="material-symbols-outlined text-on-surface-variant text-sm mr-2">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-sm text-on-surface placeholder:text-on-surface-variant/40 w-64" placeholder="Search Drone ID or Incident..." type="text">
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2">
+<div class="h-2 w-2 rounded-full bg-primary animate-pulse"></div>
+<span class="text-[10px] font-bold text-primary tracking-widest uppercase">System Online</span>
+</div>
+<button class="relative text-on-surface-variant hover:text-primary transition-all">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute -top-1 -right-1 w-2 h-2 bg-error rounded-full"></span>
+</button>
+<span class="bg-primary/20 text-primary font-mono-data text-xs px-2 py-0.5 rounded-full">Admin</span><div class="h-8 w-8 rounded-full border border-primary/30 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A futuristic portrait of a cybersecurity analyst in a dark control room, lit by the cyan glow of multiple monitor screens. Professional, high-end digital photography style with shallow depth of field and sharp tech-focused lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAdblBLDrrDPfy1GGs-ohQp3Xwarw3hNWQXD1vEmuMR2fM6haaoIL5MDOO5SnEFxhqpSHjGaMi7mDXQwrnUoAj5Gt-WRB6PghtoQzC3dNoVSItrpL7qtHvGCGl0BZkQaenCdNVADhEwy1G4CNUem9MbeerF7GP_mnyHVa9b3S0FtB-Dcot0Zpek5OqguM7dIHc2kRwozoFLydkkoAJyp_39UdSpz_gBeFZZhXCxmSZDNtqD8G4hiP4DMk0KNfy1P1Exws8YDH53EiY">
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="ml-[280px] pt-24 px-10 pb-10 h-screen overflow-y-auto">
+<!-- Page Header -->
+<div class="flex items-end justify-between mb-8">
+<div>
+<div class="flex items-center gap-3 mb-1">
+<div class="h-2.5 w-2.5 rounded-full bg-error pulse-red"></div>
+<span class="font-label-caps text-label-caps text-error tracking-[0.2em]">LIVE DATA STREAM</span>
+</div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">Telemetry Command</h2>
+</div>
+<div class="flex gap-3">
+<button class="glass-card px-4 py-2 rounded-lg text-on-surface-variant text-label-caps hover:text-on-surface transition-all flex items-center gap-2">
+<span class="material-symbols-outlined text-base">filter_list</span>
+                    FILTER
+                </button>
+<button class="bg-primary-container text-on-primary-container px-4 py-2 rounded-lg text-label-caps font-bold flex items-center gap-2 transition-all hover:brightness-110">
+<span class="material-symbols-outlined text-base">download</span>
+                    EXPORT LOGS
+                </button>
+</div>
+</div>
+<!-- Highlight Cards Bento Grid -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-card-gap mb-8">
+<!-- Altitude Card -->
+<div class="glass-card rounded-xl p-5 flex flex-col justify-between h-40">
+<div class="flex justify-between items-start">
+<div>
+<p class="text-on-surface-variant font-label-caps text-label-caps mb-1">CURRENT ALTITUDE</p>
+<h3 class="text-display-lg font-display-lg text-primary leading-none">124<span class="text-title-md font-title-md ml-1 opacity-60">m</span></h3>
+</div>
+<span class="material-symbols-outlined text-primary/40">height</span>
+</div>
+<div class="h-12 w-full">
+<!-- Simple CSS/SVG Trendline placeholder -->
+<svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 20">
+<path d="M0,15 Q25,5 50,12 T100,8" fill="none" stroke="#00d9ff" stroke-width="2"></path>
+<path d="M0,15 Q25,5 50,12 T100,8 L100,20 L0,20 Z" fill="url(#grad1)" opacity="0.1"></path>
+<defs>
+<linearGradient id="grad1" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#00d9ff;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#00d9ff;stop-opacity:0"></stop>
+</linearGradient>
+</defs>
+</svg>
+</div>
+</div>
+<!-- Speed Card -->
+<div class="glass-card rounded-xl p-5 flex flex-col justify-between h-40">
+<div class="flex justify-between items-start">
+<div>
+<p class="text-on-surface-variant font-label-caps text-label-caps mb-1">AVERAGE VELOCITY</p>
+<h3 class="text-display-lg font-display-lg text-secondary leading-none">44.3<span class="text-title-md font-title-md ml-1 opacity-60">m</span></h3>
+</div>
+<span class="material-symbols-outlined text-secondary/40">speed</span>
+</div>
+<div class="h-12 w-full">
+<svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 20">
+<path d="M0,10 Q20,18 40,10 T80,5 T100,12" fill="none" stroke="#b4c5ff" stroke-width="2"></path>
+<path d="M0,10 Q20,18 40,10 T80,5 T100,12 L100,20 L0,20 Z" fill="url(#grad2)" opacity="0.1"></path>
+<defs>
+<linearGradient id="grad2" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#b4c5ff;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#b4c5ff;stop-opacity:0"></stop>
+</linearGradient>
+</defs>
+</svg>
+</div>
+</div>
+<!-- Packet Loss Card -->
+<div class="glass-card rounded-xl p-5 flex flex-col justify-between h-40">
+<div class="flex justify-between items-start">
+<div>
+<p class="text-on-surface-variant font-label-caps text-label-caps mb-1">PACKET LOSS</p>
+<h3 class="text-display-lg font-display-lg text-error leading-none">-0.8<span class="text-title-md font-title-md ml-1 opacity-60">%</span></h3>
+</div>
+<span class="material-symbols-outlined text-error/40">leak_add</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-white/5 h-1.5 rounded-full overflow-hidden">
+<div class="h-full bg-error rounded-full" style="width: 4%"></div>
+</div>
+<span class="text-mono-data text-body-sm text-on-surface-variant">NOMINAL</span>
+</div>
+</div>
+</div>
+<!-- Real-Time Data Table -->
+<div class="glass-card rounded-xl overflow-hidden mb-10">
+<div class="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-white/5">
+<h4 class="font-title-md text-title-md text-on-surface">Active Swarm Fleet</h4>
+<div class="flex items-center gap-4">
+<span class="text-mono-data text-xs text-on-surface-variant">SYNCED: 12:44:02.049</span>
+<span class="h-3 w-[1px] bg-white/10"></span>
+<span class="text-mono-data text-xs text-primary">DRONES: 08</span>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-black/20">
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5">Drone ID</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5 text-right">Altitude (m)</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5 text-right">Speed (km/h)</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5">GPS Coordinates</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5">Signal (dbm)</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5">Battery (%)</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5">Status</th>
+<th class="px-6 py-4 font-label-caps text-label-caps text-on-surface-variant border-b border-white/5"></th>
+</tr>
+</thead>
+<tbody class="text-mono-data divide-y divide-white/5">
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="px-6 py-4 font-bold text-primary">SG-ALPHA-01</td>
+<td class="px-6 py-4 text-right">142.5</td>
+<td class="px-6 py-4 text-right">45.2</td>
+<td class="px-6 py-4 text-on-surface-variant">34.0522° N, 118.2437° W</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-primary">-64</span>
+<div class="flex gap-0.5 items-end h-3">
+<div class="w-1 h-1 bg-primary"></div>
+<div class="w-1 h-2 bg-primary"></div>
+<div class="w-1 h-3 bg-primary"></div>
+<div class="w-1 h-1 bg-white/20"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-on-surface">88%</span>
+<div class="w-8 h-3 border border-white/20 rounded-sm p-[1px]">
+<div class="h-full bg-primary" style="width: 88%"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold">STABLE</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-primary">analytics</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="px-6 py-4 font-bold text-primary">SG-ALPHA-02</td>
+<td class="px-6 py-4 text-right">139.1</td>
+<td class="px-6 py-4 text-right">41.8</td>
+<td class="px-6 py-4 text-on-surface-variant">34.0528° N, 118.2430° W</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-primary">-68</span>
+<div class="flex gap-0.5 items-end h-3">
+<div class="w-1 h-1 bg-primary"></div>
+<div class="w-1 h-2 bg-primary"></div>
+<div class="w-1 h-1.5 bg-white/20"></div>
+<div class="w-1 h-3 bg-white/20"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-on-surface">92%</span>
+<div class="w-8 h-3 border border-white/20 rounded-sm p-[1px]">
+<div class="h-full bg-primary" style="width: 92%"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold">STABLE</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-primary">analytics</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group bg-error/5">
+<td class="px-6 py-4 font-bold text-error">SG-BETA-09</td>
+<td class="px-6 py-4 text-right">92.4</td>
+<td class="px-6 py-4 text-right">12.2</td>
+<td class="px-6 py-4 text-on-surface-variant">34.0545° N, 118.2452° W</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-error">-92</span>
+<div class="flex gap-0.5 items-end h-3">
+<div class="w-1 h-1 bg-error"></div>
+<div class="w-1 h-0.5 bg-white/20"></div>
+<div class="w-1 h-1 bg-white/20"></div>
+<div class="w-1 h-2 bg-white/20"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-error">14%</span>
+<div class="w-8 h-3 border border-error/20 rounded-sm p-[1px]">
+<div class="h-full bg-error" style="width: 14%"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-0.5 rounded bg-error/10 text-error border border-error/20 text-[10px] font-bold uppercase tracking-tighter">Crit Battery</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-error">warning</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="px-6 py-4 font-bold text-primary">SG-GAMMA-12</td>
+<td class="px-6 py-4 text-right">168.0</td>
+<td class="px-6 py-4 text-right">58.4</td>
+<td class="px-6 py-4 text-on-surface-variant">34.0511° N, 118.2411° W</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-primary">-52</span>
+<div class="flex gap-0.5 items-end h-3">
+<div class="w-1 h-1 bg-primary"></div>
+<div class="w-1 h-2 bg-primary"></div>
+<div class="w-1 h-3 bg-primary"></div>
+<div class="w-1 h-3.5 bg-primary"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="text-on-surface">45%</span>
+<div class="w-8 h-3 border border-white/20 rounded-sm p-[1px]">
+<div class="h-full bg-tertiary" style="width: 45%"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-0.5 rounded bg-tertiary/10 text-tertiary-container border border-tertiary/20 text-[10px] font-bold">RTH ENABLED</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-primary">analytics</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="px-6 py-3 border-t border-white/5 flex justify-between items-center">
+<span class="text-xs text-on-surface-variant">Showing active fleet nodes only. Historical data available in Drone Monitoring.</span>
+<div class="flex gap-2">
+<button class="p-1 rounded hover:bg-white/5 text-on-surface-variant transition-colors"><span class="material-symbols-outlined text-sm">chevron_left</span></button>
+<button class="p-1 rounded hover:bg-white/5 text-on-surface-variant transition-colors"><span class="material-symbols-outlined text-sm">chevron_right</span></button>
+</div>
+</div>
+</div>
+<!-- Atmospheric Map Overlay (Simulated) -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-card-gap">
+<div class="glass-card rounded-xl p-0 h-[300px] overflow-hidden relative">
+<div class="absolute top-4 left-4 z-10 px-3 py-1.5 glass-card rounded-lg flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">map</span>
+<span class="text-label-caps text-on-surface">DOWNTOWN SECTOR 7</span>
+</div>
+<div class="w-full h-full bg-[#080f11]" data-location="Los Angeles Downtown">
+<img class="w-full h-full object-cover opacity-60" data-alt="A dark-themed satellite map of a metropolitan city area at night. The view is top-down with cyan and neon-blue glowing lines representing drone flight paths and red glowing zones for restricted airspace. High-tech, cybersecurity aesthetic with low contrast and sharp details." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBhH_jFWP4YgwLUmxXHjWZdcKbKBFe2mBEpsRi7wDDbPk5ra81Pkg3sDfyWgbtOKhB_HWtGe1NsMAIgNEvQ49kscNKxH09ZJRwVp3rQFXo7djzbxpsxNKpAgKH3MJw_THNMOAaOHdvNVmFhFuuq-OueuFrAOjGiOL4pe-yHww_moj49gIGBlYYL10DYFHuWQB-kBM7sT17BKZzVs9y4YT5eNixZUFperx34pYgPUZONx8p4Hlqf5vOe1uckKzbRI0VBgOyeZsXlT_0">
+<!-- Faux Map UI elements -->
+<div class="absolute top-1/2 left-1/3 w-2 h-2 bg-primary rounded-full glow-cyan"></div>
+<div class="absolute top-1/3 left-1/2 w-2 h-2 bg-primary rounded-full glow-cyan"></div>
+<div class="absolute bottom-1/4 right-1/4 w-2 h-2 bg-error rounded-full animate-ping"></div>
+</div>
+</div>
+<div class="glass-card rounded-xl p-6 flex flex-col justify-between">
+<div>
+<h5 class="text-title-md font-title-md text-on-surface mb-2">Signal Spectrum Analysis</h5>
+<p class="text-body-sm text-on-surface-variant mb-4">Frequency interference detected in 2.4GHz band near Sector 7 node. No operational impact reported.</p>
+</div>
+<div class="flex-1 flex items-end gap-1 mb-2">
+<!-- Faux Histogram -->
+<div class="flex-1 bg-primary/20 h-1/4 rounded-t-sm"></div>
+<div class="flex-1 bg-primary/30 h-2/4 rounded-t-sm"></div>
+<div class="flex-1 bg-primary/20 h-1/3 rounded-t-sm"></div>
+<div class="flex-1 bg-primary/40 h-3/4 rounded-t-sm"></div>
+<div class="flex-1 bg-error/40 h-full rounded-t-sm"></div>
+<div class="flex-1 bg-primary/40 h-2/3 rounded-t-sm"></div>
+<div class="flex-1 bg-primary/20 h-1/2 rounded-t-sm"></div>
+<div class="flex-1 bg-primary/10 h-1/4 rounded-t-sm"></div>
+</div>
+<div class="flex justify-between text-[10px] font-mono text-on-surface-variant uppercase">
+<span class="">2.400 GHz</span>
+<span class="text-error">Anomaly Detected</span>
+<span class="">2.483 GHz</span>
+</div>
+</div>
+</div>
+</main>
+<script>
+        // Micro-interaction for live updating numbers
+        function updateLiveNumbers() {
+            const numbers = document.querySelectorAll('.text-display-lg');
+            numbers.forEach(num => {
+                const currentVal = parseFloat(num.innerText);
+                const variation = (Math.random() - 0.5) * 0.5;
+                const newVal = (currentVal + variation).toFixed(num.innerText.includes('.') ? 1 : 0);
+                if (num.innerText.includes('m')) {
+                    num.innerHTML = newVal + '<span class="text-title-md font-title-md ml-1 opacity-60">m</span>';
+                } else if (num.innerText.includes('km/h')) {
+                    num.innerHTML = newVal + '<span class="text-title-md font-title-md ml-1 opacity-60">km/h</span>';
+                } else if (num.innerText.includes('%')) {
+                    num.innerHTML = newVal + '<span class="text-title-md font-title-md ml-1 opacity-60">%</span>';
+                }
+            });
+        }
+
+        setInterval(updateLiveNumbers, 3000);
+    </script>
+
+
+
+
+<script src="/screens/_wiring.js"></script></body></html>

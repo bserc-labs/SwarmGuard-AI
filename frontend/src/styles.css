@@ -1,0 +1,110 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "Courier Prime", ui-monospace, monospace;
+
+  --color-background: #0e1417;
+  --color-surface: #0e1417;
+  --color-surface-dim: #0e1417;
+  --color-surface-bright: #333a3d;
+  --color-surface-container-lowest: #080f11;
+  --color-surface-container-low: #161d1f;
+  --color-surface-container: #1a2123;
+  --color-surface-container-high: #242b2d;
+  --color-surface-container-highest: #2f3638;
+  --color-surface-variant: #2f3638;
+  --color-on-surface: #dde4e6;
+  --color-on-surface-variant: #bbc9ce;
+  --color-on-background: #dde4e6;
+
+  --color-primary: #afecff;
+  --color-primary-container: #00d9ff;
+  --color-primary-fixed-dim: #00d9ff;
+  --color-on-primary: #003641;
+  --color-on-primary-container: #005b6c;
+
+  --color-secondary: #b4c5ff;
+  --color-secondary-container: #0053db;
+  --color-on-secondary-container: #cdd7ff;
+
+  --color-tertiary: #ffdeaa;
+  --color-tertiary-container: #ffbb2a;
+
+  --color-outline: #859398;
+  --color-outline-variant: #3c494d;
+
+  --color-error: #ffb4ab;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-on-surface);
+  }
+}
+
+@utility glass-card {
+  background: rgba(14, 20, 23, 0.6);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+@utility primary-glow {
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+  transition: all 0.3s ease;
+}
+
+.primary-glow:hover {
+  box-shadow: 0 0 35px rgba(0, 217, 255, 0.5);
+  transform: translateY(-1px);
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 217, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 217, 255, 0.05) 1px, transparent 1px);
+  background-size: 50px 50px;
+  perspective: 1000px;
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.scanline::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent, rgba(0, 217, 255, 0.05), transparent);
+  animation: scanline 8s linear infinite;
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}

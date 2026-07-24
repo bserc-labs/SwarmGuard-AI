@@ -1,0 +1,296 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>SwarmGuard-AI | Secure Login</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=Courier+Prime&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary-fixed-variant": "#004e5d",
+                    "on-tertiary": "#422d00",
+                    "tertiary-container": "#ffbb2a",
+                    "on-tertiary-container": "#6e4d00",
+                    "tertiary": "#ffdeaa",
+                    "surface-container-low": "#161d1f",
+                    "on-background": "#dde4e6",
+                    "primary-fixed-dim": "#00d9ff",
+                    "surface": "#0e1417",
+                    "primary": "#afecff",
+                    "on-tertiary-fixed-variant": "#5e4100",
+                    "surface-bright": "#333a3d",
+                    "on-secondary": "#002a78",
+                    "tertiary-fixed-dim": "#febb29",
+                    "surface-container-high": "#242b2d",
+                    "primary-fixed": "#aeecff",
+                    "on-error": "#690005",
+                    "surface-dim": "#0e1417",
+                    "on-surface": "#dde4e6",
+                    "on-secondary-fixed-variant": "#003ea8",
+                    "on-primary-fixed": "#001f26",
+                    "on-secondary-container": "#cdd7ff",
+                    "secondary-fixed": "#dbe1ff",
+                    "secondary": "#b4c5ff",
+                    "surface-container": "#1a2123",
+                    "secondary-container": "#0053db",
+                    "on-tertiary-fixed": "#271900",
+                    "error": "#ffb4ab",
+                    "surface-tint": "#00d9ff",
+                    "outline-variant": "#3c494d",
+                    "secondary-fixed-dim": "#b4c5ff",
+                    "surface-container-highest": "#2f3638",
+                    "on-primary": "#003641",
+                    "on-error-container": "#ffdad6",
+                    "on-primary-container": "#005b6c",
+                    "on-surface-variant": "#bbc9ce",
+                    "inverse-on-surface": "#2a3234",
+                    "error-container": "#93000a",
+                    "surface-variant": "#2f3638",
+                    "surface-container-lowest": "#080f11",
+                    "tertiary-fixed": "#ffdea9",
+                    "inverse-surface": "#dde4e6",
+                    "inverse-primary": "#00687b",
+                    "primary-container": "#00d9ff",
+                    "background": "#0e1417",
+                    "on-secondary-fixed": "#00174b",
+                    "outline": "#859398"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "gutter": "16px",
+                    "unit": "4px",
+                    "card-gap": "20px",
+                    "container-padding": "24px"
+            },
+            "fontFamily": {
+                    "headline-lg-mobile": ["Inter"],
+                    "body-sm": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "headline-lg": ["Inter"],
+                    "title-md": ["Inter"],
+                    "mono-data": ["Courier Prime"],
+                    "display-lg": ["Inter"],
+                    "body-md": ["Inter"]
+            },
+            "fontSize": {
+                    "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "body-sm": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "title-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(14, 20, 23, 0.6);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        
+        .primary-glow {
+            box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .primary-glow:hover {
+            box-shadow: 0 0 35px rgba(0, 217, 255, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .grid-bg {
+            background-image: 
+                linear-gradient(rgba(0, 217, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 217, 255, 0.05) 1px, transparent 1px);
+            background-size: 50px 50px;
+            perspective: 1000px;
+        }
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+
+        .scanline::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to bottom, transparent, rgba(0, 217, 255, 0.05), transparent);
+            animation: scanline 8s linear infinite;
+        }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md overflow-hidden h-screen w-screen flex items-center justify-center selection:bg-primary-container selection:text-on-primary-container">
+<!-- Ambient Telemetry Background -->
+<div class="fixed inset-0 z-0 bg-[#080f11] overflow-hidden">
+<!-- Static Grid with Perspective -->
+<div class="grid-bg absolute inset-0 opacity-40 transform scale-150 -rotate-12 translate-y-[-20%]"></div>
+<!-- Moving Particle Overlay (Canvas Placeholder for JS) -->
+<canvas class="absolute inset-0 z-10 opacity-30" id="particleCanvas" width="1280" height="1024"></canvas>
+<!-- Scanline Effect -->
+<div class="scanline absolute inset-0 pointer-events-none z-20"></div>
+<!-- Atmospheric Glows -->
+<div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/10 rounded-full blur-[120px]"></div>
+<div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-secondary-container/5 rounded-full blur-[120px]"></div>
+</div>
+<!-- Main Content Container -->
+<main class="relative z-30 w-full max-w-[440px] px-gutter">
+<!-- Logo & Header Section -->
+<div class="text-center mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700 fill-mode-both">
+<div class="inline-flex items-center justify-center w-16 h-16 bg-primary/10 border border-primary/20 rounded-xl mb-6 glass-card">
+<span class="material-symbols-outlined text-primary text-4xl" data-weight="fill">security</span>
+</div>
+<h1 class="text-headline-lg font-headline-lg text-on-surface tracking-tight">SwarmGuard-AI</h1>
+<p class="text-on-surface-variant font-body-sm mt-2">Autonomous Security &amp; Threat Intelligence</p>
+</div>
+<!-- Login Card -->
+<div class="glass-card p-10 rounded-xl animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-100 fill-mode-both">
+<div class="mb-8">
+<h2 class="text-title-md font-title-md text-primary">Terminal Authentication</h2>
+<p class="text-on-surface-variant text-body-sm mt-1">Authorized access only. Logging active.</p>
+</div>
+<form class="space-y-6" onsubmit="event.preventDefault();">
+<!-- Identity Input -->
+<div class="space-y-2">
+<label class="text-label-caps font-label-caps text-on-surface-variant block ml-1">Username</label>
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">alternate_email</span>
+<input class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="Enter your username" type="email">
+</div>
+</div>
+<!-- Credential Input -->
+<div class="space-y-2">
+<div class="flex justify-between items-center px-1">
+<label class="text-label-caps font-label-caps text-on-surface-variant block">Access Credential</label>
+<a class="text-[11px] font-bold text-primary hover:text-primary-fixed-dim transition-colors uppercase tracking-widest" href="#">Recovery</a>
+</div>
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">lock</span>
+<input class="w-full bg-surface-container-lowest/50 border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-on-surface-variant/30" placeholder="••••••••" type="password">
+</div>
+</div>
+<!-- Remember & Security Options -->
+
+<!-- Primary Action -->
+<button class="w-full bg-primary-container text-on-primary-container py-4 rounded-lg font-headline-lg-mobile text-headline-lg-mobile primary-glow flex items-center justify-center gap-2 active:scale-95" type="submit">
+<span class="material-symbols-outlined" data-weight="fill">login</span>
+                    Sign In
+                </button>
+</form>
+<div class="mt-8 pt-6 border-t border-white/5 flex flex-col items-center gap-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-container animate-pulse"></div>
+<span class="text-[11px] font-mono-data text-on-surface-variant uppercase tracking-tighter">System Health: Optimal</span>
+</div>
+<p class="text-[10px] text-outline text-center px-4 leading-relaxed uppercase tracking-widest">
+                    Encryption standard AES-256 enabled. Unauthorized attempts are automatically logged and reported to Federal Drone Command.
+                </p>
+</div>
+</div>
+<!-- Footer Help -->
+<div class="mt-8 text-center text-on-surface-variant/50 text-body-sm animate-in fade-in duration-1000 delay-500 fill-mode-both">
+            Need support? <a class="text-on-surface-variant hover:text-primary transition-colors underline underline-offset-4 decoration-primary/30" href="#">Contact Technical Operations</a>
+</div>
+</main>
+<script>
+        // Particle System for Atmospheric Telemetry Effect
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        const particleCount = 40;
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.init();
+            }
+
+            init() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2 + 1;
+                this.speedX = (Math.random() - 0.5) * 0.5;
+                this.speedY = (Math.random() - 0.5) * 0.5;
+                this.opacity = Math.random() * 0.5 + 0.1;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+
+                if (this.x < 0 || this.x > canvas.width) this.speedX *= -1;
+                if (this.y < 0 || this.y > canvas.height) this.speedY *= -1;
+            }
+
+            draw() {
+                ctx.fillStyle = `rgba(0, 217, 255, ${this.opacity})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Draw occasional telemetry connection lines
+                particles.forEach(p => {
+                    const dx = this.x - p.x;
+                    const dy = this.y - p.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < 150) {
+                        ctx.strokeStyle = `rgba(0, 217, 255, ${(1 - distance/150) * 0.05})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(this.x, this.y);
+                        ctx.lineTo(p.x, p.y);
+                        ctx.stroke();
+                    }
+                });
+            }
+        }
+
+        function createParticles() {
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle());
+            }
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+            requestAnimationFrame(animate);
+        }
+
+        createParticles();
+        animate();
+    </script>
+
+
+<script src="/screens/_wiring.js"></script></body></html>

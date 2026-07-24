@@ -1,0 +1,249 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>SwarmGuard-AI | 404 Signal Lost</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=Courier+Prime&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface": "#0e1417",
+                    "on-surface": "#dde4e6",
+                    "on-secondary": "#002a78",
+                    "surface-variant": "#2f3638",
+                    "on-tertiary": "#422d00",
+                    "on-secondary-container": "#cdd7ff",
+                    "on-error": "#690005",
+                    "surface-dim": "#0e1417",
+                    "secondary-fixed": "#dbe1ff",
+                    "on-tertiary-fixed": "#271900",
+                    "outline-variant": "#3c494d",
+                    "surface-bright": "#333a3d",
+                    "primary-fixed-dim": "#00d9ff",
+                    "on-primary-fixed": "#001f26",
+                    "on-surface-variant": "#bbc9ce",
+                    "secondary-container": "#0053db",
+                    "surface-container-low": "#161d1f",
+                    "primary": "#afecff",
+                    "background": "#0e1417",
+                    "primary-container": "#00d9ff",
+                    "on-primary": "#003641",
+                    "error-container": "#93000a",
+                    "primary-fixed": "#aeecff",
+                    "secondary": "#b4c5ff",
+                    "on-primary-container": "#005b6c",
+                    "surface-container": "#1a2123",
+                    "inverse-primary": "#00687b",
+                    "surface-container-lowest": "#080f11",
+                    "tertiary": "#ffdeaa",
+                    "surface-container-high": "#242b2d",
+                    "outline": "#859398",
+                    "secondary-fixed-dim": "#b4c5ff",
+                    "on-tertiary-fixed-variant": "#5e4100",
+                    "on-primary-fixed-variant": "#004e5d",
+                    "error": "#ffb4ab",
+                    "on-secondary-fixed-variant": "#003ea8",
+                    "on-background": "#dde4e6",
+                    "inverse-surface": "#dde4e6",
+                    "surface-tint": "#00d9ff",
+                    "tertiary-fixed-dim": "#febb29",
+                    "on-tertiary-container": "#6e4d00",
+                    "on-error-container": "#ffdad6",
+                    "tertiary-fixed": "#ffdea9",
+                    "surface-container-highest": "#2f3638",
+                    "on-secondary-fixed": "#00174b",
+                    "tertiary-container": "#ffbb2a",
+                    "inverse-on-surface": "#2a3234"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "gutter": "16px",
+                    "card-gap": "20px",
+                    "unit": "4px",
+                    "container-padding": "24px"
+            },
+            "fontFamily": {
+                    "mono-data": ["Courier Prime"],
+                    "headline-lg": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "body-sm": ["Inter"],
+                    "body-md": ["Inter"],
+                    "title-md": ["Inter"],
+                    "headline-lg-mobile": ["Inter"],
+                    "display-lg": ["Inter"]
+            },
+            "fontSize": {
+                    "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                    "body-sm": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "title-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        @keyframes glitch {
+            0% { transform: translate(0); text-shadow: -2px 0 #00d9ff, 2px 0 #ff00c1; }
+            20% { transform: translate(-2px, 2px); }
+            40% { transform: translate(-2px, -2px); text-shadow: 2px 0 #00d9ff, -2px 0 #ff00c1; }
+            60% { transform: translate(2px, 2px); }
+            80% { transform: translate(2px, -2px); text-shadow: -1px 0 #00d9ff, 1px 0 #ff00c1; }
+            100% { transform: translate(0); }
+        }
+
+        @keyframes scanline {
+            0% { bottom: 100%; }
+            100% { bottom: 0%; }
+        }
+
+        @keyframes pulse-signal {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(1.1); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .glitch-text {
+            animation: glitch 1s infinite linear alternate-reverse;
+        }
+
+        .scanline-container::after {
+            content: "";
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: rgba(0, 217, 255, 0.2);
+            animation: scanline 4s linear infinite;
+            box-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
+            z-index: 10;
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .signal-lost-line {
+            stroke-dasharray: 8;
+            animation: dash 20s linear infinite;
+        }
+
+        @keyframes dash {
+            to { stroke-dashoffset: -1000; }
+        }
+
+        body {
+            background-color: #0b0f1a;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="text-on-surface font-body-md selection:bg-primary/30">
+<!-- Ambient Background Animation -->
+<div class="absolute inset-0 z-0 pointer-events-none">
+
+</div>
+<!-- Main Content Canvas -->
+<main class="relative z-10 flex flex-col items-center justify-center min-h-screen px-gutter text-center">
+<!-- Radar/HUD Backdrop -->
+<div class="relative w-full max-w-2xl mx-auto mb-12 flex flex-col items-center">
+<!-- Drone Icon & Signal Line -->
+<div class="mb-8 relative">
+<div class="absolute inset-0 bg-primary/5 rounded-full blur-3xl"></div>
+<div class="relative z-20 flex flex-col items-center">
+<div class="p-6 rounded-full glass-panel mb-4">
+<span class="material-symbols-outlined text-[64px] text-primary-container leading-none opacity-80" data-icon="settings_remote">settings_remote</span>
+</div>
+<!-- Dotted Path Visual -->
+<svg class="opacity-40" fill="none" height="40" viewBox="0 0 200 40" width="200" xmlns="http://www.w3.org/2000/svg">
+<path class="signal-lost-line" d="M0 20C40 20 60 5 100 5C140 5 160 35 200 35" stroke="#00d9ff" stroke-dasharray="6 6" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+<!-- Big 404 Numerals -->
+<div class="relative scanline-container overflow-hidden rounded-xl py-4 px-12">
+<h1 class="font-display-lg text-[120px] md:text-[180px] leading-none text-primary-fixed-dim glitch-text tracking-tighter mix-blend-screen opacity-90 select-none">
+                    404
+                </h1>
+<!-- HUD Overlays -->
+<div class="absolute top-0 left-0 w-full h-full pointer-events-none flex justify-between p-2">
+<div class="border-t-2 border-l-2 border-primary/40 w-8 h-8"></div>
+<div class="border-t-2 border-r-2 border-primary/40 w-8 h-8"></div>
+</div>
+<div class="absolute bottom-0 left-0 w-full h-full pointer-events-none flex justify-between items-end p-2">
+<div class="border-b-2 border-l-2 border-primary/40 w-8 h-8"></div>
+<div class="border-b-2 border-r-2 border-primary/40 w-8 h-8"></div>
+</div>
+</div>
+</div>
+<!-- Typography Section -->
+<div class="max-w-xl space-y-6">
+<div class="inline-flex items-center gap-3 px-3 py-1 rounded bg-error-container/20 border border-error/30 mb-2">
+<span class="material-symbols-outlined text-error text-[18px]" data-icon="warning" style="font-variation-settings: 'FILL' 1;">warning</span>
+<span class="font-label-caps text-label-caps text-error tracking-[0.2em]">SIGNAL LOST</span>
+</div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">TELEMETRY NOT FOUND</h2>
+<p class="text-on-surface-variant font-body-md leading-relaxed">
+                The page you're trying to reach has flown out of range or been intercepted. 
+                Our autonomous security grid cannot locate the requested asset at this coordinate.
+            </p>
+<div class="pt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
+<a class="group relative inline-flex items-center gap-3 px-8 py-4 bg-primary-container text-on-primary font-label-caps text-label-caps tracking-widest rounded-lg transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_20px_rgba(0,217,255,0.4)] active:scale-[0.98]" href="/dashboard">
+<span class="material-symbols-outlined" data-icon="home">home</span>
+                    RETURN TO BASE
+                </a>
+<button class="inline-flex items-center gap-3 px-8 py-4 glass-panel text-on-surface font-label-caps text-label-caps tracking-widest rounded-lg transition-all duration-300 hover:bg-white/10" onclick="window.history.back()">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+                    PREVIOUS SECTOR
+                </button>
+</div>
+</div>
+<!-- System Footer Info -->
+<footer class="mt-24 w-full max-w-4xl">
+<div class="flex flex-col md:flex-row items-center justify-between border-t border-white/5 pt-6 gap-4">
+<div class="flex items-center gap-4 font-mono-data text-mono-data text-on-surface-variant/60">
+<span>ERROR_CODE: <span class="text-primary-fixed-dim">0x404_NULL_REF</span></span>
+<span class="hidden md:block opacity-30">|</span>
+<span class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-error animate-pulse"></span>
+                        LAST KNOWN COORDINATES: UNAVAILABLE
+                    </span>
+</div>
+<div class="flex items-center gap-4 text-on-surface-variant/40">
+<span class="font-label-caps text-[10px] tracking-tighter">SWARMGUARD-AI NODE v2.4.0</span>
+</div>
+</div>
+</footer>
+</main>
+<!-- Interactive Mouse Follow Gradient (Micro-interaction) -->
+<div class="fixed inset-0 pointer-events-none z-0 opacity-20" id="cursor-glow" style="background: radial-gradient(circle 600px at 50% 50%, rgba(0, 217, 255, 0.15), transparent);"></div>
+<script>
+        // Micro-interaction: Mouse glow follow
+        const glow = document.getElementById('cursor-glow');
+        window.addEventListener('mousemove', (e) => {
+            const x = e.clientX;
+            const y = e.clientY;
+            glow.style.background = `radial-gradient(circle 600px at ${x}px ${y}px, rgba(0, 217, 255, 0.15), transparent)`;
+        });
+
+        // Simulating data streams in the background
+        console.log("System Alert: Signal Lost in Sector 404.");
+        console.log("Initiating automatic route recalculation...");
+    </script>
+<script src="/screens/_wiring.js"></script></body></html>
