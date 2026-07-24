@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SwarmGuard AI | Drone Management</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;family=Courier+Prime&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#161d1f",
+                        "surface-container-highest": "#2f3638",
+                        "on-tertiary-fixed": "#271900",
+                        "on-secondary-fixed-variant": "#003ea8",
+                        "on-tertiary": "#422d00",
+                        "on-primary-fixed-variant": "#004e5d",
+                        "primary": "#afecff",
+                        "on-secondary-container": "#cdd7ff",
+                        "on-tertiary-container": "#6e4d00",
+                        "secondary": "#b4c5ff",
+                        "primary-fixed-dim": "#00d9ff",
+                        "on-secondary": "#002a78",
+                        "inverse-surface": "#dde4e6",
+                        "surface-bright": "#333a3d",
+                        "on-tertiary-fixed-variant": "#5e4100",
+                        "background": "#0e1417",
+                        "inverse-primary": "#00687b",
+                        "surface-container": "#1a2123",
+                        "on-error": "#690005",
+                        "secondary-container": "#0053db",
+                        "primary-fixed": "#aeecff",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-lowest": "#080f11",
+                        "surface": "#0e1417",
+                        "tertiary-fixed-dim": "#febb29",
+                        "secondary-fixed": "#dbe1ff",
+                        "on-primary-container": "#005b6c",
+                        "tertiary-fixed": "#ffdea9",
+                        "tertiary-container": "#ffbb2a",
+                        "outline": "#859398",
+                        "on-surface": "#dde4e6",
+                        "on-primary": "#003641",
+                        "on-background": "#dde4e6",
+                        "surface-container-high": "#242b2d",
+                        "surface-tint": "#00d9ff",
+                        "tertiary": "#ffdeaa",
+                        "outline-variant": "#3c494d",
+                        "on-primary-fixed": "#001f26",
+                        "on-surface-variant": "#bbc9ce",
+                        "surface-dim": "#0e1417",
+                        "error-container": "#93000a",
+                        "on-secondary-fixed": "#00174b",
+                        "inverse-on-surface": "#2a3234",
+                        "error": "#ffb4ab",
+                        "primary-container": "#00d9ff",
+                        "secondary-fixed-dim": "#b4c5ff",
+                        "surface-variant": "#2f3638"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "container-padding": "24px",
+                        "card-gap": "20px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Inter", "sans-serif"],
+                        "label-caps": ["Inter", "sans-serif"],
+                        "body-md": ["Inter", "sans-serif"],
+                        "mono-data": ["Courier Prime", "monospace"],
+                        "title-md": ["Inter", "sans-serif"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #0A0E17;
+            color: #E6EDF7;
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+        .glass-card {
+            background: #111827;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .table-header {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .action-row:hover .row-actions {
+            opacity: 1;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #22D3EE40;
+            border-radius: 10px;
+        }
+        .drawer-shadow {
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body class="flex min-h-screen">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-[280px] bg-surface/80 border-r border-white/10 flex flex-col py-6 z-50">
+<div class="px-6 mb-8">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 bg-primary-container rounded flex items-center justify-center">
+<span class="material-symbols-outlined text-on-primary-fixed text-lg" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div>
+<h1 class="text-title-md font-bold text-primary tracking-tight">SwarmGuard</h1>
+<p class="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold">Autonomous Security</p>
+</div>
+</div>
+<div class="mt-6 p-3 bg-white/5 rounded-lg border border-white/5 flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A professional headshot of a female security administrator with a neutral expression, wearing a high-tech dark suit. The background is a dimly lit command center with subtle cyan light streaks. The lighting is crisp and detailed, emphasizing high-fidelity digital textures in a cinematic sci-fi style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA3hL7mqaIFoTIlV4iyhAtbCaG3-W7mfLw6lbfkrx3L7dfr8LB69SZkjDKlcf3FC29G0ZI8z0lBxMSQ9hbRs-VlFBBPk2iJp68elNyQruFsViwqGKGa5dwD6TRtyIEM3dAooQ5XS-9IiNunBSVnX5hbbVU0u-c886frLFRoaebrlaoBIpbUWuQePmgqqh19KN3XBh5IQ_lxwu8t1Pz-bNhJ9zv5fyCwwxeMQutekpEt13DL4LU-9wm5ECo35p9IQQR0BIpM01F8WDE"/>
+</div>
+<div>
+<p class="text-sm font-bold">Major Sterling</p>
+<span class="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-mono uppercase">Admin</span>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">dashboard</span>
+<span class="font-medium">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">sensors</span>
+<span class="font-medium">Live Telemetry</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">screenshot_monitor</span>
+<span class="font-medium">Drone Monitoring</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">policy</span>
+<span class="font-medium">Threat Intelligence</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">warning</span>
+<span class="font-medium">Incidents</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 bg-primary/10 text-primary border-r-2 border-primary transition-transform scale-[0.98]" href="#">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">settings_remote</span>
+<span class="font-medium">Drone Management</span>
+</a>
+<div class="pt-4 mt-4 border-t border-white/5 space-y-1">
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">settings</span>
+<span class="font-medium">Settings</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface hover:bg-white/5 transition-colors duration-200" href="#">
+<span class="material-symbols-outlined text-[20px]">account_circle</span>
+<span class="font-medium">Profile</span>
+</a>
+</div>
+</nav>
+</aside>
+<!-- Main Content Canvas -->
+<main class="ml-[280px] flex-1 min-h-screen flex flex-col relative bg-[#0A0E17]">
+<!-- TopNavBar -->
+<header class="h-16 flex items-center justify-between px-8 bg-surface/40 backdrop-blur-md border-b border-white/5 sticky top-0 z-40">
+<div class="flex items-center flex-1 max-w-md">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+<input class="bg-surface-container-lowest/50 border border-white/10 rounded-full py-1.5 pl-10 pr-4 w-full text-sm focus:outline-none focus:border-primary/50 transition-all text-on-surface" placeholder="Search system nodes..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary transition-all relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full border-2 border-[#0A0E17]"></span>
+</button>
+<div class="h-8 w-[1px] bg-white/10"></div>
+<div class="flex items-center gap-3">
+<span class="text-xs font-mono text-primary tracking-widest uppercase">System Status: Nominal</span>
+<div class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+</div>
+</div>
+</header>
+<!-- Page Header -->
+<section class="px-8 pt-8 pb-6 flex items-end justify-between">
+<div class="space-y-1">
+<div class="flex items-center gap-3">
+<h2 class="text-headline-lg font-headline-lg text-[#E6EDF7]">Drone Management</h2>
+<span class="font-mono text-[10px] border border-white/20 px-2 py-0.5 rounded text-on-surface-variant uppercase tracking-tighter">Admin only</span>
+</div>
+<p class="text-on-surface-variant font-body-md">Register, configure, and decommission fleet assets across the global swarm.</p>
+</div>
+<button class="bg-[#22D3EE] hover:bg-[#22D3EE]/90 text-[#0A0E17] px-5 py-2.5 rounded font-bold flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(34,211,238,0.3)] active:scale-95">
+<span class="material-symbols-outlined text-lg">add</span>
+<span>Add Drone</span>
+</button>
+</section>
+<!-- Table Filters & Content -->
+<section class="px-8 pb-12 flex-1">
+<div class="glass-card rounded-xl overflow-hidden flex flex-col h-full border border-white/10">
+<!-- Table Controls -->
+<div class="p-4 border-b border-white/5 flex items-center justify-between bg-white/5">
+<div class="flex items-center gap-4">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-xs">filter_list</span>
+<select class="appearance-none bg-surface-container-highest border border-white/10 rounded px-8 py-1.5 text-xs font-bold text-on-surface focus:outline-none focus:border-primary/50 cursor-pointer">
+<option>ALL STATUS</option>
+<option>ONLINE</option>
+<option>OFFLINE</option>
+<option>MAINTENANCE</option>
+</select>
+</div>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-xs">grid_view</span>
+<select class="appearance-none bg-surface-container-highest border border-white/10 rounded px-8 py-1.5 text-xs font-bold text-on-surface focus:outline-none focus:border-primary/50 cursor-pointer">
+<option>ALL SQUADRONS</option>
+<option>SQUADRON-ALPHA</option>
+<option>SQUADRON-OMEGA</option>
+</select>
+</div>
+</div>
+<div class="text-xs text-on-surface-variant font-mono">
+                        SHOWING <span class="text-primary">12</span> OF 142 ACTIVE ASSETS
+                    </div>
+</div>
+<!-- Data Table -->
+<div class="overflow-x-auto flex-1 custom-scrollbar">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-white/5 table-header">
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Drone ID</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Callsign</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Model</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Fleet/Squadron</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Firmware</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Cert Status</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Reg Date</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest">Status</th>
+<th class="px-6 py-4 text-[11px] font-extrabold text-on-surface-variant uppercase tracking-widest text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-white/5">
+<!-- Row 1 -->
+<tr class="action-row hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 font-mono-data text-primary">SG-X782-99</td>
+<td class="px-6 py-4 font-bold text-[#E6EDF7]">RAPTOR-01</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Interceptor X4</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Alpha-Prime</td>
+<td class="px-6 py-4 font-mono text-xs text-on-surface-variant">v4.2.1-stable</td>
+<td class="px-6 py-4">
+<span class="flex items-center gap-1.5 text-[10px] font-bold uppercase text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full border border-emerald-400/20">
+<span class="w-1 h-1 rounded-full bg-emerald-400"></span>
+                                        Valid
+                                    </span>
+</td>
+<td class="px-6 py-4 text-xs text-[#E6EDF7]">2023.10.12</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase bg-white/10 text-white px-2 py-0.5 rounded">Online</span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="row-actions opacity-0 transition-opacity flex justify-end gap-2">
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-[#22D3EE]"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-primary"><span class="material-symbols-outlined text-sm">refresh</span></button>
+<button class="p-1.5 hover:bg-red-500/20 rounded transition-colors text-error"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="action-row hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 font-mono-data text-primary">SG-X102-44</td>
+<td class="px-6 py-4 font-bold text-[#E6EDF7]">GHOST-09</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Stealth-V2</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Night-Watch</td>
+<td class="px-6 py-4 font-mono text-xs text-on-surface-variant">v4.1.9-legacy</td>
+<td class="px-6 py-4">
+<span class="flex items-center gap-1.5 text-[10px] font-bold uppercase text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+<span class="w-1 h-1 rounded-full bg-amber-400"></span>
+                                        Expiring
+                                    </span>
+</td>
+<td class="px-6 py-4 text-xs text-[#E6EDF7]">2023.08.05</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase bg-white/10 text-white px-2 py-0.5 rounded">Online</span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="row-actions opacity-0 transition-opacity flex justify-end gap-2">
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-[#22D3EE]"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-primary"><span class="material-symbols-outlined text-sm">refresh</span></button>
+<button class="p-1.5 hover:bg-red-500/20 rounded transition-colors text-error"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="action-row hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 font-mono-data text-primary">SG-X900-11</td>
+<td class="px-6 py-4 font-bold text-[#E6EDF7]">VOID-X</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Recon Unit</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Alpha-Prime</td>
+<td class="px-6 py-4 font-mono text-xs text-on-surface-variant">v4.2.2-rc</td>
+<td class="px-6 py-4">
+<span class="flex items-center gap-1.5 text-[10px] font-bold uppercase text-error bg-error/10 px-2 py-0.5 rounded-full border border-error/20">
+<span class="w-1 h-1 rounded-full bg-error"></span>
+                                        Revoked
+                                    </span>
+</td>
+<td class="px-6 py-4 text-xs text-[#E6EDF7]">2024.01.20</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase bg-white/5 text-on-surface-variant px-2 py-0.5 rounded">Offline</span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="row-actions opacity-0 transition-opacity flex justify-end gap-2">
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-[#22D3EE]"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-primary"><span class="material-symbols-outlined text-sm">refresh</span></button>
+<button class="p-1.5 hover:bg-red-500/20 rounded transition-colors text-error"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</td>
+</tr>
+<!-- Repeat data to fill space -->
+<tr class="action-row hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 font-mono-data text-primary">SG-X783-01</td>
+<td class="px-6 py-4 font-bold text-[#E6EDF7]">RAPTOR-02</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Interceptor X4</td>
+<td class="px-6 py-4 text-sm text-[#E6EDF7]">Alpha-Prime</td>
+<td class="px-6 py-4 font-mono text-xs text-on-surface-variant">v4.2.1-stable</td>
+<td class="px-6 py-4">
+<span class="flex items-center gap-1.5 text-[10px] font-bold uppercase text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full border border-emerald-400/20">
+<span class="w-1 h-1 rounded-full bg-emerald-400"></span>
+                                        Valid
+                                    </span>
+</td>
+<td class="px-6 py-4 text-xs text-[#E6EDF7]">2023.11.02</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase bg-white/10 text-white px-2 py-0.5 rounded">Online</span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="row-actions opacity-0 transition-opacity flex justify-end gap-2">
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-[#22D3EE]"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-1.5 hover:bg-white/10 rounded transition-colors text-primary"><span class="material-symbols-outlined text-sm">refresh</span></button>
+<button class="p-1.5 hover:bg-red-500/20 rounded transition-colors text-error"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Footer Stats -->
+<div class="p-4 border-t border-white/5 flex items-center justify-between text-xs font-mono text-on-surface-variant">
+<div class="flex gap-4">
+<span>SQUAD ALPHA: <span class="text-emerald-400">42/42 ACTIVE</span></span>
+<span>SQUAD OMEGA: <span class="text-amber-400">18/22 ACTIVE</span></span>
+</div>
+<div class="flex items-center gap-4">
+<button class="hover:text-primary transition-all flex items-center gap-1"><span class="material-symbols-outlined text-xs">chevron_left</span> PREV</button>
+<div class="flex gap-1">
+<span class="px-1.5 bg-primary/20 text-primary rounded">1</span>
+<span class="px-1.5 hover:bg-white/10 rounded cursor-pointer">2</span>
+<span class="px-1.5 hover:bg-white/10 rounded cursor-pointer">3</span>
+</div>
+<button class="hover:text-primary transition-all flex items-center gap-1">NEXT <span class="material-symbols-outlined text-xs">chevron_right</span></button>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Side Drawer (Partial representation) -->
+<div class="fixed right-0 top-0 h-full w-96 bg-[#111827] border-l border-white/10 drawer-shadow z-[60] flex flex-col transform translate-x-[calc(100%-8px)] hover:translate-x-0 transition-transform duration-500 ease-in-out group">
+<!-- Peek Indicator -->
+<div class="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-full bg-[#111827] border border-white/10 border-r-0 p-2 rounded-l-lg cursor-pointer group-hover:opacity-0 transition-opacity">
+<span class="material-symbols-outlined text-primary">keyboard_double_arrow_left</span>
+</div>
+<div class="p-6 border-b border-white/5 flex items-center justify-between">
+<div>
+<h3 class="text-title-md font-bold text-[#E6EDF7]">Register New Asset</h3>
+<p class="text-[11px] uppercase tracking-wider text-on-surface-variant mt-1">Configuring fleet secure-node</p>
+</div>
+<button class="text-on-surface-variant hover:text-white transition-colors">
+<span class="material-symbols-outlined">close</span>
+</button>
+</div>
+<div class="flex-1 p-6 space-y-6 overflow-y-auto custom-scrollbar">
+<div class="space-y-2">
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Drone ID (System Generated)</label>
+<input class="w-full bg-black/30 border border-white/10 rounded px-4 py-2.5 font-mono text-sm text-on-surface-variant cursor-not-allowed" disabled="" type="text" value="SG-X880-TEMP"/>
+</div>
+<div class="space-y-2">
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Callsign</label>
+<input class="w-full bg-black/40 border border-white/10 rounded px-4 py-2.5 text-sm text-[#E6EDF7] focus:outline-none focus:border-[#22D3EE] transition-all placeholder:text-on-surface-variant/40" placeholder="e.g. SKY-WOLF" type="text"/>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div class="space-y-2">
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Model</label>
+<select class="w-full bg-black/40 border border-white/10 rounded px-3 py-2.5 text-sm text-[#E6EDF7] focus:outline-none focus:border-[#22D3EE] transition-all">
+<option>Interceptor X4</option>
+<option>Recon Unit</option>
+<option>Stealth-V2</option>
+<option>Cargo Lift</option>
+</select>
+</div>
+<div class="space-y-2">
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fleet</label>
+<select class="w-full bg-black/40 border border-white/10 rounded px-3 py-2.5 text-sm text-[#E6EDF7] focus:outline-none focus:border-[#22D3EE] transition-all">
+<option>Alpha-Prime</option>
+<option>Omega-Guard</option>
+<option>Night-Watch</option>
+</select>
+</div>
+</div>
+<div class="pt-6 border-t border-white/5">
+<div class="flex items-center justify-between mb-4">
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Security Credentials</label>
+<span class="text-[10px] text-primary bg-primary/10 px-2 py-0.5 rounded font-mono">ED25519</span>
+</div>
+<div class="p-4 bg-black/60 rounded border border-white/5 font-mono text-[10px] text-on-surface-variant break-all mb-4">
+                        ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInRkXjH5... [Pending Generation]
+                    </div>
+<button class="w-full bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 py-3 rounded text-xs font-bold tracking-widest uppercase transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm">key</span>
+                        Generate New Key
+                    </button>
+</div>
+</div>
+<div class="p-6 bg-white/5 border-t border-white/10 flex gap-3">
+<button class="flex-1 bg-[#22D3EE] hover:bg-[#22D3EE]/90 text-[#0A0E17] py-3 rounded font-bold uppercase text-xs tracking-widest transition-all">
+                    Register Drone
+                </button>
+<button class="px-6 bg-white/5 hover:bg-white/10 text-on-surface border border-white/10 py-3 rounded font-bold uppercase text-xs tracking-widest transition-all">
+                    Cancel
+                </button>
+</div>
+</div>
+</main>
+<!-- Global Decoration Micro-Interactions -->
+<script>
+        // Simple micro-interaction for row clicks/active state
+        document.querySelectorAll('tr.action-row').forEach(row => {
+            row.addEventListener('click', () => {
+                document.querySelectorAll('tr.action-row').forEach(r => r.classList.remove('bg-primary/5'));
+                row.classList.add('bg-primary/5');
+            });
+        });
+
+        // Hover effect for the key generation button
+        const keyBtn = document.querySelector('button:contains("Generate New Key")');
+        if(keyBtn) {
+            keyBtn.addEventListener('mousedown', () => {
+                keyBtn.style.transform = 'scale(0.98)';
+            });
+            keyBtn.addEventListener('mouseup', () => {
+                keyBtn.style.transform = 'scale(1)';
+            });
+        }
+    </script>
+<script src="/screens/_wiring.js"></script></body></html>
