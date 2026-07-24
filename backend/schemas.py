@@ -6,6 +6,21 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class UserCreate(BaseModel):
+    username: str
+    email: Optional[str] = None
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: Optional[str]
+    role: str
+    created_at: datetime
+    
+    model_config = {
+        "from_attributes": True
+    }
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -39,6 +54,7 @@ class IncidentOut(BaseModel):
     attack_type: str
     threat_level: int
     severity: str
+    shap_values: Optional[List[dict]] = None
     explanation: str
     created_at: datetime
 
