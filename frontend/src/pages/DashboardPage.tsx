@@ -6,6 +6,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
+import { SHAPBarChart } from "@/components/shared/SHAPBarChart";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function DashboardPage() {
@@ -223,32 +224,7 @@ export default function DashboardPage() {
           </div>
           
           <div className="min-h-[160px] flex flex-col justify-center">
-            {latestIncident?.shap_values && latestIncident.shap_values.length > 0 ? (
-              <div className="flex flex-col gap-4">
-                <div className="text-sm text-sg-text-muted mb-2 font-mono border-b border-white/5 pb-2">
-                  Model explanation for latest incident: <span className="text-sg-primary">#{latestIncident.id}</span>
-                </div>
-                {latestIncident.shap_values.map((shap: any, idx: number) => (
-                  <div key={idx} className="flex flex-col gap-1.5">
-                    <div className="flex justify-between text-xs font-mono">
-                      <span className="text-sg-text-dim uppercase">{shap.feature}</span>
-                      <span className="text-sg-primary-soft">+{shap.value.toFixed(4)}</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full rounded-full bg-sg-primary opacity-80"
-                        style={{ width: `${Math.min(100, Math.max(5, (shap.value / 0.5) * 100))}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex flex-col items-center text-sg-text-dim">
-                <span className="material-symbols-outlined text-4xl mb-3 opacity-30">psychology</span>
-                <p className="font-mono text-sm">Awaiting anomaly detection data...</p>
-              </div>
-            )}
+            <SHAPBarChart values={latestIncident?.shap_values} />
           </div>
         </GlassCard>
 
