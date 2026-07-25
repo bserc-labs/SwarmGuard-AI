@@ -8,6 +8,7 @@ from database import get_db
 from services.ai_service import ai_service
 from services.threat_service import threat_service
 from services.ws_manager import ws_manager
+from utils.logger import logger
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
@@ -20,28 +21,40 @@ def ingest_telemetry(packet: schemas.TelemetryPacket, background_tasks: Backgrou
     telemetry_buffer.append(packet.model_dump())
     
     # 2. Save raw telemetry to DB
-    db_log = models.TelemetryLog(**packet.model_dump())
-    db.add(db_log)
-    db.commit()
+    try:
+        db_log = models.TelemetryLog(**packet.model_dump())
+        db.add(db_log)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"DB write failed for telemetry: {e}")
     
     # 3. AI Inference
-    is_anomaly, anomaly_score, attack_type = ai_service.analyze_telemetry(packet.model_dump())
+    try:
+        is_anomaly, anomaly_score, attack_type = ai_service.analyze_telemetry(packet.model_dump())
+    except Exception as e:
+        logger.error(f"AI inference failed: {e}")
+        is_anomaly, anomaly_score, attack_type = False, 0.0, None
     
     # 4. Generate Alert & Incident if anomaly
     alert_data = threat_service.generate_alert(is_anomaly, anomaly_score, attack_type)
     
     if is_anomaly:
-        incident = models.Incident(
-            drone_id=packet.drone_id,
-            attack_type=alert_data.get("attack_type"),
-            anomaly_score=anomaly_score,
-            threat_level=alert_data.get("threat_level"),
-            severity=alert_data.get("severity"),
-            shap_values=alert_data.get("shap_top3"),
-            explanation=alert_data.get("explanation")
-        )
-        db.add(incident)
-        db.commit()
+        try:
+            incident = models.Incident(
+                drone_id=packet.drone_id,
+                attack_type=alert_data.get("attack_type"),
+                anomaly_score=anomaly_score,
+                threat_level=alert_data.get("threat_level"),
+                severity=alert_data.get("severity"),
+                shap_values=alert_data.get("shap_top3"),
+                explanation=alert_data.get("explanation")
+            )
+            db.add(incident)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"DB write failed for incident: {e}")
         
         # Broadcast the alert to all connected websocket clients in the background
         background_tasks.add_task(ws_manager.broadcast, alert_data)
