@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from collections import deque
 import asyncio
+from datetime import datetime
 import schemas
 import models
 from database import get_db
@@ -20,10 +21,22 @@ def ingest_telemetry(packet: schemas.TelemetryPacket, background_tasks: Backgrou
     # 1. Append to buffer
     telemetry_buffer.append(packet.model_dump())
     
-    # 2. Save raw telemetry to DB
+    # 2. Save raw telemetry & update Drone last_seen in DB
     try:
         db_log = models.TelemetryLog(**packet.model_dump())
         db.add(db_log)
+        
+        # Update or register Drone
+        drone = db.query(models.Drone).filter(models.Drone.drone_id == packet.drone_id).first()
+        if not drone:
+            drone = models.Drone(drone_id=packet.drone_id, status="ACTIVE", last_seen=datetime.utcnow())
+            db.add(drone)
+        else:
+            drone.last_seen = datetime.utcnow()
+            # If drone was marked SILENT, set back to ACTIVE upon receiving new telemetry
+            if drone.status == "SILENT_POSSIBLE_JAMMING":
+                drone.status = "ACTIVE"
+        
         db.commit()
     except Exception as e:
         db.rollback()

@@ -84,3 +84,13 @@ def get_drone_command_history(
     current_user: models.User = Depends(get_operator_user)
 ):
     return db.query(models.DroneCommand).filter(models.DroneCommand.drone_id == drone_id).all()
+
+from services.heartbeat_service import check_drone_heartbeats
+
+@router.post("/check-heartbeats")
+def trigger_heartbeat_check(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_operator_user)
+):
+    alerts = check_drone_heartbeats(db)
+    return {"status": "ok", "silent_drones_detected": alerts}
