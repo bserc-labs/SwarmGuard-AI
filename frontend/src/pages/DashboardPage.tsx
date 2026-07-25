@@ -186,18 +186,18 @@ export default function DashboardPage() {
                       <div className="flex-1">
                         <div className="flex justify-between text-[11px] text-sg-text-muted mb-1 font-mono">
                           <span>BATTERY</span>
-                          <span>{drone.battery.toFixed(1)}%</span>
+                          <span>{(drone.battery ?? 0).toFixed(1)}%</span>
                         </div>
                         <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full rounded-full ${getBatteryColor(drone.battery)}`}
-                            style={{ width: `${Math.min(100, Math.max(0, drone.battery))}%` }}
+                            className={`h-full rounded-full ${getBatteryColor(drone.battery ?? 0)}`}
+                            style={{ width: `${Math.min(100, Math.max(0, drone.battery ?? 0))}%` }}
                           ></div>
                         </div>
                       </div>
                       <div className="w-16 text-right">
                         <div className="text-[10px] text-sg-text-dim font-mono mb-0.5">SPD (m/s)</div>
-                        <div className="text-sm font-mono text-sg-primary">{drone.speed.toFixed(1)}</div>
+                        <div className="text-sm font-mono text-sg-primary">{(drone.speed ?? 0).toFixed(1)}</div>
                       </div>
                     </div>
                   </div>
@@ -228,20 +228,23 @@ export default function DashboardPage() {
                 <div className="text-sm text-sg-text-muted mb-2 font-mono border-b border-white/5 pb-2">
                   Model explanation for latest incident: <span className="text-sg-primary">#{latestIncident.id}</span>
                 </div>
-                {latestIncident.shap_values.map((shap: any, idx: number) => (
-                  <div key={idx} className="flex flex-col gap-1.5">
-                    <div className="flex justify-between text-xs font-mono">
-                      <span className="text-sg-text-dim uppercase">{shap.feature}</span>
-                      <span className="text-sg-primary-soft">+{shap.value.toFixed(4)}</span>
+                {latestIncident.shap_values.map((shap: any, idx: number) => {
+                  const val = shap.value ?? shap.importance ?? 0;
+                  return (
+                    <div key={idx} className="flex flex-col gap-1.5">
+                      <div className="flex justify-between text-xs font-mono">
+                        <span className="text-sg-text-dim uppercase">{shap.feature}</span>
+                        <span className="text-sg-primary-soft">+{val.toFixed(4)}</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full rounded-full bg-sg-primary opacity-80"
+                          style={{ width: `${Math.min(100, Math.max(5, (val / 0.5) * 100))}%` }}
+                        ></div>
+                      </div>
                     </div>
-                    <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full rounded-full bg-sg-primary opacity-80"
-                        style={{ width: `${Math.min(100, Math.max(5, (shap.value / 0.5) * 100))}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="flex flex-col items-center text-sg-text-dim">
