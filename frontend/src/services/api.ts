@@ -76,6 +76,24 @@ export interface HealthResponse {
   service: string;
 }
 
+export interface Drone {
+  id: number;
+  drone_id: string;
+  status: string;
+  last_seen: string;
+  last_command: string | null;
+}
+
+export interface DroneCommand {
+  id: number;
+  drone_id: string;
+  command_type: string;
+  reason: string | null;
+  issued_by: string;
+  status: string;
+  created_at: string;
+}
+
 export const api = {
   getHealth: (): Promise<HealthResponse> =>
     fetch(`${API_BASE}/health`).then((r) => r.json()),
@@ -95,4 +113,20 @@ export const api = {
 
   getMe: (): Promise<UserInfo> =>
     fetchWithAuth("/users/me"),
+
+  getDrones: (): Promise<Drone[]> =>
+    fetchWithAuth("/drones"),
+
+  issueCommand: (droneId: string, commandType: string, reason?: string): Promise<DroneCommand> =>
+    fetchWithAuth(`/drones/${droneId}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_type: commandType, reason }),
+    }),
+
+  getDroneCommands: (droneId: string): Promise<DroneCommand[]> =>
+    fetchWithAuth(`/drones/${droneId}/commands`),
+
+  checkHeartbeats: (): Promise<{ status: string; silent_drones_detected: number }> =>
+    fetchWithAuth("/drones/check-heartbeats", { method: "POST" }),
 };
