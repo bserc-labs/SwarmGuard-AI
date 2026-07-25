@@ -11,6 +11,7 @@ router = APIRouter(
     tags=["Protected"]
 )
 
+
 @router.get("/me")
 def read_current_user(
     current_user: models.User = Depends(get_current_user)
