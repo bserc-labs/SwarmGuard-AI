@@ -23,24 +23,27 @@ ALGORITHM=HS256
 TOKEN_EXPIRE=1440
 ```
 
-### 2. Run via Docker (Recommended)
-You can spin up the entire application (Backend + Database) using Docker Compose:
+### 2. Run the Full Stack via Docker (v2.0)
+You can spin up the entire application (Frontend, Backend, and Database) using our multi-stage Docker Compose setup:
 ```bash
 docker compose up --build
 ```
-The FastAPI backend will be available at `http://localhost:8000`
+Once it's running:
+- **Frontend Dashboard**: `http://localhost` (or `http://localhost:80`)
+- **Backend API Docs**: `http://localhost:8000/docs`
 
-### 3. Run Frontend Locally
-In a separate terminal, start the React Vite server:
+Log in to the dashboard using:
+- **Operator ID**: `admin`
+- **Passkey**: `admin`
+
+### 3. Local Development (Without Docker)
+If you are developing the frontend locally without Docker:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-The dashboard will be available at `http://localhost:5173`.
-Log in using:
-- **Operator ID**: `admin`
-- **Passkey**: `admin`
+*(The React server will run on `http://localhost:5173`)*
 
 ### 4. Running the AI Simulator (Data Injection)
 To simulate live drone telemetry and trigger the AI threat detection:
