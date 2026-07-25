@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 from database import engine, Base
-from routers import auth, telemetry, incidents, websocket, users
+from routers import auth, telemetry, incidents, websocket, users, commands
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -50,6 +50,7 @@ app.include_router(users.router)
 app.include_router(telemetry.router)
 app.include_router(incidents.router)
 app.include_router(websocket.router)
+app.include_router(commands.router)
 
 @app.get("/")
 def read_root():

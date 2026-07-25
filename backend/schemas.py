@@ -61,3 +61,34 @@ class IncidentOut(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+
+class CommandCreate(BaseModel):
+    command_type: str  # RETURN_TO_HOME, EMERGENCY_LAND, SWITCH_SAFE_MODE, KILL_MOTOR, RESUME_MISSION
+    reason: Optional[str] = None
+
+
+class CommandOut(BaseModel):
+    id: int
+    drone_id: str
+    command_type: str
+    reason: Optional[str]
+    issued_by: str
+    status: str
+    created_at: datetime
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class DroneOut(BaseModel):
+    id: int
+    drone_id: str
+    status: str
+    last_seen: datetime
+    last_command: Optional[str]
+
+    model_config = {
+        "from_attributes": True
+    }

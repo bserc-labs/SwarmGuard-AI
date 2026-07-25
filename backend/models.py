@@ -39,3 +39,25 @@ class Incident(Base):
     shap_values = Column(JSON)
     explanation = Column(String)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class Drone(Base):
+    __tablename__ = "drones"
+
+    id = Column(Integer, primary_key=True, index=True)
+    drone_id = Column(String, unique=True, index=True)
+    status = Column(String, default="ACTIVE")  # ACTIVE, COMPROMISED, GROUNDED, RETURNING
+    last_seen = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    last_command = Column(String, nullable=True)
+
+
+class DroneCommand(Base):
+    __tablename__ = "drone_commands"
+
+    id = Column(Integer, primary_key=True, index=True)
+    drone_id = Column(String, index=True)
+    command_type = Column(String)  # RETURN_TO_HOME, EMERGENCY_LAND, SWITCH_SAFE_MODE, KILL_MOTOR, RESUME_MISSION
+    reason = Column(String, nullable=True)
+    issued_by = Column(String)
+    status = Column(String, default="PENDING")  # PENDING, EXECUTED, FAILED
+    created_at = Column(DateTime, server_default=func.now())
