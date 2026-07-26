@@ -1,0 +1,13 @@
+{
+  "attack_type": "signal_loss",
+  "name": "Signal Loss",
+  "Description": "Loss of contact or connection quality on the radio frequency links (control, telemetry, or video) due to range limits, physical obstructions, or RF attenuation.",
+  "Symptoms": [
+    "Received Signal Strength Indicator (RSSI) dropping below threshold levels",
+    "Complete cessation of incoming telemetry or control updates",
+    "Video transmission noise, freeze, or black screen"
+  ],
+  "Impact": "Loss of situational awareness and remote pilot control capability. Risks collision if the drone continues on its path without operator feedback.",
+  "Severity": "MEDIUM",
+  "Recommended Action": "Trigger the autonomous Return-To-Home (RTH) protocol. Climb to a pre-defined safe altitude to clear obstacles and attempt to re-establish line-of-sight. Broadcast locator beacons."
+}
