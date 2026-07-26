@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Incident } from "@/services/api";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
@@ -8,6 +8,10 @@ import { Link } from "@tanstack/react-router";
 
 export default function IncidentsPage() {
   const [activeSeverity, setActiveSeverity] = useState<string>("All");
+  const [incidentStatuses, setIncidentStatuses] = useState<Record<number, string>>({});
+  const [actionLoading, setActionLoading] = useState<Record<number, boolean>>({});
+  const [actionError, setActionError] = useState<Record<number, string>>({});
+  const queryClient = useQueryClient();
 
   const { data: incidents = [], isLoading } = useQuery({
     queryKey: ['incidents', activeSeverity],
@@ -30,12 +34,60 @@ export default function IncidentsPage() {
     ? (incidents.reduce((sum, i) => sum + i.threat_level, 0) / incidents.length).toFixed(1)
     : "0";
 
+  const handleIncidentAction = async (incident: Incident, status: string) => {
+    setActionLoading((prev) => ({ ...prev, [incident.id]: true }));
+    setActionError((prev) => ({ ...prev, [incident.id]: "" }));
+
+    try {
+      setIncidentStatuses((prev) => ({ ...prev, [incident.id]: status }));
+      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
+    } catch (error) {
+      setActionError((prev) => ({
+        ...prev,
+        [incident.id]: error instanceof Error ? error.message : "Unable to update incident status.",
+      }));
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [incident.id]: false }));
+    }
+  };
+
+  const handleExportReport = () => {
+    const rows = [
+      ["ID", "Drone", "Attack Type", "Severity", "Threat Level", "Time", "Status"],
+      ...incidents.map((incident) => [
+        `#SG-${incident.id.toString().padStart(4, "0")}`,
+        incident.drone_id,
+        incident.attack_type,
+        incident.severity,
+        String(incident.threat_level),
+        new Date(incident.created_at).toISOString(),
+        incidentStatuses[incident.id] || "Pending",
+      ]),
+    ];
+
+    const csv = rows
+      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `swarmguard-incidents-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-sg-text font-inter">Incident Command Center</h1>
-        <button className="flex items-center gap-2 px-4 py-2 rounded bg-sg-surface border border-white/10 hover:bg-white/10 transition-colors text-sg-text-muted text-sm font-medium">
+        <button
+          onClick={handleExportReport}
+          disabled={incidents.length === 0}
+          className="flex items-center gap-2 px-4 py-2 rounded bg-sg-surface border border-white/10 hover:bg-white/10 transition-colors text-sg-text-muted text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
           <span className="material-symbols-outlined text-[18px]">download</span>
           Export Report
         </button>
@@ -75,6 +127,7 @@ export default function IncidentsPage() {
                   <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Attack Type</th>
                   <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Severity</th>
                   <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Threat Level</th>
+                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Status</th>
                   <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Time</th>
                   <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Actions</th>
                 </tr>
@@ -88,25 +141,50 @@ export default function IncidentsPage() {
                     <td className="p-4"><SeverityBadge severity={incident.severity} /></td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-sg-text-muted w-6">{Math.round(incident.threat_level * 10)}</span>
+                        <span className="font-mono text-xs text-sg-text-muted w-6">{incident.threat_level}</span>
                         <div className="h-1.5 w-16 bg-white/10 rounded-full overflow-hidden">
                           <div 
                             className="h-full bg-sg-error"
-                            style={{ width: `${Math.min(100, incident.threat_level * 10)}%` }}
+                            style={{ width: `${Math.min(100, incident.threat_level)}%` }}
                           />
                         </div>
                       </div>
                     </td>
                     <td className="p-4 font-mono text-xs text-sg-text-dim">
+                      {incidentStatuses[incident.id] || "Pending"}
+                    </td>
+                    <td className="p-4 font-mono text-xs text-sg-text-dim">
                       {new Date(incident.created_at).toLocaleString()}
                     </td>
                     <td className="p-4">
-                      <Link 
-                        to={`/incidents/${incident.id}`}
-                        className="text-xs font-medium text-sg-primary hover:text-sg-primary-soft transition-colors hover:underline block p-2"
-                      >
-                        View
-                      </Link>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleIncidentAction(incident, "ACKNOWLEDGED")}
+                            disabled={Boolean(actionLoading[incident.id])}
+                            className="rounded border border-sg-primary/30 bg-sg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-sg-primary transition-colors hover:bg-sg-primary/20 disabled:opacity-50"
+                          >
+                            {actionLoading[incident.id] ? "Working..." : "Acknowledge"}
+                          </button>
+                          <button
+                            onClick={() => handleIncidentAction(incident, "RESOLVED")}
+                            disabled={Boolean(actionLoading[incident.id])}
+                            className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
+                          >
+                            {actionLoading[incident.id] ? "Working..." : "Resolve"}
+                          </button>
+                        </div>
+                        <Link
+                          to="/incidents/$id"
+                          params={{ id: incident.id.toString() }}
+                          className="text-xs font-medium text-sg-primary hover:text-sg-primary-soft transition-colors hover:underline"
+                        >
+                          View
+                        </Link>
+                        {actionError[incident.id] ? (
+                          <p className="text-[10px] text-sg-error">{actionError[incident.id]}</p>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

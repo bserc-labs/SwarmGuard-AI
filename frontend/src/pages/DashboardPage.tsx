@@ -8,6 +8,7 @@ import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SHAPBarChart } from "@/components/shared/SHAPBarChart";
 import { TelemetryChart, type TelemetryChartPoint } from "@/components/shared/TelemetryChart";
+import { IncidentTimeline } from "@/components/shared/IncidentTimeline";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function DashboardPage() {
@@ -245,8 +246,8 @@ export default function DashboardPage() {
         <TelemetryChart title="Drone Battery" data={telemetrySeries.battery} dataKey="value" lineColor="#f59e0b" unit="%" />
       </div>
 
-      {/* Row 5: Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Row 5: Three-column layout */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Left: AI Explainability (SHAP) */}
         <GlassCard>
           <div className="flex items-center gap-2 mb-6">
@@ -255,10 +256,12 @@ export default function DashboardPage() {
           </div>
           
           <div className="min-h-[160px] flex flex-col justify-center">
-
             <SHAPBarChart values={latestIncident?.shap_values} />
           </div>
         </GlassCard>
+
+        {/* Middle: Incident Timeline */}
+        <IncidentTimeline incidents={incidents} />
 
         {/* Right: System Gauges */}
         <GlassCard>

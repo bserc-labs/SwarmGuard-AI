@@ -1,14 +1,44 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GlassCard } from "@/components/shared/GlassCard";
 
+const SETTINGS_STORAGE_KEY = "swarmguard-settings";
+
+function readStoredSettings() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const stored = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function SettingsPage() {
-  const [criticalThreshold, setCriticalThreshold] = useState(0.85);
-  const [highThreshold, setHighThreshold] = useState(0.60);
-  const [refreshRate, setRefreshRate] = useState("5s");
+  const storedSettings = readStoredSettings();
+
+  const [criticalThreshold, setCriticalThreshold] = useState<number>(storedSettings?.criticalThreshold ?? 0.85);
+  const [highThreshold, setHighThreshold] = useState<number>(storedSettings?.highThreshold ?? 0.60);
+  const [refreshRate, setRefreshRate] = useState<string>(storedSettings?.refreshRate ?? "5s");
   
-  const [uiSound, setUiSound] = useState(true);
-  const [pushNotif, setPushNotif] = useState(false);
-  const [webhooks, setWebhooks] = useState(true);
+  const [uiSound, setUiSound] = useState<boolean>(storedSettings?.uiSound ?? true);
+  const [pushNotif, setPushNotif] = useState<boolean>(storedSettings?.pushNotif ?? false);
+  const [webhooks, setWebhooks] = useState<boolean>(storedSettings?.webhooks ?? true);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const nextSettings = {
+      criticalThreshold,
+      highThreshold,
+      refreshRate,
+      uiSound,
+      pushNotif,
+      webhooks,
+    };
+
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+  }, [criticalThreshold, highThreshold, refreshRate, uiSound, pushNotif, webhooks]);
 
   return (
     <div className="p-8 max-w-5xl mx-auto text-[#dde4e6]">

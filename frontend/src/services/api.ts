@@ -95,4 +95,31 @@ export const api = {
 
   getMe: (): Promise<UserInfo> =>
     fetchWithAuth("/users/me"),
+
+  updateMe: (payload: { email?: string }): Promise<UserInfo> =>
+    fetch(`${API_BASE}/users/me`, {
+      method: "PATCH",
+      headers: {
+        ...getAuthHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }).then(async (res) => {
+      if (res.status === 401) {
+        logout();
+        window.location.href = "/login";
+        throw new Error("Unauthorized");
+      }
+
+      if (res.status === 404 || res.status === 405) {
+        throw new Error("PROFILE_UPDATE_UNSUPPORTED");
+      }
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ detail: "Request failed" }));
+        throw new Error(error.detail || `HTTP ${res.status}`);
+      }
+
+      return res.json();
+    }),
 };
