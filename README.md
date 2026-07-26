@@ -53,9 +53,13 @@ python scripts/dataset_replayer.py
 ```
 This will start streaming packets to the backend, which will instantly appear on your frontend dashboard!
 
-## Features
-- **Real-Time Telemetry Feed**: Live data table of drone GPS, altitude, speed, and battery.
+## Defense-Grade Security & Features
+
+- **Real-Time Telemetry Feed**: Live data table of drone GPS, altitude, speed, and battery with strict Pydantic range validators (`latitude`: -90° to 90°, `longitude`: -180° to 180°, `altitude`: 0-50,000m, `speed`: 0-500m/s, `battery`: 0-100%).
 - **AI Threat Explainability (SHAP)**: Bar charts explaining *exactly* which metrics caused the AI to flag an anomaly.
-- **WebSocket Alerts**: Global flashing red banners the instant an attack is injected.
-- **Fleet Grid**: Live operational view of all connected swarm drones.
-- **Strict Role-Based Access Control (RBAC)**: Secure JWT authentication.
+- **WebSocket Real-Time Alerts**: Global flashing alerts the instant an attack is detected over JWT-authenticated WebSockets.
+- **Heartbeat & Silent Drone Monitor**: Automatic background service detecting RF jamming or communication loss if a drone goes silent for >30 seconds.
+- **Drone Command & Control**: Interactive command center to issue `RETURN_TO_HOME`, `EMERGENCY_LAND`, `SWITCH_SAFE_MODE`, or `KILL_MOTOR`.
+- **Incident Acknowledgment & Workflow**: Operators can update incident status (`ACKNOWLEDGED`, `FALSE_POSITIVE`, `ESCALATED`, `RESOLVED`) via `PATCH /incidents/{id}`.
+- **Audit Trail Traceability**: Automatic logging of operator actions (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `INCIDENT_STATUS_CHANGE`, `COMMAND_ISSUED`) stored in `AuditLog` table with client IP tracking.
+- **Strict Role-Based Access Control (RBAC)**: Secure JWT authentication with configurable `SECRET_KEY` env enforcement.
