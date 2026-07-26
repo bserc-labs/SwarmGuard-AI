@@ -7,10 +7,16 @@ import { MetricCard } from "@/components/shared/MetricCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SHAPBarChart } from "@/components/shared/SHAPBarChart";
+import { TelemetryChart, type TelemetryChartPoint } from "@/components/shared/TelemetryChart";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState(0);
+  const [telemetrySeries, setTelemetrySeries] = useState<Record<"speed" | "altitude" | "battery", TelemetryChartPoint[]>>({
+    speed: [],
+    altitude: [],
+    battery: [],
+  });
 
   const { data: telemetry, isLoading: telLoading } = useQuery({
     queryKey: ['telemetry-live'],
@@ -31,6 +37,24 @@ export default function DashboardPage() {
     }, 1000);
     return () => clearInterval(interval);
   }, [telemetry, incidents]);
+
+  useEffect(() => {
+    if (!telemetry || telemetry.length === 0) {
+      setTelemetrySeries({ speed: [], altitude: [], battery: [] });
+      return;
+    }
+
+    const avgSpeed = telemetry.reduce((acc, item) => acc + item.speed, 0) / telemetry.length;
+    const avgAltitude = telemetry.reduce((acc, item) => acc + item.altitude, 0) / telemetry.length;
+    const avgBattery = telemetry.reduce((acc, item) => acc + item.battery, 0) / telemetry.length;
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+    setTelemetrySeries((prev) => ({
+      speed: [...prev.speed, { label: timestamp, value: avgSpeed }].slice(-12),
+      altitude: [...prev.altitude, { label: timestamp, value: avgAltitude }].slice(-12),
+      battery: [...prev.battery, { label: timestamp, value: avgBattery }].slice(-12),
+    }));
+  }, [telemetry, lastUpdated]);
 
   const uniqueDrones = useMemo(() => {
     if (!telemetry) return [];
@@ -214,7 +238,14 @@ export default function DashboardPage() {
         </GlassCard>
       </div>
 
-      {/* Row 4: Two-column layout */}
+      {/* Row 4: Live Telemetry Graphs */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <TelemetryChart title="Drone Speed" data={telemetrySeries.speed} dataKey="value" lineColor="#00d9ff" unit="m/s" />
+        <TelemetryChart title="Drone Altitude" data={telemetrySeries.altitude} dataKey="value" lineColor="#4ade80" unit="m" />
+        <TelemetryChart title="Drone Battery" data={telemetrySeries.battery} dataKey="value" lineColor="#f59e0b" unit="%" />
+      </div>
+
+      {/* Row 5: Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: AI Explainability (SHAP) */}
         <GlassCard>
@@ -224,6 +255,7 @@ export default function DashboardPage() {
           </div>
           
           <div className="min-h-[160px] flex flex-col justify-center">
+
             <SHAPBarChart values={latestIncident?.shap_values} />
           </div>
         </GlassCard>

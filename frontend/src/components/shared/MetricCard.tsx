@@ -2,15 +2,16 @@ import { GlassCard } from "./GlassCard";
 
 interface MetricCardProps {
   icon: string;
-  label: string;
+  title: string;
   value: string | number;
+  suffix?: string;
   trend?: string;
   trendUp?: boolean;
   glowColor?: string;
   loading?: boolean;
 }
 
-export function MetricCard({ icon, label, value, trend, trendUp, glowColor, loading }: MetricCardProps) {
+export function MetricCard({ icon, title, value, suffix, trend, trendUp, glowColor, loading }: MetricCardProps) {
   if (loading) {
     return (
       <GlassCard>
@@ -24,7 +25,7 @@ export function MetricCard({ icon, label, value, trend, trendUp, glowColor, load
   return (
     <GlassCard className="group hover:border-sg-primary/30 transition-all duration-300">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs uppercase tracking-widest text-sg-text-muted font-semibold">{label}</span>
+        <span className="text-xs uppercase tracking-widest text-sg-text-muted font-semibold">{title}</span>
         <span
           className="material-symbols-outlined text-xl"
           style={{ color: glowColor || "var(--color-sg-primary)" }}
@@ -32,7 +33,7 @@ export function MetricCard({ icon, label, value, trend, trendUp, glowColor, load
           {icon}
         </span>
       </div>
-      <div className="text-3xl font-bold tracking-tight text-sg-text mb-1">{value}</div>
+      <div className="text-3xl font-bold tracking-tight text-sg-text mb-1">{value}{suffix}</div>
       {trend && (
         <div className={`text-xs font-medium ${trendUp ? "text-emerald-400" : "text-red-400"}`}>
           {trendUp ? "↑" : "↓"} {trend}
