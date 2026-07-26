@@ -9,9 +9,7 @@ try:
     from backend.utils.explanation_engine import ExplanationEngine
     from backend.utils.recommendation_engine import RecommendationEngine
 except ImportError:
-    # Enable fallback path routing for standalone script executions
     import sys
-    # Parent of backend/utils is backend/ (two levels up is project root)
     sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from backend.services.threat_service import ThreatScoreEngine
     from backend.utils.severity_mapper import map_severity
