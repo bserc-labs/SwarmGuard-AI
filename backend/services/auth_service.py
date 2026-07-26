@@ -4,7 +4,12 @@ from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-for-local-dev")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if os.getenv("DEV_MODE", "true").lower() == "true":
+        SECRET_KEY = "dev-only-insecure-key-do-not-use-in-production"
+    else:
+        raise RuntimeError("SECRET_KEY environment variable is required in production!")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE", "30"))
 
