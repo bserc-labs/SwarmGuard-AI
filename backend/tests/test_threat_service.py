@@ -2,7 +2,6 @@
 import unittest
 from datetime import datetime
 
-# Resolve sys.path to allow running this test file standalone
 import sys
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(TEST_DIR, "..", ".."))
@@ -34,9 +33,7 @@ class TestThreatScoreEngine(unittest.TestCase):
 
     def test_interpolation(self):
         """Verify value interpolation between anchors."""
-        # Midpoint of 0.00 and 0.10: should map to 10
         self.assertEqual(self.engine.get_threat_score(0.05), 10)
-        # Verify unrounded float returns
         raw_val = self.engine.get_threat_score(0.05, round_output=False)
         self.assertAlmostEqual(raw_val, 10.0)
 
@@ -54,7 +51,6 @@ class TestThreatScoreEngine(unittest.TestCase):
         sigmoid_engine = ThreatScoreEngine(SigmoidStrategy())
         self.assertEqual(sigmoid_engine.get_threat_score(0.00), 0)
         self.assertEqual(sigmoid_engine.get_threat_score(1.00), 100)
-        # Sigmoid 0.30 should produce a mid-range score (near 54)
         score = sigmoid_engine.get_threat_score(0.30)
         self.assertTrue(30 <= score <= 70)
 
