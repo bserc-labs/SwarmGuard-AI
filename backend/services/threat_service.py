@@ -27,7 +27,6 @@ class PiecewiseLinearStrategy(MappingStrategy):
     ]
 
     def __init__(self, points: List[Tuple[float, float]] = None):
-        # Sort points by anomaly score (first element of tuple)
         self.points = sorted(points if points is not None else self.DEFAULT_POINTS, key=lambda p: p[0])
         self._validate_points()
 
@@ -35,13 +34,11 @@ class PiecewiseLinearStrategy(MappingStrategy):
         if len(self.points) < 2:
             raise ValueError("Piecewise interpolation requires at least 2 anchor points.")
         
-        # Verify boundaries
         if not math.isclose(self.points[0][0], 0.0, abs_tol=1e-9):
             raise ValueError("Anchor points must start at anomaly score 0.0")
         if not math.isclose(self.points[-1][0], 1.0, abs_tol=1e-9):
             raise ValueError("Anchor points must end at anomaly score 1.0")
 
-        # Verify monotony
         for i in range(len(self.points) - 1):
             if self.points[i][0] == self.points[i+1][0]:
                 raise ValueError("Duplicate anomaly scores in anchor points are not allowed.")
@@ -58,7 +55,6 @@ class PiecewiseLinearStrategy(MappingStrategy):
             x1, y1 = self.points[i]
             x2, y2 = self.points[i+1]
             if x1 <= anomaly_score <= x2:
-                # Linear interpolation formula
                 return y1 + (y2 - y1) * (anomaly_score - x1) / (x2 - x1)
         
         return self.points[-1][1]
@@ -73,7 +69,6 @@ class SigmoidStrategy(MappingStrategy):
         self.k = k
         self.x0 = x0
         
-        # Precompute boundary values for min-max scaling to guarantee f(0.0)=0.0 and f(1.0)=100.0
         self._raw_min = self._raw_sigmoid(0.0)
         self._raw_max = self._raw_sigmoid(1.0)
         self._scale_denominator = self._raw_max - self._raw_min
@@ -117,7 +112,6 @@ class ThreatScoreEngine:
         
         raw_score = self._strategy.map_score(float(anomaly_score))
         
-        # Clamp output to guarantee strictly [0.0, 100.0] range
         final_score = max(0.0, min(100.0, raw_score))
         
         if round_output:
