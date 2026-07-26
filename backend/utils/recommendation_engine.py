@@ -9,7 +9,6 @@ class RecommendationEngine:
     """
     def __init__(self, data_dir: str = None):
         if data_dir is None:
-            # Resolve 'backend/data/' relative to the utils folder
             current_dir = os.path.dirname(os.path.abspath(__file__))
             self.data_dir = os.path.normpath(os.path.join(current_dir, "..", "data"))
         else:
