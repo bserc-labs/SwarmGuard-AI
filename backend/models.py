@@ -39,6 +39,7 @@ class Incident(Base):
     shap_values = Column(JSON)
     explanation = Column(String)
     created_at = Column(DateTime, server_default=func.now())
+    status = Column(String, default="OPEN")  # OPEN, ACKNOWLEDGED, FALSE_POSITIVE, ESCALATED, RESOLVED
 
 
 class Drone(Base):
@@ -60,4 +61,16 @@ class DroneCommand(Base):
     reason = Column(String, nullable=True)
     issued_by = Column(String)
     status = Column(String, default="PENDING")  # PENDING, EXECUTED, FAILED
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, index=True)
+    action = Column(String)  # LOGIN, COMMAND_ISSUED, INCIDENT_ACKNOWLEDGED, etc.
+    target = Column(String, nullable=True)  # drone_id, incident_id, etc.
+    details = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
