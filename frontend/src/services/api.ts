@@ -129,4 +129,11 @@ export const api = {
 
   checkHeartbeats: (): Promise<{ status: string; silent_drones_detected: number }> =>
     fetchWithAuth("/drones/check-heartbeats", { method: "POST" }),
+
+  updateIncidentStatus: (id: number, status: string): Promise<Incident> =>
+    fetchWithAuth(`/incidents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
 };
