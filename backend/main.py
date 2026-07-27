@@ -52,6 +52,27 @@ app.include_router(incidents.router)
 app.include_router(websocket.router)
 app.include_router(commands.router)
 
+import asyncio
+from database import SessionLocal
+from services.heartbeat_service import check_drone_heartbeats
+
+async def periodic_heartbeat_check():
+    while True:
+        await asyncio.sleep(10)
+        try:
+            db = SessionLocal()
+            try:
+                check_drone_heartbeats(db)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error in periodic heartbeat loop: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(periodic_heartbeat_check())
+    logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to SwarmGuard AI API"}

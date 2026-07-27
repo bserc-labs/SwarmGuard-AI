@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
@@ -29,13 +29,13 @@ class TokenResponse(BaseModel):
 
 
 class TelemetryPacket(BaseModel):
-    drone_id: str
-    latitude: float
-    longitude: float
-    altitude: float
-    speed: float
-    battery: float
-    packet_sequence: int
+    drone_id: str = Field(..., min_length=1, max_length=50)
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    altitude: float = Field(..., ge=0.0, le=50000.0)
+    speed: float = Field(..., ge=0.0, le=500.0)
+    battery: float = Field(..., ge=0.0, le=100.0)
+    packet_sequence: int = Field(..., ge=0)
 
 
 class DetectionResult(BaseModel):
@@ -56,11 +56,16 @@ class IncidentOut(BaseModel):
     severity: str
     shap_values: Optional[List[dict]] = None
     explanation: str
+    status: str = "OPEN"
     created_at: datetime
 
     model_config = {
         "from_attributes": True
     }
+
+
+class IncidentUpdate(BaseModel):
+    status: str = Field(..., pattern="^(ACKNOWLEDGED|FALSE_POSITIVE|ESCALATED|RESOLVED)$")
 
 
 class CommandCreate(BaseModel):
@@ -88,6 +93,20 @@ class DroneOut(BaseModel):
     status: str
     last_seen: datetime
     last_command: Optional[str]
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    username: str
+    action: str
+    target: Optional[str] = None
+    details: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
 
     model_config = {
         "from_attributes": True

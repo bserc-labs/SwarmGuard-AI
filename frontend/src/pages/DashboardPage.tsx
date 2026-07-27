@@ -212,18 +212,18 @@ export default function DashboardPage() {
                       <div className="flex-1">
                         <div className="flex justify-between text-[11px] text-sg-text-muted mb-1 font-mono">
                           <span>BATTERY</span>
-                          <span>{drone.battery.toFixed(1)}%</span>
+                          <span>{(drone.battery ?? 0).toFixed(1)}%</span>
                         </div>
                         <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full rounded-full ${getBatteryColor(drone.battery)}`}
-                            style={{ width: `${Math.min(100, Math.max(0, drone.battery))}%` }}
+                            className={`h-full rounded-full ${getBatteryColor(drone.battery ?? 0)}`}
+                            style={{ width: `${Math.min(100, Math.max(0, drone.battery ?? 0))}%` }}
                           ></div>
                         </div>
                       </div>
                       <div className="w-16 text-right">
                         <div className="text-[10px] text-sg-text-dim font-mono mb-0.5">SPD (m/s)</div>
-                        <div className="text-sm font-mono text-sg-primary">{drone.speed.toFixed(1)}</div>
+                        <div className="text-sm font-mono text-sg-primary">{(drone.speed ?? 0).toFixed(1)}</div>
                       </div>
                     </div>
                   </div>
