@@ -12,5 +12,6 @@ scikit-learn
 shap
 numpy
 pandas
-python-multipartrequests
+python-multipart
+requests
 slowapi
