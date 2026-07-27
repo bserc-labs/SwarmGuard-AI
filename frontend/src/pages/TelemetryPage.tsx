@@ -6,6 +6,8 @@ import { MetricCard } from "@/components/shared/MetricCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SEVERITY_COLORS } from "@/lib/constants";
+import { DroneMap } from "@/components/shared/DroneMap";
+import { demoDroneLocations } from "@/lib/demoDroneLocations";
 
 export default function TelemetryPage() {
   const { isConnected, alerts } = useWebSocketContext();
@@ -133,7 +135,10 @@ export default function TelemetryPage() {
         )}
       </GlassCard>
 
-      {/* Row 3: WebSocket Alert Feed */}
+      {/* Row 3: Drone Map */}
+      <DroneMap drones={demoDroneLocations} />
+
+      {/* Row 4: WebSocket Alert Feed */}
       <GlassCard>
         <div className="mb-4">
           <h2 className="text-sm uppercase tracking-widest text-sg-text-muted font-semibold">Anomaly Alert Feed</h2>
