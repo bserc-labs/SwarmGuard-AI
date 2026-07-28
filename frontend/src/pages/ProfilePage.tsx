@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/services/api";
 import { GlassCard } from "@/components/shared/GlassCard";
+import { toast } from 'sonner';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -47,6 +48,7 @@ export default function ProfilePage() {
       await api.changePassword(currentPassword, newPassword);
       setPwdMsg("Password updated securely!");
       setPwdMsgType("success");
+      toast.success('Authorization key updated!');
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -54,6 +56,7 @@ export default function ProfilePage() {
       const msg = err instanceof Error ? err.message : "Password change failed";
       setPwdMsg(msg);
       setPwdMsgType("error");
+      toast.error(msg);
     } finally {
       setIsChangingPwd(false);
     }

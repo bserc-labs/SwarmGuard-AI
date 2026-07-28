@@ -26,6 +26,18 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         const alert = data as DetectionResult;
         setLastAlert(alert);
         setAlerts((prev) => [alert, ...prev].slice(0, 100));
+
+        if (alert.severity === 'CRITICAL') {
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('🚨 CRITICAL THREAT DETECTED', {
+              body: `${alert.attack_type} on ${alert.drone_id || 'Unknown Drone'} — Score: ${(alert.anomaly_score * 100).toFixed(0)}%`,
+              icon: '/favicon.ico',
+              tag: 'swarmguard-critical',
+            });
+          } else if ('Notification' in window && Notification.permission !== 'denied') {
+            Notification.requestPermission();
+          }
+        }
       },
       onStatusChange: setIsConnected,
     });

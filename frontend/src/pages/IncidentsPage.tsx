@@ -5,6 +5,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { Link } from "@tanstack/react-router";
+import { toast } from 'sonner';
 
 export default function IncidentsPage() {
   const [activeSeverity, setActiveSeverity] = useState<string>("All");
@@ -42,11 +43,14 @@ export default function IncidentsPage() {
       await api.updateIncidentStatus(incident.id, status);
       setIncidentStatuses((prev) => ({ ...prev, [incident.id]: status }));
       await queryClient.invalidateQueries({ queryKey: ["incidents"] });
+      toast.success('Incident #SG-' + incident.id.toString().padStart(4,'0') + ' → ' + status);
     } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unable to update incident status.";
       setActionError((prev) => ({
         ...prev,
-        [incident.id]: error instanceof Error ? error.message : "Unable to update incident status.",
+        [incident.id]: msg,
       }));
+      toast.error('Failed: ' + msg);
     } finally {
       setActionLoading((prev) => ({ ...prev, [incident.id]: false }));
     }

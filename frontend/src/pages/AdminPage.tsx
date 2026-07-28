@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type Drone } from "@/services/api";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
+import { toast } from 'sonner';
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 export default function AdminPage() {
   const queryClient = useQueryClient();
@@ -24,10 +26,12 @@ export default function AdminPage() {
       setActionMessage(`✅ Command '${data.command_type}' issued to ${data.drone_id}`);
       queryClient.invalidateQueries({ queryKey: ["drones"] });
       setTimeout(() => setActionMessage(null), 4000);
+      toast.success(`Command '${data.command_type}' issued to ${data.drone_id}`);
     },
     onError: (err: any) => {
       setActionMessage(`❌ Error: ${err.message}`);
       setTimeout(() => setActionMessage(null), 4000);
+      toast.error(`Error: ${err.message}`);
     },
   });
 
@@ -38,7 +42,20 @@ export default function AdminPage() {
       setActionMessage(`📡 Heartbeat audit complete: ${data.silent_drones_detected} silent drone(s) detected.`);
       queryClient.invalidateQueries({ queryKey: ["drones"] });
       setTimeout(() => setActionMessage(null), 4000);
+      toast.success(`Heartbeat audit complete: ${data.silent_drones_detected} silent drone(s) detected.`);
     },
+  });
+
+  useKeyboardShortcuts({
+    onEmergencyLand: () => {
+      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "EMERGENCY_LAND", reason: "Shortcut override" }));
+    },
+    onReturnToHome: () => {
+      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "RETURN_TO_HOME", reason: "Shortcut override" }));
+    },
+    onSafeMode: () => {
+      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Shortcut override" }));
+    }
   });
 
   const handleAddDrone = (e: React.FormEvent) => {
@@ -204,6 +221,19 @@ export default function AdminPage() {
               </tbody>
             </table>
           )}
+        </div>
+      </GlassCard>
+
+      {/* Keyboard Shortcuts Help */}
+      <GlassCard className="mt-6 p-4 border-[#ffffff14]">
+        <h3 className="text-sm font-semibold text-[#00d9ff] uppercase tracking-wider font-['Courier_Prime'] mb-3">
+          <span className="material-symbols-outlined align-middle mr-2 text-[18px]">keyboard</span>
+          Keyboard Shortcuts
+        </h3>
+        <div className="flex flex-wrap gap-6 text-sm font-mono text-[#bbc9ce]">
+          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + E</span> Emergency Land All</div>
+          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + R</span> Return To Home All</div>
+          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + S</span> Safe Mode All</div>
         </div>
       </GlassCard>
     </div>

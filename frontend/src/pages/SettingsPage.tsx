@@ -164,6 +164,40 @@ export default function SettingsPage() {
             </div>
           </div>
         </GlassCard>
+
+        {/* Category 4: About System */}
+        <GlassCard className="p-6">
+          <h3 className="text-xl font-mono tracking-widest text-[#00d9ff] mb-6 flex items-center border-b border-[rgba(255,255,255,0.05)] pb-3">
+            <span className="material-symbols-outlined mr-3">info</span>
+            System Information
+          </h3>
+          <div className="grid grid-cols-2 gap-4 font-mono text-sm">
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">Platform</div>
+              <div className="text-[#dde4e6]">SwarmGuard-AI v2.0</div>
+            </div>
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">AI Engine</div>
+              <div className="text-[#dde4e6]">Isolation Forest + SHAP</div>
+            </div>
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">Backend</div>
+              <div className="text-[#dde4e6]">FastAPI + SQLite</div>
+            </div>
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">Security</div>
+              <div className="text-[#dde4e6]">JWT + RBAC + API-Key Auth</div>
+            </div>
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">Team</div>
+              <div className="text-[#dde4e6]">BSERC Labs</div>
+            </div>
+            <div className="bg-[#080f11] p-3 rounded border border-[rgba(255,255,255,0.05)]">
+              <div className="text-xs text-[#859398] uppercase tracking-wider mb-1">Keyboard Shortcuts</div>
+              <div className="text-[#dde4e6]">Alt+E / Alt+R / Alt+S</div>
+            </div>
+          </div>
+        </GlassCard>
       </div>
     </div>
   );
