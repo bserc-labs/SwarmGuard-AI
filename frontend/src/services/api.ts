@@ -139,6 +139,8 @@ export const api = {
       }
 
       return res.json();
+    }),
+
   getDrones: (): Promise<Drone[]> =>
     fetchWithAuth("/drones"),
 
@@ -160,5 +162,12 @@ export const api = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
+    }),
+
+  changePassword: (currentPassword: string, newPassword: string): Promise<{ message: string }> =>
+    fetchWithAuth("/users/me/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 };

@@ -6,8 +6,8 @@ export interface LoginResponse {
   role: string;
 }
 
-let inMemoryToken: string | null = null;
-let inMemoryRole: string | null = null;
+let inMemoryToken: string | null = localStorage.getItem("swarmguard_token");
+let inMemoryRole: string | null = localStorage.getItem("swarmguard_role");
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const formData = new URLSearchParams();
@@ -28,22 +28,26 @@ export async function login(username: string, password: string): Promise<LoginRe
   const data: LoginResponse = await res.json();
   inMemoryToken = data.access_token;
   inMemoryRole = data.role;
+  localStorage.setItem("swarmguard_token", data.access_token);
+  localStorage.setItem("swarmguard_role", data.role);
   return data;
 }
 
 export function logout(): void {
   inMemoryToken = null;
   inMemoryRole = null;
+  localStorage.removeItem("swarmguard_token");
+  localStorage.removeItem("swarmguard_role");
 }
 
 export function getToken(): string | null {
-  return inMemoryToken;
+  return inMemoryToken || localStorage.getItem("swarmguard_token");
 }
 
 export function getRole(): string | null {
-  return inMemoryRole;
+  return inMemoryRole || localStorage.getItem("swarmguard_role");
 }
 
 export function isAuthenticated(): boolean {
-  return !!inMemoryToken;
+  return !!getToken();
 }

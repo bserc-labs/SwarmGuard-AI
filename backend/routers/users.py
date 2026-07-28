@@ -35,3 +35,31 @@ def create_user(
 @router.get("/me", response_model=schemas.UserOut)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+@router.patch("/me", response_model=schemas.UserOut)
+def update_user_me(
+    user_update: schemas.UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Update current user's email classification."""
+    if user_update.email is not None:
+        current_user.email = user_update.email
+        db.commit()
+        db.refresh(current_user)
+    return current_user
+
+@router.post("/me/password")
+def change_password(
+    pwd_data: schemas.PasswordUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Securely change current user's password."""
+    from services.auth_service import verify_password, get_password_hash
+    if not verify_password(pwd_data.current_password, current_user.password):
+        raise HTTPException(status_code=400, detail="Current authorization key is incorrect")
+    
+    current_user.password = get_password_hash(pwd_data.new_password)
+    db.commit()
+    return {"message": "Authorization key updated successfully"}

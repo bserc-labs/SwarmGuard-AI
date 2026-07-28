@@ -27,16 +27,36 @@ export default function ProfilePage() {
   const username = user?.username || "Operator";
   const role = user?.role || "UNKNOWN";
 
-  const handlePasswordChange = (e: React.FormEvent) => {
+  const [isChangingPwd, setIsChangingPwd] = useState(false);
+  const [pwdMsg, setPwdMsg] = useState("");
+  const [pwdMsgType, setPwdMsgType] = useState<MessageType>("");
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPwdMsg("");
+    setPwdMsgType("");
+
     if (newPassword !== confirmPassword) {
-      alert("Passwords do not match!");
+      setPwdMsg("Passwords do not match!");
+      setPwdMsgType("error");
       return;
     }
-    alert("Password updated securely");
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
+
+    setIsChangingPwd(true);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setPwdMsg("Password updated securely!");
+      setPwdMsgType("success");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Password change failed";
+      setPwdMsg(msg);
+      setPwdMsgType("error");
+    } finally {
+      setIsChangingPwd(false);
+    }
   };
 
   const handleEditClick = () => {

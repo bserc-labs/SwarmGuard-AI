@@ -22,6 +22,13 @@ class UserOut(BaseModel):
         "from_attributes": True
     }
 
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+
+class PasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
