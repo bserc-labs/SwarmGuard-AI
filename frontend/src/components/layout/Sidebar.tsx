@@ -21,8 +21,8 @@ export function Sidebar() {
       {/* Logo */}
       <div className="p-6 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-sg-primary/10 border border-sg-primary/30 flex items-center justify-center primary-glow">
-            <span className="material-symbols-outlined filled text-sg-primary text-xl">security</span>
+          <div className="w-10 h-10 rounded-xl overflow-hidden border border-sg-primary/40 flex items-center justify-center bg-black/40 primary-glow">
+            <img src="/logo.png" alt="SwarmGuard Logo" className="w-full h-full object-cover" />
           </div>
           <div>
             <h1 className="text-base font-bold tracking-tight text-sg-text">SwarmGuard</h1>

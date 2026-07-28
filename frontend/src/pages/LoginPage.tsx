@@ -117,8 +117,8 @@ export default function LoginPage() {
         <div className="glass-card p-8 rounded-2xl flex flex-col items-center shadow-2xl">
           {/* Logo Section */}
           <div className="mb-8 flex flex-col items-center text-center">
-            <div className="w-16 h-16 rounded-full border border-[#00d9ff]/30 flex items-center justify-center mb-4 primary-glow bg-[#080f11]/50">
-              <span className="material-symbols-outlined text-[#00d9ff] text-3xl">security</span>
+            <div className="w-20 h-20 rounded-2xl border border-[#00d9ff]/40 overflow-hidden flex items-center justify-center mb-4 primary-glow bg-[#080f11]/80 shadow-[0_0_20px_rgba(0,217,255,0.4)]">
+              <img src="/logo.png" alt="SwarmGuard Logo" className="w-full h-full object-cover" />
             </div>
             <h1 className="text-3xl font-bold text-[#dde4e6] tracking-wider mb-1 font-mono">SwarmGuard</h1>
             <p className="text-[#00d9ff] text-xs font-mono tracking-[0.3em] shimmer-text uppercase">AI SENTINEL</p>
