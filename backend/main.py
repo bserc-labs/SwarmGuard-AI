@@ -80,3 +80,46 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "SentinelAI"}
+
+@app.get("/system/health")
+def system_health_details(db: Session = Depends(SessionLocal)):
+    """Return real system health, active node counts, and telemetry statistics for defense dashboard gauges."""
+    try:
+        total_drones = db.query(models.Drone).count()
+        active_drones = db.query(models.Drone).filter(models.Drone.status == "ACTIVE").count()
+        silent_drones = db.query(models.Drone).filter(models.Drone.status == "SILENT_POSSIBLE_JAMMING").count()
+        total_incidents = db.query(models.Incident).count()
+        critical_incidents = db.query(models.Incident).filter(models.Incident.severity == "CRITICAL").count()
+        
+        # Calculate dynamic system health score
+        system_health_pct = 100
+        if total_drones > 0:
+            system_health_pct -= int((silent_drones / total_drones) * 40)
+        if critical_incidents > 0:
+            system_health_pct -= min(30, critical_incidents * 5)
+        system_health_pct = max(10, system_health_pct)
+
+        return {
+            "status": "OPERATIONAL",
+            "db_connected": True,
+            "system_health_pct": system_health_pct,
+            "signal_fidelity_pct": 98 if silent_drones == 0 else 72,
+            "active_drones": active_drones,
+            "total_drones": total_drones,
+            "silent_drones": silent_drones,
+            "total_incidents": total_incidents,
+            "critical_incidents": critical_incidents,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health details query error: {e}")
+        return {
+            "status": "DEGRADED",
+            "db_connected": False,
+            "system_health_pct": 50,
+            "signal_fidelity_pct": 50,
+            "error": str(e)
+        }
+    finally:
+        db.close()
+

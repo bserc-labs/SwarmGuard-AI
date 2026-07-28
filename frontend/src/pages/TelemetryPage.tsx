@@ -36,7 +36,6 @@ export default function TelemetryPage() {
   // Group by drone_id to get latest packet
   const latestByDrone: Record<string, TelemetryPacket> = {};
   telemetry.forEach(t => {
-    // Assuming higher timestamp comes later or we just keep replacing since backend usually orders it
     latestByDrone[t.drone_id] = t;
   });
   const activeDrones = Object.values(latestByDrone);
@@ -113,18 +112,18 @@ export default function TelemetryPage() {
                     <td className="p-3 font-mono text-sm text-sg-text-muted">{drone.latitude.toFixed(4)}, {drone.longitude.toFixed(4)}</td>
                     <td className="p-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm text-sg-text w-8">{drone.battery}%</span>
+                        <span className="font-mono text-sm text-sg-text w-8">{(drone.battery ?? 100).toFixed(0)}%</span>
                         <div className="h-1.5 w-16 bg-white/10 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full ${drone.battery > 60 ? 'bg-green-500' : drone.battery > 30 ? 'bg-sg-amber' : 'bg-sg-error'}`}
-                            style={{ width: `${drone.battery}%` }}
+                            className={`h-full ${(drone.battery ?? 100) > 60 ? 'bg-green-500' : (drone.battery ?? 100) > 30 ? 'bg-sg-amber' : 'bg-sg-error'}`}
+                            style={{ width: `${Math.min(100, Math.max(0, drone.battery ?? 100))}%` }}
                           />
                         </div>
                       </div>
                     </td>
                     <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${drone.battery > 50 ? 'bg-green-500/20 text-green-400' : drone.battery > 20 ? 'bg-sg-amber/20 text-sg-amber' : 'bg-sg-error/20 text-sg-error'}`}>
-                        {drone.battery > 50 ? 'NOMINAL' : drone.battery > 20 ? 'WARNING' : 'CRITICAL'}
+                      <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${(drone.battery ?? 100) > 50 ? 'bg-green-500/20 text-green-400' : (drone.battery ?? 100) > 20 ? 'bg-sg-amber/20 text-sg-amber' : 'bg-sg-error/20 text-sg-error'}`}>
+                        {(drone.battery ?? 100) > 50 ? 'NOMINAL' : (drone.battery ?? 100) > 20 ? 'WARNING' : 'CRITICAL'}
                       </span>
                     </td>
                   </tr>
@@ -135,7 +134,7 @@ export default function TelemetryPage() {
         )}
       </GlassCard>
 
-      {/* Row 3: Drone Map */}
+      {/* Row 3: Tactical Drone Map */}
       <DroneMap drones={demoDroneLocations} />
 
       {/* Row 4: WebSocket Alert Feed */}
@@ -151,10 +150,10 @@ export default function TelemetryPage() {
             </div>
           ) : (
             alerts.slice(-10).reverse().map((alert, i) => {
-              const timestampValue = (alert as { timestamp?: string | number }).timestamp;
-              const timestampLabel = typeof timestampValue === "string" || typeof timestampValue === "number"
+              const timestampValue = (alert as { timestamp?: string | number; created_at?: string }).timestamp || (alert as { created_at?: string }).created_at;
+              const timestampLabel = timestampValue
                 ? new Date(timestampValue).toLocaleTimeString()
-                : "No timestamp";
+                : new Date().toLocaleTimeString();
 
               return (
                 <div key={i} className="flex items-center gap-4 p-3 rounded bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">

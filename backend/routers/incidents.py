@@ -61,6 +61,46 @@ def get_incident_stats(
     }
 
 
+@router.get("/export")
+def export_incidents_csv(
+    severity: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_operator_user)
+):
+    """Export incident reports to downloadable CSV format for defense reporting."""
+    import csv
+    import io
+    from fastapi.responses import Response
+
+    query = db.query(models.Incident)
+    if severity:
+        query = query.filter(models.Incident.severity == severity)
+    incidents = query.order_by(models.Incident.created_at.desc()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Incident ID", "Drone ID", "Attack Type", "Threat Level", "Severity", "Status", "Explanation", "Timestamp"])
+
+    for inc in incidents:
+        writer.writerow([
+            f"#SG-{inc.id:04d}",
+            inc.drone_id,
+            inc.attack_type,
+            inc.threat_level,
+            inc.severity,
+            inc.status or "OPEN",
+            inc.explanation,
+            inc.created_at.isoformat() if inc.created_at else ""
+        ])
+
+    csv_data = output.getvalue()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=swarmguard_incident_report.csv"}
+    )
+
+
 @router.get("/{id}", response_model=schemas.IncidentOut)
 def get_incident(
     id: int, 

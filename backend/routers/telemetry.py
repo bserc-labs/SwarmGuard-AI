@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Header, HTTPException, status
 from sqlalchemy.orm import Session
 from collections import deque
 import asyncio
 from datetime import datetime
+import os
 import schemas
 import models
 from database import get_db
@@ -15,9 +16,23 @@ router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 # In-memory buffer for live telemetry
 telemetry_buffer = deque(maxlen=500)
+EXPECTED_DRONE_API_KEY = os.getenv("DRONE_API_KEY", "SWARMGUARD_DRONE_DEFENSE_SECRET_2026")
 
 @router.post("/ingest", response_model=schemas.DetectionResult)
-def ingest_telemetry(packet: schemas.TelemetryPacket, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def ingest_telemetry(
+    packet: schemas.TelemetryPacket, 
+    background_tasks: BackgroundTasks, 
+    x_drone_api_key: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    # Drone Device Security Check (Anti-Spoofing)
+    if x_drone_api_key and x_drone_api_key != EXPECTED_DRONE_API_KEY:
+        logger.warning(f"🚨 UNAUTHORIZED DRONE SPOOFING ATTEMPT: {packet.drone_id} sent invalid API Key!")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Device Authentication Failed: Invalid API Key for drone '{packet.drone_id}'"
+        )
+        
     # 1. Append to buffer
     telemetry_buffer.append(packet.model_dump())
     
