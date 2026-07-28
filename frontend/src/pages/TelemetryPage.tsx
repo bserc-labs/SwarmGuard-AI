@@ -6,6 +6,8 @@ import { MetricCard } from "@/components/shared/MetricCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SEVERITY_COLORS } from "@/lib/constants";
+import { DroneMap } from "@/components/shared/DroneMap";
+import { demoDroneLocations } from "@/lib/demoDroneLocations";
 
 export default function TelemetryPage() {
   const { isConnected, alerts } = useWebSocketContext();
@@ -81,7 +83,10 @@ export default function TelemetryPage() {
       </div>
 
       {/* Row 2: Active Swarm Data Table */}
-      <GlassCard title="Active Swarm · Real-Time Feed" className="overflow-hidden">
+      <GlassCard className="overflow-hidden">
+        <div className="mb-4">
+          <h2 className="text-sm uppercase tracking-widest text-sg-text-muted font-semibold">Active Swarm · Real-Time Feed</h2>
+        </div>
         {activeDrones.length === 0 ? (
           <div className="p-8 text-center text-sg-text-muted font-mono text-sm">
             Awaiting telemetry stream... Ensure Dataset Replayer is running.
@@ -108,18 +113,18 @@ export default function TelemetryPage() {
                     <td className="p-3 font-mono text-sm text-sg-text-muted">{drone.latitude.toFixed(4)}, {drone.longitude.toFixed(4)}</td>
                     <td className="p-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm text-sg-text w-8">{drone.battery_level}%</span>
+                        <span className="font-mono text-sm text-sg-text w-8">{drone.battery}%</span>
                         <div className="h-1.5 w-16 bg-white/10 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full ${drone.battery_level > 60 ? 'bg-green-500' : drone.battery_level > 30 ? 'bg-sg-amber' : 'bg-sg-error'}`}
-                            style={{ width: `${drone.battery_level}%` }}
+                            className={`h-full ${drone.battery > 60 ? 'bg-green-500' : drone.battery > 30 ? 'bg-sg-amber' : 'bg-sg-error'}`}
+                            style={{ width: `${drone.battery}%` }}
                           />
                         </div>
                       </div>
                     </td>
                     <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${drone.battery_level > 50 ? 'bg-green-500/20 text-green-400' : drone.battery_level > 20 ? 'bg-sg-amber/20 text-sg-amber' : 'bg-sg-error/20 text-sg-error'}`}>
-                        {drone.battery_level > 50 ? 'NOMINAL' : drone.battery_level > 20 ? 'WARNING' : 'CRITICAL'}
+                      <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${drone.battery > 50 ? 'bg-green-500/20 text-green-400' : drone.battery > 20 ? 'bg-sg-amber/20 text-sg-amber' : 'bg-sg-error/20 text-sg-error'}`}>
+                        {drone.battery > 50 ? 'NOMINAL' : drone.battery > 20 ? 'WARNING' : 'CRITICAL'}
                       </span>
                     </td>
                   </tr>
@@ -130,8 +135,14 @@ export default function TelemetryPage() {
         )}
       </GlassCard>
 
-      {/* Row 3: WebSocket Alert Feed */}
-      <GlassCard title="Anomaly Alert Feed">
+      {/* Row 3: Drone Map */}
+      <DroneMap drones={demoDroneLocations} />
+
+      {/* Row 4: WebSocket Alert Feed */}
+      <GlassCard>
+        <div className="mb-4">
+          <h2 className="text-sm uppercase tracking-widest text-sg-text-muted font-semibold">Anomaly Alert Feed</h2>
+        </div>
         <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
           {alerts.length === 0 ? (
             <div className="p-4 text-center text-sg-text-muted text-sm font-mono flex items-center justify-center gap-2">
@@ -139,18 +150,25 @@ export default function TelemetryPage() {
               No anomalies detected. System operating normally.
             </div>
           ) : (
-            alerts.slice(-10).reverse().map((alert, i) => (
-              <div key={i} className="flex items-center gap-4 p-3 rounded bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
-                <SeverityBadge severity={alert.severity || "HIGH"} />
-                <div className="flex-1 font-inter text-sm text-sg-text">
-                  <span className="text-sg-primary font-medium">{alert.attack_type || alert.type}</span> detected
-                  <span className="text-sg-text-muted ml-2 font-mono text-xs">Score: {(alert.anomaly_score * 100).toFixed(0)}%</span>
+            alerts.slice(-10).reverse().map((alert, i) => {
+              const timestampValue = (alert as { timestamp?: string | number }).timestamp;
+              const timestampLabel = typeof timestampValue === "string" || typeof timestampValue === "number"
+                ? new Date(timestampValue).toLocaleTimeString()
+                : "No timestamp";
+
+              return (
+                <div key={i} className="flex items-center gap-4 p-3 rounded bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
+                  <SeverityBadge severity={alert.severity || "HIGH"} />
+                  <div className="flex-1 font-inter text-sm text-sg-text">
+                    <span className="text-sg-primary font-medium">{alert.attack_type}</span> detected
+                    <span className="text-sg-text-muted ml-2 font-mono text-xs">Score: {(alert.anomaly_score * 100).toFixed(0)}%</span>
+                  </div>
+                  <div className="text-xs text-sg-text-dim font-mono">
+                    {timestampLabel}
+                  </div>
                 </div>
-                <div className="text-xs text-sg-text-dim font-mono">
-                  {new Date(alert.timestamp).toLocaleTimeString()}
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </GlassCard>

@@ -6,10 +6,18 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { SeverityBadge } from "@/components/shared/SeverityBadge";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
+import { SHAPBarChart } from "@/components/shared/SHAPBarChart";
+import { TelemetryChart, type TelemetryChartPoint } from "@/components/shared/TelemetryChart";
+import { IncidentTimeline } from "@/components/shared/IncidentTimeline";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState(0);
+  const [telemetrySeries, setTelemetrySeries] = useState<Record<"speed" | "altitude" | "battery", TelemetryChartPoint[]>>({
+    speed: [],
+    altitude: [],
+    battery: [],
+  });
 
   const { data: telemetry, isLoading: telLoading } = useQuery({
     queryKey: ['telemetry-live'],
@@ -30,6 +38,24 @@ export default function DashboardPage() {
     }, 1000);
     return () => clearInterval(interval);
   }, [telemetry, incidents]);
+
+  useEffect(() => {
+    if (!telemetry || telemetry.length === 0) {
+      setTelemetrySeries({ speed: [], altitude: [], battery: [] });
+      return;
+    }
+
+    const avgSpeed = telemetry.reduce((acc, item) => acc + item.speed, 0) / telemetry.length;
+    const avgAltitude = telemetry.reduce((acc, item) => acc + item.altitude, 0) / telemetry.length;
+    const avgBattery = telemetry.reduce((acc, item) => acc + item.battery, 0) / telemetry.length;
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+    setTelemetrySeries((prev) => ({
+      speed: [...prev.speed, { label: timestamp, value: avgSpeed }].slice(-12),
+      altitude: [...prev.altitude, { label: timestamp, value: avgAltitude }].slice(-12),
+      battery: [...prev.battery, { label: timestamp, value: avgBattery }].slice(-12),
+    }));
+  }, [telemetry, lastUpdated]);
 
   const uniqueDrones = useMemo(() => {
     if (!telemetry) return [];
@@ -213,8 +239,15 @@ export default function DashboardPage() {
         </GlassCard>
       </div>
 
-      {/* Row 4: Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Row 4: Live Telemetry Graphs */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <TelemetryChart title="Drone Speed" data={telemetrySeries.speed} dataKey="value" lineColor="#00d9ff" unit="m/s" />
+        <TelemetryChart title="Drone Altitude" data={telemetrySeries.altitude} dataKey="value" lineColor="#4ade80" unit="m" />
+        <TelemetryChart title="Drone Battery" data={telemetrySeries.battery} dataKey="value" lineColor="#f59e0b" unit="%" />
+      </div>
+
+      {/* Row 5: Three-column layout */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Left: AI Explainability (SHAP) */}
         <GlassCard>
           <div className="flex items-center gap-2 mb-6">
@@ -223,37 +256,12 @@ export default function DashboardPage() {
           </div>
           
           <div className="min-h-[160px] flex flex-col justify-center">
-            {latestIncident?.shap_values && latestIncident.shap_values.length > 0 ? (
-              <div className="flex flex-col gap-4">
-                <div className="text-sm text-sg-text-muted mb-2 font-mono border-b border-white/5 pb-2">
-                  Model explanation for latest incident: <span className="text-sg-primary">#{latestIncident.id}</span>
-                </div>
-                {latestIncident.shap_values.map((shap: any, idx: number) => {
-                  const val = shap.value ?? shap.importance ?? 0;
-                  return (
-                    <div key={idx} className="flex flex-col gap-1.5">
-                      <div className="flex justify-between text-xs font-mono">
-                        <span className="text-sg-text-dim uppercase">{shap.feature}</span>
-                        <span className="text-sg-primary-soft">+{val.toFixed(4)}</span>
-                      </div>
-                      <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full rounded-full bg-sg-primary opacity-80"
-                          style={{ width: `${Math.min(100, Math.max(5, (val / 0.5) * 100))}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex flex-col items-center text-sg-text-dim">
-                <span className="material-symbols-outlined text-4xl mb-3 opacity-30">psychology</span>
-                <p className="font-mono text-sm">Awaiting anomaly detection data...</p>
-              </div>
-            )}
+            <SHAPBarChart values={latestIncident?.shap_values} />
           </div>
         </GlassCard>
+
+        {/* Middle: Incident Timeline */}
+        <IncidentTimeline incidents={incidents} />
 
         {/* Right: System Gauges */}
         <GlassCard>
