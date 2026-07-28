@@ -39,6 +39,7 @@ export default function IncidentsPage() {
     setActionError((prev) => ({ ...prev, [incident.id]: "" }));
 
     try {
+      await api.updateIncidentStatus(incident.id, status);
       setIncidentStatuses((prev) => ({ ...prev, [incident.id]: status }));
       await queryClient.invalidateQueries({ queryKey: ["incidents"] });
     } catch (error) {

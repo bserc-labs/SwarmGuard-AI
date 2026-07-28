@@ -1,4 +1,4 @@
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { NAV_ITEMS, NAV_BOTTOM } from "@/lib/constants";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import { api } from "@/services/api";
 
 export function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { data: incidents } = useQuery({
     queryKey: ["incidents-count"],
@@ -78,7 +79,7 @@ export function Sidebar() {
         ))}
 
         <button
-          onClick={logout}
+          onClick={() => { logout(); navigate({ to: '/login' }); }}
           className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-red-400/80 hover:bg-red-500/10 hover:text-red-400 transition-all w-full"
         >
           <span className="material-symbols-outlined text-xl">logout</span>
@@ -89,7 +90,7 @@ export function Sidebar() {
         {user && (
           <div className="flex items-center gap-3 mt-3 px-3 py-2 rounded-lg bg-white/3">
             <div className="w-8 h-8 rounded-full bg-sg-primary/20 border border-sg-primary/30 flex items-center justify-center">
-              <span className="text-xs font-bold text-sg-primary">{user.username[0].toUpperCase()}</span>
+              <span className="text-xs font-bold text-sg-primary">{(user.username || "U")[0].toUpperCase()}</span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-sg-text truncate">{user.username}</p>

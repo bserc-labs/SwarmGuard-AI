@@ -31,6 +31,12 @@ export default function DashboardPage() {
     refetchInterval: 30000,
   });
 
+  const { data: systemHealth } = useQuery({
+    queryKey: ['system-health'],
+    queryFn: () => fetch('http://localhost:8000/system/health').then(r => r.json()),
+    refetchInterval: 15000,
+  });
+
   useEffect(() => {
     setLastUpdated(0);
     const interval = setInterval(() => {
@@ -135,12 +141,12 @@ export default function DashboardPage() {
         />
         <MetricCard
           title="System Health"
-          value="98%"
+          value={`${systemHealth?.system_health_pct ?? 98}%`}
           icon="monitor_heart"
           loading={isLoading}
           glowColor="#4ade80"
-          trend="Stable"
-          trendUp={true}
+          trend={systemHealth?.status === 'OPERATIONAL' ? 'Stable' : 'Degraded'}
+          trendUp={systemHealth?.status === 'OPERATIONAL'}
         />
         <MetricCard
           title="Critical Incidents"
@@ -299,13 +305,13 @@ export default function DashboardPage() {
                   <circle 
                     cx="50" cy="50" r="40" fill="none" stroke="#4ade80" strokeWidth="8"
                     strokeDasharray={`${2 * Math.PI * 40}`}
-                    strokeDashoffset={`${2 * Math.PI * 40 * (1 - 0.94)}`}
+                    strokeDashoffset={`${2 * Math.PI * 40 * (1 - ((systemHealth?.signal_fidelity_pct ?? 94) / 100))}`}
                     strokeLinecap="round"
                     className="transition-all duration-1000 ease-in-out"
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-2xl font-bold font-mono text-sg-text">94%</span>
+                  <span className="text-2xl font-bold font-mono text-sg-text">{systemHealth?.signal_fidelity_pct ?? 94}%</span>
                   <span className="text-[10px] text-sg-text-dim uppercase tracking-wider">Signal Str</span>
                 </div>
               </div>
