@@ -8,6 +8,7 @@ import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SEVERITY_COLORS } from "@/lib/constants";
 import { DroneMap } from "@/components/shared/DroneMap";
 import { demoDroneLocations } from "@/lib/demoDroneLocations";
+import { MultiSensorPanel } from "@/components/shared/MultiSensorPanel";
 
 export default function TelemetryPage() {
   const { isConnected, alerts } = useWebSocketContext();
@@ -39,6 +40,17 @@ export default function TelemetryPage() {
     latestByDrone[t.drone_id] = t;
   });
   const activeDrones = Object.values(latestByDrone);
+
+  const liveMapDrones = activeDrones.map(d => ({
+    drone_id: d.drone_id,
+    latitude: d.latitude,
+    longitude: d.longitude,
+    speed: d.speed,
+    altitude: d.altitude,
+    battery: d.battery ?? 100,
+    threat_status: (d.battery ?? 100) < 20 ? "Critical" : (d.battery ?? 100) < 50 ? "Warning" : "Nominal",
+    last_updated: new Date().toISOString()
+  }));
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -135,7 +147,7 @@ export default function TelemetryPage() {
       </GlassCard>
 
       {/* Row 3: Tactical Drone Map */}
-      <DroneMap drones={demoDroneLocations} />
+      <DroneMap drones={liveMapDrones.length > 0 ? liveMapDrones : demoDroneLocations} />
 
       {/* Row 4: WebSocket Alert Feed */}
       <GlassCard>
