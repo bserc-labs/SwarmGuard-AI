@@ -6,7 +6,7 @@ db = SessionLocal()
 
 username = "admin"
 email = "admin@swarmguard.ai"
-password = "admin123"
+password = input("Enter admin password: ")
 
 existing = db.query(User).filter(User.username == username).first()
 

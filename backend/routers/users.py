@@ -4,13 +4,17 @@ from typing import List
 from database import get_db
 import models
 import schemas
-from middleware.auth_middleware import get_current_user
+from middleware.auth_middleware import get_admin_user, get_current_user
 from services.auth_service import get_password_hash
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 @router.post("/", response_model=schemas.UserOut, status_code=status.HTTP_201_CREATED)
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def create_user(
+    user: schemas.UserCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_admin_user)
+):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
