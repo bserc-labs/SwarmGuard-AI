@@ -1,0 +1,13 @@
+{
+  "attack_type": "command_injection",
+  "name": "Command Injection",
+  "Description": "An exploit where an attacker successfully injects malicious command payloads into the communication stream, executing unauthorized system-level operations or flight controller commands.",
+  "Symptoms": [
+    "Unexpected flight state changes (e.g., in-flight motor disarm commands)",
+    "Unrecognized command codes or malformed parameters in flight controller inputs",
+    "Suspicious background processes running on the companion computer, or sudden CPU spikes"
+  ],
+  "Impact": "Total compromise of drone operation, including potential flight termination, payload theft or drop, camera feed interception, or crashing the drone.",
+  "Severity": "CRITICAL",
+  "Recommended Action": "Reject all unauthenticated command packets. Immediately transition the flight controller to a secure Safe Mode. Isolate companion computer network processes and notify the operations team."
+}
