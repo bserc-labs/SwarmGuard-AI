@@ -5,6 +5,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { toast } from 'sonner';
 import { useAuth } from "@/hooks/useAuth";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 export default function AdminPage() {
   const { user, role } = useAuth();
