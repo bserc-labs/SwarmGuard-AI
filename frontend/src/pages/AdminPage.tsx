@@ -4,12 +4,16 @@ import { api, type Drone } from "@/services/api";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { toast } from 'sonner';
-import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function AdminPage() {
+  const { user, role } = useAuth();
   const queryClient = useQueryClient();
   const [newDroneId, setNewDroneId] = useState("");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  const activeRole = (user?.role || role || "observer").toLowerCase();
+  const isCommander = activeRole === "commander" || activeRole === "admin";
 
   // Fetch real drones from backend
   const { data: drones = [], isLoading, isError } = useQuery({
@@ -47,20 +51,24 @@ export default function AdminPage() {
   });
 
   useKeyboardShortcuts({
+    enabled: isCommander,
     onEmergencyLand: () => {
+      if (!isCommander) return;
       drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "EMERGENCY_LAND", reason: "Shortcut override" }));
     },
     onReturnToHome: () => {
+      if (!isCommander) return;
       drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "RETURN_TO_HOME", reason: "Shortcut override" }));
     },
     onSafeMode: () => {
+      if (!isCommander) return;
       drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Shortcut override" }));
     }
   });
 
   const handleAddDrone = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDroneId.trim()) return;
+    if (!newDroneId.trim() || !isCommander) return;
     issueCmdMutation.mutate({
       droneId: newDroneId.trim(),
       cmd: "RESUME_MISSION",
@@ -93,16 +101,29 @@ export default function AdminPage() {
           <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[#00d9ff] to-[#afecff]">
             Drone Command & Tactical Control
           </h1>
-          <p className="text-[#859398] mt-1 text-sm font-['Courier_Prime']">
-            AUTHORIZED OPERATOR COMMAND CENTER
+          <p className="text-[#859398] mt-1 text-sm font-['Courier_Prime'] flex items-center gap-2">
+            AUTHORIZED OPERATOR COMMAND CENTER • 
+            <span className={`px-2 py-0.5 rounded font-mono text-xs border ${
+              isCommander 
+                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                : activeRole === "analyst"
+                ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
+                : "bg-gray-500/20 border-gray-500/40 text-gray-300"
+            }`}>
+              {isCommander ? "🎖️ LEVEL 3: COMMANDER CLEARANCE" : activeRole === "analyst" ? "🔍 LEVEL 2: ANALYST CLEARANCE" : "👁️ LEVEL 1: OBSERVER CLEARANCE"}
+            </span>
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <button
             onClick={() => checkHeartbeatsMutation.mutate()}
-            disabled={checkHeartbeatsMutation.isPending}
-            className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition-all px-3 py-2 rounded flex items-center gap-2 text-xs font-semibold"
+            disabled={checkHeartbeatsMutation.isPending || !isCommander}
+            className={`transition-all px-3 py-2 rounded flex items-center gap-2 text-xs font-semibold border ${
+              isCommander
+                ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30"
+                : "bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed"
+            }`}
           >
             <span className="material-symbols-outlined text-base">monitor_heart</span>
             Run Heartbeat Audit
@@ -191,30 +212,39 @@ export default function AdminPage() {
                       {new Date(drone.last_seen).toLocaleTimeString()}
                     </td>
                     <td className="p-4 flex gap-2 justify-end">
-                      <button
-                        onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "RETURN_TO_HOME", reason: "Operator tactical override" })}
-                        className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/40 transition-all flex items-center gap-1 font-mono"
-                        title="Return to Base"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">home</span>
-                        RTH
-                      </button>
-                      <button
-                        onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Operator risk mitigation" })}
-                        className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-amber-400 hover:bg-amber-500/20 hover:border-amber-500/40 transition-all flex items-center gap-1 font-mono"
-                        title="Switch to Safe Mode"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">security</span>
-                        Safe Mode
-                      </button>
-                      <button
-                        onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "EMERGENCY_LAND", reason: "Emergency landing forced" })}
-                        className="px-3 py-1.5 text-xs font-medium rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all flex items-center gap-1 font-mono"
-                        title="Emergency Land"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">warning</span>
-                        E-Land
-                      </button>
+                      {isCommander ? (
+                        <>
+                          <button
+                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "RETURN_TO_HOME", reason: "Operator tactical override" })}
+                            className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/40 transition-all flex items-center gap-1 font-mono"
+                            title="Return to Base"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">home</span>
+                            RTH
+                          </button>
+                          <button
+                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Operator risk mitigation" })}
+                            className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-amber-400 hover:bg-amber-500/20 hover:border-amber-500/40 transition-all flex items-center gap-1 font-mono"
+                            title="Switch to Safe Mode"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">security</span>
+                            Safe Mode
+                          </button>
+                          <button
+                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "EMERGENCY_LAND", reason: "Emergency landing forced" })}
+                            className="px-3 py-1.5 text-xs font-medium rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all flex items-center gap-1 font-mono"
+                            title="Emergency Land"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">warning</span>
+                            E-Land
+                          </button>
+                        </>
+                      ) : (
+                        <span className="px-3 py-1.5 text-xs font-mono text-gray-500 bg-gray-500/10 border border-gray-500/20 rounded flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[14px]">lock</span>
+                          COMMANDER CLEARANCE REQUIRED
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

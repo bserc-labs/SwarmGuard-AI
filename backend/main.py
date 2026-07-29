@@ -95,26 +95,33 @@ async def periodic_database_cleanup():
 async def startup_event():
     Base.metadata.create_all(bind=engine)
     
-    # Auto-seed default admin user if not present
-    def seed_admin():
+    # Auto-seed default RBAC military accounts if not present
+    def seed_rbac_users():
         db = SessionLocal()
         try:
-            admin = db.query(models.User).filter(models.User.username == "admin").first()
-            if not admin:
-                from services.auth_service import get_password_hash
-                admin = models.User(
-                    username="admin",
-                    email="admin@swarmguard.ai",
-                    password=get_password_hash("admin123"),
-                    role="admin"
-                )
-                db.add(admin)
-                db.commit()
-                logger.info("Default admin user (admin / admin123) seeded into database.")
+            from services.auth_service import get_password_hash
+            default_users = [
+                ("admin", "admin@swarmguard.ai", "admin123", "admin"),
+                ("commander", "commander@swarmguard.ai", "commander123", "commander"),
+                ("analyst", "analyst@swarmguard.ai", "analyst123", "analyst"),
+                ("observer", "observer@swarmguard.ai", "observer123", "observer"),
+            ]
+            for username, email, pwd, role in default_users:
+                existing = db.query(models.User).filter(models.User.username == username).first()
+                if not existing:
+                    user = models.User(
+                        username=username,
+                        email=email,
+                        password=get_password_hash(pwd),
+                        role=role
+                    )
+                    db.add(user)
+            db.commit()
+            logger.info("Default RBAC users (admin, commander, analyst, observer) seeded into database.")
         finally:
             db.close()
     
-    await asyncio.to_thread(seed_admin)
+    await asyncio.to_thread(seed_rbac_users)
     asyncio.create_task(periodic_heartbeat_check())
     asyncio.create_task(periodic_database_cleanup())
     logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")

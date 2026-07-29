@@ -38,5 +38,7 @@ def require_role(allowed_roles: list[str]):
         return current_user
     return role_checker
 
-get_admin_user = require_role(["admin"])
-get_operator_user = require_role(["admin", "operator"])
+get_admin_user = require_role(["admin", "commander"])
+get_commander_user = require_role(["admin", "commander"])
+get_analyst_user = require_role(["admin", "commander", "analyst"])
+get_operator_user = require_role(["admin", "commander", "analyst", "observer", "operator"])

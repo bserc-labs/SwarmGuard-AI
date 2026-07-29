@@ -20,11 +20,15 @@ def _log_audit(db: Session, username: str, action: str, ip: str = None):
     db.commit()
 
 
+from sqlalchemy import or_
+
 @router.post("/login", response_model=schemas.TokenResponse)
 @limiter.limit("60/minute")
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else None
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    user = db.query(models.User).filter(
+        or_(models.User.username == form_data.username, models.User.email == form_data.username)
+    ).first()
     if not user:
         _log_audit(db, form_data.username, "LOGIN_FAILED", client_ip)
         raise HTTPException(

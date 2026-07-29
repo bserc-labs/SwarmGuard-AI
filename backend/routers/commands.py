@@ -4,7 +4,7 @@ from typing import List
 import models
 import schemas
 from database import get_db
-from middleware.auth_middleware import get_operator_user
+from middleware.auth_middleware import get_operator_user, get_commander_user
 from services.ws_manager import ws_manager
 from utils.logger import logger
 
@@ -22,7 +22,7 @@ def issue_drone_command(
     cmd_in: schemas.CommandCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_operator_user)
+    current_user: models.User = Depends(get_commander_user)
 ):
     if cmd_in.command_type not in VALID_COMMANDS:
         raise HTTPException(
