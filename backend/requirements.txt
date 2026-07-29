@@ -15,3 +15,5 @@ pandas
 python-multipart
 requests
 slowapi
+broadcaster
+redis

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Boolean
 from sqlalchemy.sql import func
 from database import Base
 
@@ -74,3 +74,15 @@ class AuditLog(Base):
     details = Column(String, nullable=True)
     ip_address = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    critical_threshold = Column(Float, default=0.85)
+    high_threshold = Column(Float, default=0.60)
+    refresh_rate = Column(String, default="5s")
+    ui_sound = Column(Boolean, default=True)
+    push_notif = Column(Boolean, default=False)
+    webhooks = Column(Boolean, default=True)

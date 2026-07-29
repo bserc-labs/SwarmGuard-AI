@@ -4,26 +4,27 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 from database import engine, Base
-from routers import auth, telemetry, incidents, websocket, users, commands
+from routers import auth, telemetry, incidents, websocket, users, commands, settings
 
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 # Setup JSON logging
 from utils.logger import logger
+from database import SessionLocal
+from services.ws_manager import broadcast_client
+from datetime import datetime, timedelta
+import models
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+from utils.limiter import limiter
+from slowapi import _rate_limit_exceeded_handler
 
-limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="SwarmGuard AI API")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost", "http://127.0.0.1"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,27 +52,77 @@ app.include_router(telemetry.router)
 app.include_router(incidents.router)
 app.include_router(websocket.router)
 app.include_router(commands.router)
+app.include_router(settings.router)
 
 import asyncio
-from database import SessionLocal
 from services.heartbeat_service import check_drone_heartbeats
 
 async def periodic_heartbeat_check():
     while True:
         await asyncio.sleep(10)
-        try:
+        def run_sync_heartbeat():
             db = SessionLocal()
             try:
                 check_drone_heartbeats(db)
             finally:
                 db.close()
+        try:
+            await asyncio.to_thread(run_sync_heartbeat)
         except Exception as e:
             logger.error(f"Error in periodic heartbeat loop: {e}")
 
+async def periodic_database_cleanup():
+    """Data Retention Policy: Deletes telemetry older than 3 days every hour."""
+    while True:
+        def run_sync_cleanup():
+            db = SessionLocal()
+            try:
+                cutoff = datetime.utcnow() - timedelta(days=3)
+                deleted = db.query(models.TelemetryLog).filter(models.TelemetryLog.created_at < cutoff).delete()
+                db.commit()
+                if deleted > 0:
+                    logger.info(f"Data Retention Policy executed: Pruned {deleted} old telemetry rows.")
+            finally:
+                db.close()
+        try:
+            await asyncio.to_thread(run_sync_cleanup)
+        except Exception as e:
+            logger.error(f"Error in database cleanup loop: {e}")
+        # Run every hour
+        await asyncio.sleep(3600)
+
 @app.on_event("startup")
 async def startup_event():
+    Base.metadata.create_all(bind=engine)
+    
+    # Auto-seed default admin user if not present
+    def seed_admin():
+        db = SessionLocal()
+        try:
+            admin = db.query(models.User).filter(models.User.username == "admin").first()
+            if not admin:
+                from services.auth_service import get_password_hash
+                admin = models.User(
+                    username="admin",
+                    email="admin@swarmguard.ai",
+                    password=get_password_hash("admin123"),
+                    role="admin"
+                )
+                db.add(admin)
+                db.commit()
+                logger.info("Default admin user (admin / admin123) seeded into database.")
+        finally:
+            db.close()
+    
+    await asyncio.to_thread(seed_admin)
     asyncio.create_task(periodic_heartbeat_check())
+    asyncio.create_task(periodic_database_cleanup())
     logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")
+    logger.info("Started background Data Retention Policy (prunes data older than 3 days)")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await broadcast_client.disconnect()
 
 @app.get("/")
 def read_root():
@@ -81,8 +132,11 @@ def read_root():
 def health_check():
     return {"status": "ok", "service": "SentinelAI"}
 
+from middleware.auth_middleware import get_operator_user
+from database import get_db
+
 @app.get("/system/health")
-def system_health_details(db: Session = Depends(SessionLocal)):
+def system_health_details(db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
     """Return real system health, active node counts, and telemetry statistics for defense dashboard gauges."""
     try:
         total_drones = db.query(models.Drone).count()
@@ -118,8 +172,5 @@ def system_health_details(db: Session = Depends(SessionLocal)):
             "db_connected": False,
             "system_health_pct": 50,
             "signal_fidelity_pct": 50,
-            "error": str(e)
         }
-    finally:
-        db.close()
 
