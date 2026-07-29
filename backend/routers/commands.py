@@ -38,6 +38,14 @@ def issue_drone_command(
         db.commit()
         db.refresh(drone)
 
+    # Safety Interlocks
+    latest_log = db.query(models.TelemetryLog).filter(models.TelemetryLog.drone_id == drone_id).order_by(models.TelemetryLog.id.desc()).first()
+    
+    if cmd_in.command_type == "KILL_MOTOR" and latest_log and latest_log.altitude > 10:
+        raise HTTPException(status_code=400, detail="SAFETY INTERLOCK: Cannot kill motor. Drone is above 10 meters.")
+    if cmd_in.command_type == "RETURN_TO_HOME" and latest_log and latest_log.altitude <= 0:
+        raise HTTPException(status_code=400, detail="SAFETY INTERLOCK: Cannot return to home. Drone is already grounded.")
+
     # Update drone status based on command
     if cmd_in.command_type == "RETURN_TO_HOME":
         drone.status = "RETURNING"

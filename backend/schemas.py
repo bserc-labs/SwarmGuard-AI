@@ -118,3 +118,25 @@ class AuditLogOut(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+
+class SystemSettingsOut(BaseModel):
+    critical_threshold: float
+    high_threshold: float
+    refresh_rate: str
+    ui_sound: bool
+    push_notif: bool
+    webhooks: bool
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class SystemSettingsUpdate(BaseModel):
+    critical_threshold: Optional[float] = None
+    high_threshold: Optional[float] = None
+    refresh_rate: Optional[str] = None
+    ui_sound: Optional[bool] = None
+    push_notif: Optional[bool] = None
+    webhooks: Optional[bool] = None
