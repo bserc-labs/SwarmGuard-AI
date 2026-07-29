@@ -1,6 +1,10 @@
-version: "3.9"
-
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: swarmguard-redis
+    ports:
+      - "6379:6379"
+
   postgres:
     image: postgres:16
     container_name: swarmguard-db
@@ -27,9 +31,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       - DATABASE_URL=postgresql://postgres:password@postgres:5432/swarmguard
-      - SECRET_KEY=CHANGE_ME
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=SWARMGUARD_DEFENSE_PRODUCTION_SECRET_KEY_2026
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=60
 

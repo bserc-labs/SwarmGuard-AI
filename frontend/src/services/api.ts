@@ -94,6 +94,15 @@ export interface DroneCommand {
   created_at: string;
 }
 
+export interface SystemSettings {
+  critical_threshold: number;
+  high_threshold: number;
+  refresh_rate: string;
+  ui_sound: boolean;
+  push_notif: boolean;
+  webhooks: boolean;
+}
+
 export const api = {
   getHealth: (): Promise<HealthResponse> =>
     fetch(`${API_BASE}/health`).then((r) => r.json()),
@@ -169,5 +178,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  getSettings: (): Promise<SystemSettings> =>
+    fetchWithAuth("/settings"),
+
+  updateSettings: (payload: Partial<SystemSettings>): Promise<SystemSettings> =>
+    fetchWithAuth("/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }),
 };
