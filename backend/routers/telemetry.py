@@ -176,3 +176,24 @@ def get_swarm_formation(db: Session = Depends(get_db), current_user: models.User
     telemetry_list = list(drone_map.values())
     return swarm_service.analyze_swarm(telemetry_list)
 
+@router.get("/history")
+def get_telemetry_history(
+    start_time: str,
+    end_time: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_operator_user)
+):
+    """Fetch historical telemetry bounded by time for DVR playback."""
+    try:
+        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+        
+        logs = db.query(models.TelemetryLog).filter(
+            models.TelemetryLog.created_at >= start_dt,
+            models.TelemetryLog.created_at <= end_dt
+        ).order_by(models.TelemetryLog.created_at.asc()).all()
+        
+        return logs
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO 8601.")
+

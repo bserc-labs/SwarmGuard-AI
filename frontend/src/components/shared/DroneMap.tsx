@@ -4,9 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
 import { GlassCard } from "./GlassCard";
 import { GeofenceControlPanel } from "./GeofenceControlPanel";
+import { DVRScrubber } from "./DVRScrubber";
 import type { DroneMapLocation } from "@/lib/demoDroneLocations";
 import { playCriticalSiren, toggleAudioAlarms, isAudioEnabled } from "@/utils/audioAlarms";
-import { api } from "@/services/api";
+import { api, type TelemetryPacket } from "@/services/api";
 
 interface DroneMapProps {
   drones: DroneMapLocation[];
@@ -31,7 +32,7 @@ function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-function createMarkerIcon(threatStatus?: string, isGeofenceBreach = false) {
+function createMarkerIcon(threatStatus?: string, isGeofenceBreach = false, isDvrMode = false) {
   if (isGeofenceBreach || threatStatus === "Critical") {
     return L.divIcon({
       html: `<div style="background:#ef4444;width:18px;height:18px;border-radius:9999px;border:3px solid #ffffff;box-shadow:0 0 15px #ef4444;animation:pulse 1s infinite"></div>`,
@@ -41,7 +42,7 @@ function createMarkerIcon(threatStatus?: string, isGeofenceBreach = false) {
     });
   }
 
-  const color = threatStatus === "Warning" ? "#f59e0b" : "#00d9ff";
+  const color = isDvrMode ? "#f59e0b" : (threatStatus === "Warning" ? "#f59e0b" : "#00d9ff");
 
   return L.divIcon({
     html: `<div style="background:${color};width:14px;height:14px;border-radius:9999px;border:2px solid white;box-shadow:0 0 10px ${color}"></div>`,
@@ -52,13 +53,15 @@ function createMarkerIcon(threatStatus?: string, isGeofenceBreach = false) {
 }
 
 // Tactical Radar Sweep Icon
-function createRadarIcon() {
+function createRadarIcon(isDvrMode = false) {
+  const color = isDvrMode ? "rgba(245, 158, 11, " : "rgba(0, 217, 255, ";
+  const solidColor = isDvrMode ? "#f59e0b" : "#00d9ff";
   return L.divIcon({
-    html: `<div class="radar-scan" style="width: 800px; height: 800px; border: 1px solid rgba(0, 217, 255, 0.15); border-radius: 50%; box-shadow: inset 0 0 40px rgba(0, 217, 255, 0.05);">
-             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 6px; height: 6px; background: #00d9ff; border-radius: 50%; box-shadow: 0 0 10px #00d9ff;"></div>
-             <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: rgba(0, 217, 255, 0.1);"></div>
-             <div style="position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(0, 217, 255, 0.1);"></div>
-             <div style="position: absolute; top: 25%; left: 25%; right: 25%; bottom: 25%; border: 1px solid rgba(0, 217, 255, 0.05); border-radius: 50%;"></div>
+    html: `<div class="${!isDvrMode ? 'radar-scan' : ''}" style="width: 800px; height: 800px; border: 1px solid ${color}0.15); border-radius: 50%; box-shadow: inset 0 0 40px ${color}0.05);">
+             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 6px; height: 6px; background: ${solidColor}; border-radius: 50%; box-shadow: 0 0 10px ${solidColor};"></div>
+             <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: ${color}0.1);"></div>
+             <div style="position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: ${color}0.1);"></div>
+             <div style="position: absolute; top: 25%; left: 25%; right: 25%; bottom: 25%; border: 1px solid ${color}0.05); border-radius: 50%;"></div>
            </div>`,
     className: "bg-transparent border-none pointer-events-none",
     iconSize: [800, 800],
@@ -68,6 +71,7 @@ function createRadarIcon() {
 
 export function DroneMap({ drones, className = "" }: DroneMapProps) {
   const [audioActive, setAudioActive] = useState(isAudioEnabled());
+  const [dvrData, setDvrData] = useState<TelemetryPacket[] | null>(null);
 
   const { data: swarmFormation } = useQuery({
     queryKey: ['swarm-formation'],
@@ -82,12 +86,18 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
   });
 
   const validDrones = useMemo(() => {
-    return drones.filter((drone) => {
+    // Use DVR data if active, otherwise use live drones props
+    const sourceData = dvrData ? dvrData.map(d => ({
+      ...d,
+      threat_status: (d.battery < 30 ? "Critical" : d.battery < 60 ? "Warning" : "Normal") as "Normal"|"Warning"|"Critical"
+    })) : drones;
+
+    return sourceData.filter((drone) => {
       const hasLat = Number.isFinite(drone.latitude);
       const hasLng = Number.isFinite(drone.longitude);
       return hasLat && hasLng;
     });
-  }, [drones]);
+  }, [drones, dvrData]);
 
   const center = useMemo(() => {
     if (validDrones.length === 0) {
@@ -121,10 +131,11 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
   }, [validDrones, geofences]);
 
   useEffect(() => {
-    if (breaches > 0 && audioActive) {
+    // Only play siren if we are NOT in DVR mode
+    if (breaches > 0 && audioActive && !dvrData) {
       playCriticalSiren();
     }
-  }, [breaches, audioActive]);
+  }, [breaches, audioActive, dvrData]);
 
   const handleToggleAudio = () => {
     const newState = toggleAudioAlarms();
@@ -134,18 +145,20 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
   return (
     <GlassCard className={`overflow-hidden p-0 ${className}`}>
       <div className="flex h-[480px] flex-col relative">
-        <div className="border-b border-white/10 px-5 py-4">
+        <div className={`border-b px-5 py-4 transition-colors ${dvrData ? 'border-amber-500/30 bg-amber-500/5' : 'border-white/10'}`}>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-[#00d9ff] flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#00d9ff] animate-ping" />
-                🛰 Tactical Radar & Geofence Perimeter
+              <h3 className={`text-sm font-semibold uppercase tracking-[0.25em] flex items-center gap-2 ${dvrData ? 'text-amber-500' : 'text-[#00d9ff]'}`}>
+                <span className={`h-2 w-2 rounded-full animate-ping ${dvrData ? 'bg-amber-500' : 'bg-[#00d9ff]'}`} />
+                {dvrData ? "🛰 HISTORICAL PLAYBACK (DVR)" : "🛰 Tactical Radar & Geofence Perimeter"}
               </h3>
-              <p className="mt-1 text-xs text-sg-text-dim">Real-time Restricted Airspace Monitoring</p>
+              <p className="mt-1 text-xs text-sg-text-dim">
+                {dvrData ? "Reviewing historical incident data" : "Real-time Restricted Airspace Monitoring"}
+              </p>
             </div>
             
             <div className="flex items-center gap-3">
-              {swarmFormation && swarmFormation.formation_type !== "DISPERSED" && (
+              {swarmFormation && swarmFormation.formation_type !== "DISPERSED" && !dvrData && (
                 <span className="rounded-full bg-[#00d9ff]/20 border border-[#00d9ff]/40 px-3 py-1 text-[11px] font-mono text-[#00d9ff] animate-pulse">
                   ⚡ FORMATION: {swarmFormation.formation_type} ({Math.round(swarmFormation.confidence * 100)}%)
                 </span>
@@ -175,8 +188,9 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
           </div>
         </div>
 
-        {validDrones.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center px-6 text-center">
+        {validDrones.length === 0 && !dvrData ? (
+          <div className="flex flex-1 items-center justify-center px-6 text-center relative">
+            <DVRScrubber onHistoricalDataUpdate={setDvrData} />
             <div>
               <p className="text-lg font-semibold text-sg-text">No drone telemetry streams active.</p>
               <p className="mt-2 text-sm text-sg-text-dim">Run simulate_attack.py to stream live virtual drones.</p>
@@ -185,6 +199,8 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
         ) : (
           <div className="flex-1 min-h-0 relative">
             <GeofenceControlPanel />
+            <DVRScrubber onHistoricalDataUpdate={setDvrData} />
+            
             <MapContainer
               center={center}
               zoom={DEFAULT_ZOOM}
@@ -197,10 +213,10 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
               />
 
               {/* Radar Sweep Overlay */}
-              <Marker position={center} icon={createRadarIcon()} interactive={false} />
+              <Marker position={center} icon={createRadarIcon(!!dvrData)} interactive={false} />
 
-              {/* Render Swarm Vector Formation Lines */}
-              {swarmFormation?.formation_lines?.map((line, idx) => (
+              {/* Render Swarm Vector Formation Lines (Only live for now) */}
+              {!dvrData && swarmFormation?.formation_lines?.map((line, idx) => (
                 <Polyline
                   key={idx}
                   positions={line as [number, number][]}
@@ -246,12 +262,14 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
                   <Marker
                     key={drone.drone_id}
                     position={[drone.latitude, drone.longitude]}
-                    icon={createMarkerIcon(drone.threat_status, isBreach)}
+                    icon={createMarkerIcon(drone.threat_status, isBreach, !!dvrData)}
                   >
                     <Popup>
                       <div className="min-w-[240px] space-y-2 text-sm text-sg-text font-mono">
                         <div className="border-b border-white/10 pb-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#00d9ff]">Unit Telemetry</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#00d9ff]">
+                            {dvrData ? "Historical Unit Telemetry" : "Unit Telemetry"}
+                          </p>
                           <p className="mt-1 font-bold text-sg-text flex items-center justify-between">
                             {drone.drone_id}
                             {isBreach && (

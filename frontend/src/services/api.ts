@@ -202,6 +202,13 @@ export const api = {
 
   getGeofences: (): Promise<any[]> => fetchWithAuth("/geofence/zones"),
   
+  getTelemetryHistory: (startTime: string, endTime: string): Promise<TelemetryPacket[]> => {
+    const params = new URLSearchParams();
+    params.set("start_time", startTime);
+    params.set("end_time", endTime);
+    return fetchWithAuth(`/telemetry/history?${params.toString()}`);
+  },
+
   createGeofence: (payload: {
     name: string;
     zone_type: string;
