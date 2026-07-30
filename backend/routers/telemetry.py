@@ -131,3 +131,28 @@ def get_live_sensor_fusion(db: Session = Depends(get_db), current_user: models.U
         })
     return fusion_matrix
 
+
+@router.get("/swarm-formation")
+def get_swarm_formation(db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
+    """Return live spatial swarm formation classification (V-Shape, Grid Encircle, Leader-Follower)."""
+    from services.swarm_service import swarm_service
+
+    # Fetch latest telemetry log for each active drone
+    latest_logs = db.query(models.TelemetryLog).order_by(models.TelemetryLog.id.desc()).limit(100).all()
+
+    # Deduplicate to get the latest packet per drone
+    drone_map = {}
+    for pkt in latest_logs:
+        if pkt.drone_id not in drone_map:
+            drone_map[pkt.drone_id] = {
+                "drone_id": pkt.drone_id,
+                "latitude": pkt.latitude,
+                "longitude": pkt.longitude,
+                "altitude": pkt.altitude,
+                "speed": pkt.speed,
+                "battery": pkt.battery
+            }
+
+    telemetry_list = list(drone_map.values())
+    return swarm_service.analyze_swarm(telemetry_list)
+

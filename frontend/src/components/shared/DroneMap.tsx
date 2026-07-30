@@ -1,9 +1,11 @@
 import { useMemo, useState, useEffect } from "react";
-import { MapContainer, Marker, Popup, TileLayer, Circle } from "react-leaflet";
+import { MapContainer, Marker, Popup, TileLayer, Circle, Polyline } from "react-leaflet";
+import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
 import { GlassCard } from "./GlassCard";
 import type { DroneMapLocation } from "@/lib/demoDroneLocations";
 import { playCriticalSiren, toggleAudioAlarms, isAudioEnabled } from "@/utils/audioAlarms";
+import { api } from "@/services/api";
 
 interface DroneMapProps {
   drones: DroneMapLocation[];
@@ -66,6 +68,12 @@ function createRadarIcon() {
 export function DroneMap({ drones, className = "" }: DroneMapProps) {
   const [audioActive, setAudioActive] = useState(isAudioEnabled());
 
+  const { data: swarmFormation } = useQuery({
+    queryKey: ['swarm-formation'],
+    queryFn: () => api.getSwarmFormation(),
+    refetchInterval: 5000,
+  });
+
   const validDrones = useMemo(() => {
     return drones.filter((drone) => {
       const hasLat = Number.isFinite(drone.latitude);
@@ -120,6 +128,12 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
             </div>
             
             <div className="flex items-center gap-3">
+              {swarmFormation && swarmFormation.formation_type !== "DISPERSED" && (
+                <span className="rounded-full bg-[#00d9ff]/20 border border-[#00d9ff]/40 px-3 py-1 text-[11px] font-mono text-[#00d9ff] animate-pulse">
+                  ⚡ FORMATION: {swarmFormation.formation_type} ({Math.round(swarmFormation.confidence * 100)}%)
+                </span>
+              )}
+
               {breaches > 0 && (
                 <span className="rounded-full bg-red-500/20 border border-red-500/40 px-3 py-1 text-[11px] font-mono text-red-400 animate-pulse">
                   🚨 {breaches} NO-FLY ZONE BREACHES
@@ -167,6 +181,20 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
               {/* Radar Sweep Overlay */}
               <Marker position={center} icon={createRadarIcon()} interactive={false} />
 
+              {/* Render Swarm Vector Formation Lines */}
+              {swarmFormation?.formation_lines?.map((line, idx) => (
+                <Polyline
+                  key={idx}
+                  positions={line as [number, number][]}
+                  pathOptions={{
+                    color: "#00d9ff",
+                    weight: 2,
+                    dashArray: "6, 6",
+                    opacity: 0.8
+                  }}
+                />
+              ))}
+
               {/* Restricted Geofence Perimeters */}
               {/* Outer Amber Warning Sector (2000m) */}
               <Circle
@@ -181,6 +209,7 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
                 radius={800}
                 pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.12, dashArray: "6, 6", weight: 2 }}
               />
+
 
               {/* Render Drones */}
               {validDrones.map((drone) => {

@@ -189,4 +189,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+
+  getSwarmFormation: (): Promise<{
+    formation_type: string;
+    confidence: number;
+    active_swarm_count: number;
+    cluster_drone_ids: string[];
+    centroid: { lat: number; lng: number } | null;
+    formation_lines: number[][][];
+    description: string;
+  }> => fetchWithAuth("/telemetry/swarm-formation"),
 };
+
