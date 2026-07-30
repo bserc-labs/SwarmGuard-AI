@@ -55,6 +55,10 @@ This will start streaming packets to the backend, which will instantly appear on
 
 ## Defense-Grade Security & Features
 
+- **Swarm Formation Detection**: AI-driven spatial clustering (DBSCAN/K-Means) to detect military drone swarm formations (V-Shape, Grid Encircle) in real-time.
+- **Dynamic Geofencing & Kill-Chain**: Draw polygon No-Fly Zones directly on the map. The backend instantly evaluates threats and issues autonomous `HARD_KILL` interception protocols.
+- **Historical Playback (DVR Mode)**: Interactive map scrubber allows operators to pause live telemetry and slide backward in time to replay previous drone swarms step-by-step.
+- **Interactive Tactical Radar Map**: Live geospatial plotting of drone vectors using `react-leaflet` with neon vector lines and glassmorphic HUD overlays.
 - **Real-Time Telemetry Feed**: Live data table of drone GPS, altitude, speed, and battery with strict Pydantic range validators (`latitude`: -90° to 90°, `longitude`: -180° to 180°, `altitude`: 0-50,000m, `speed`: 0-500m/s, `battery`: 0-100%).
 - **AI Threat Explainability (SHAP)**: Bar charts explaining *exactly* which metrics caused the AI to flag an anomaly.
 - **WebSocket Real-Time Alerts**: Global flashing alerts the instant an attack is detected over JWT-authenticated WebSockets.
