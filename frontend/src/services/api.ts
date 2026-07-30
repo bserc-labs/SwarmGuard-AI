@@ -199,5 +199,19 @@ export const api = {
     formation_lines: number[][][];
     description: string;
   }> => fetchWithAuth("/telemetry/swarm-formation"),
+
+  getGeofences: (): Promise<any[]> => fetchWithAuth("/geofence/zones"),
+  
+  createGeofence: (payload: {
+    name: string;
+    zone_type: string;
+    coordinates: any;
+    severity?: string;
+  }): Promise<any> =>
+    fetchWithAuth("/geofence/zones", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
 };
 

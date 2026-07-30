@@ -66,9 +66,29 @@ def ingest_telemetry(
     from services.sensor_fusion import sensor_fusion_engine
     fusion_data = sensor_fusion_engine.fuse_sensors(packet.model_dump())
 
-    # 4. Generate Alert & Incident if anomaly
+    # 4. Geofence Perimeter Check
+    from services.geofence_service import GeofenceEngine
+    violated_zones = GeofenceEngine.check_geofence_violations(db, packet.latitude, packet.longitude)
+    
+    # 5. Generate Alert & Incident if anomaly
     alert_data = threat_service.generate_alert(is_anomaly, anomaly_score, attack_type)
     alert_data["sensor_fusion"] = fusion_data
+    if violated_zones:
+        alert_data["geofence_violations"] = [z.name for z in violated_zones]
+    
+    # 6. Autonomous Kill-Chain Mitigation
+    from services.killchain_service import killchain_engine
+    is_silent = (drone.status == "SILENT_POSSIBLE_JAMMING")
+    killchain_result = killchain_engine.evaluate_and_intercept(
+        db=db,
+        drone_id=packet.drone_id,
+        threat_level=alert_data.get("threat_level", 0),
+        violated_zones=violated_zones,
+        background_tasks=background_tasks,
+        is_silent=is_silent
+    )
+    if killchain_result.get("intercepted"):
+        alert_data["killchain_action"] = killchain_result["action"]
     
     if is_anomaly and not fusion_data.get("is_false_positive_bird"):
         try:
@@ -80,7 +100,7 @@ def ingest_telemetry(
                 severity=alert_data.get("severity"),
                 shap_values=alert_data.get("shap_top3"),
                 explanation=alert_data.get("explanation"),
-                status="OPEN"
+                status="AUTONOMOUSLY_MITIGATED" if killchain_result.get("intercepted") else "OPEN"
             )
             db.add(incident)
             db.commit()

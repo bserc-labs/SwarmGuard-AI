@@ -3,6 +3,7 @@ import { MapContainer, Marker, Popup, TileLayer, Circle, Polyline } from "react-
 import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
 import { GlassCard } from "./GlassCard";
+import { GeofenceControlPanel } from "./GeofenceControlPanel";
 import type { DroneMapLocation } from "@/lib/demoDroneLocations";
 import { playCriticalSiren, toggleAudioAlarms, isAudioEnabled } from "@/utils/audioAlarms";
 import { api } from "@/services/api";
@@ -74,6 +75,12 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
     refetchInterval: 5000,
   });
 
+  const { data: geofences = [] } = useQuery({
+    queryKey: ['geofences'],
+    queryFn: () => api.getGeofences(),
+    refetchInterval: 5000,
+  });
+
   const validDrones = useMemo(() => {
     return drones.filter((drone) => {
       const hasLat = Number.isFinite(drone.latitude);
@@ -95,13 +102,23 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
   const breaches = useMemo(() => {
     let breachCount = 0;
     validDrones.forEach((drone) => {
-      const dist = getDistanceMeters(center[0], center[1], drone.latitude, drone.longitude);
-      if (dist <= 800 || drone.threat_status === "Critical") {
+      let isBreach = false;
+      for (const zone of geofences) {
+        if (zone.zone_type === "CIRCLE") {
+          const { center, radius } = zone.coordinates;
+          const dist = getDistanceMeters(center[0], center[1], drone.latitude, drone.longitude);
+          if (dist <= radius) {
+            isBreach = true;
+            break;
+          }
+        }
+      }
+      if (isBreach || drone.threat_status === "Critical") {
         breachCount++;
       }
     });
     return breachCount;
-  }, [validDrones, center]);
+  }, [validDrones, geofences]);
 
   useEffect(() => {
     if (breaches > 0 && audioActive) {
@@ -116,7 +133,7 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
 
   return (
     <GlassCard className={`overflow-hidden p-0 ${className}`}>
-      <div className="flex h-[480px] flex-col">
+      <div className="flex h-[480px] flex-col relative">
         <div className="border-b border-white/10 px-5 py-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -166,7 +183,8 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
             </div>
           </div>
         ) : (
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 relative">
+            <GeofenceControlPanel />
             <MapContainer
               center={center}
               zoom={DEFAULT_ZOOM}
@@ -195,26 +213,34 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
                 />
               ))}
 
-              {/* Restricted Geofence Perimeters */}
-              {/* Outer Amber Warning Sector (2000m) */}
-              <Circle
-                center={center}
-                radius={2000}
-                pathOptions={{ color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 0.04, dashArray: "4, 8", weight: 1.5 }}
-              />
-
-              {/* Inner Red Restricted No-Fly Zone (800m) */}
-              <Circle
-                center={center}
-                radius={800}
-                pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.12, dashArray: "6, 6", weight: 2 }}
-              />
-
+              {/* Render Active Geofences */}
+              {geofences.map((zone: any) => {
+                if (zone.zone_type === "CIRCLE") {
+                  return (
+                    <Circle
+                      key={zone.id}
+                      center={zone.coordinates.center as [number, number]}
+                      radius={zone.coordinates.radius}
+                      pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.12, dashArray: "6, 6", weight: 2 }}
+                    />
+                  );
+                }
+                return null;
+              })}
 
               {/* Render Drones */}
               {validDrones.map((drone) => {
-                const distMeters = getDistanceMeters(center[0], center[1], drone.latitude, drone.longitude);
-                const isBreach = distMeters <= 800;
+                let isBreach = false;
+                for (const zone of geofences) {
+                  if (zone.zone_type === "CIRCLE") {
+                    const { center: zCenter, radius } = zone.coordinates;
+                    const distMeters = getDistanceMeters(zCenter[0], zCenter[1], drone.latitude, drone.longitude);
+                    if (distMeters <= radius) {
+                      isBreach = true;
+                      break;
+                    }
+                  }
+                }
 
                 return (
                   <Marker
@@ -237,9 +263,9 @@ export function DroneMap({ drones, className = "" }: DroneMapProps) {
                         </div>
                         <div className="grid gap-1.5 text-xs text-sg-text-dim">
                           <div className="flex items-center justify-between">
-                            <span>Perimeter Range</span>
+                            <span>Geofence Status</span>
                             <span className={`font-bold ${isBreach ? "text-red-400" : "text-emerald-400"}`}>
-                              {distMeters.toFixed(0)}m {isBreach ? "(RESTRICTED)" : "(CLEAR)"}
+                              {isBreach ? "RESTRICTED" : "CLEAR"}
                             </span>
                           </div>
                           <div className="flex items-center justify-between">

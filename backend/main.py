@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 from database import engine, Base
-from routers import auth, telemetry, incidents, websocket, users, commands, settings
+from routers import auth, telemetry, incidents, websocket, users, commands, settings, geofence
 
 from slowapi.errors import RateLimitExceeded
 
@@ -53,6 +53,7 @@ app.include_router(incidents.router)
 app.include_router(websocket.router)
 app.include_router(commands.router)
 app.include_router(settings.router)
+app.include_router(geofence.router)
 
 import asyncio
 from services.heartbeat_service import check_drone_heartbeats

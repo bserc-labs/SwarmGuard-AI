@@ -86,3 +86,15 @@ class SystemSettings(Base):
     ui_sound = Column(Boolean, default=True)
     push_notif = Column(Boolean, default=False)
     webhooks = Column(Boolean, default=True)
+
+
+class GeofenceZone(Base):
+    __tablename__ = "geofence_zones"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    zone_type = Column(String)  # POLYGON, CIRCLE
+    coordinates = Column(JSON)  # List of [lat, lng] for POLYGON, or {"center": [lat, lng], "radius": int} for CIRCLE
+    severity = Column(String, default="CRITICAL")  # WARNING, CRITICAL
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
