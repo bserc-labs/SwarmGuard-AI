@@ -1,6 +1,6 @@
 import { getToken, logout } from "./auth";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "/api";
 
 function getAuthHeaders(): Record<string, string> {
   const token = getToken();
@@ -51,11 +51,13 @@ export interface Incident {
   shap_values: Array<{ feature: string; value: number }> | null;
   explanation: string;
   created_at: string;
+  status: string;
 }
 
 export interface DetectionResult {
   is_anomaly: boolean;
   anomaly_score: number;
+  drone_id?: string;
   attack_type: string | null;
   threat_level: number | null;
   severity: string | null;

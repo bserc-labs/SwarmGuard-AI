@@ -1,6 +1,6 @@
 import { createRouter, createRootRoute, createRoute, redirect, lazyRouteComponent } from "@tanstack/react-router";
 import { AppLayout } from "./components/layout/AppLayout";
-import { isAuthenticated } from "./services/auth";
+import { isAuthenticated, getRole } from "./services/auth";
 import NotFoundPage from "./pages/NotFoundPage";
 
 // Root route
@@ -77,6 +77,12 @@ const fleetRoute = createRoute({
 const adminRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/admin",
+  beforeLoad: () => {
+    const role = getRole();
+    if (role !== "admin" && role !== "commander") {
+      throw redirect({ to: "/dashboard" });
+    }
+  },
   component: lazyRouteComponent(() => import("./pages/AdminPage")),
 });
 
@@ -89,6 +95,12 @@ const profileRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings",
+  beforeLoad: () => {
+    const role = getRole();
+    if (role !== "admin" && role !== "commander") {
+      throw redirect({ to: "/dashboard" });
+    }
+  },
   component: lazyRouteComponent(() => import("./pages/SettingsPage")),
 });
 

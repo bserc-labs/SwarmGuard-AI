@@ -8,7 +8,7 @@ import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { SEVERITY_COLORS } from "@/lib/constants";
 import { DroneMap } from "@/components/shared/DroneMap";
 import { demoDroneLocations } from "@/lib/demoDroneLocations";
-import { MultiSensorPanel } from "@/components/shared/MultiSensorPanel";
+
 
 export default function TelemetryPage() {
   const { isConnected, alerts } = useWebSocketContext();

@@ -29,11 +29,10 @@ class KalmanTrajectoryFilter:
         # Measurement noise covariance
         self.R = np.eye(2) * 0.001
         
-        # Error covariance
-        self.P = np.eye(4) * 1.0
-        
         # Drone track histories: drone_id -> state vector X
         self.tracks: Dict[str, np.ndarray] = {}
+        # Drone error covariances: drone_id -> P matrix
+        self.covariances: Dict[str, np.ndarray] = {}
 
     def predict_and_update(self, drone_id: str, lat: float, lon: float) -> Tuple[float, float, float, bool]:
         """
@@ -46,13 +45,15 @@ class KalmanTrajectoryFilter:
             # Initialize track
             x_init = np.array([lat, lon, 0.0, 0.0])
             self.tracks[drone_id] = x_init
+            self.covariances[drone_id] = np.eye(4) * 1.0
             return lat, lon, 0.0, False
             
         x_prev = self.tracks[drone_id]
+        P_prev = self.covariances[drone_id]
         
         # 1. Prediction Step
         x_pred = self.F @ x_prev
-        P_pred = self.F @ self.P @ self.F.T + self.Q
+        P_pred = self.F @ P_prev @ self.F.T + self.Q
         
         # 2. Compute Innovation / Measurement Residual
         z_pred = self.H @ x_pred
@@ -68,8 +69,10 @@ class KalmanTrajectoryFilter:
         K = P_pred @ self.H.T @ np.linalg.inv(S)
         
         x_updated = x_pred + K @ y_residual
-        self.P = (np.eye(4) - K @ self.H) @ P_pred
+        P_updated = (np.eye(4) - K @ self.H) @ P_pred
+        
         self.tracks[drone_id] = x_updated
+        self.covariances[drone_id] = P_updated
         
         # Anomaly threshold: > 150 meters sudden deviation or impossible jump
         is_anomaly = deviation_m > 150.0

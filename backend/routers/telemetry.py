@@ -72,7 +72,7 @@ def ingest_telemetry(
     violated_zones = GeofenceEngine.check_geofence_violations(db, packet.latitude, packet.longitude)
     
     # 5. Generate Alert & Incident if anomaly
-    alert_data = threat_service.generate_alert(is_anomaly, anomaly_score, attack_type)
+    alert_data = threat_service.generate_alert(is_anomaly, anomaly_score, attack_type, telemetry=packet.model_dump())
     alert_data["sensor_fusion"] = fusion_data
     if violated_zones:
         alert_data["geofence_violations"] = [z.name for z in violated_zones]

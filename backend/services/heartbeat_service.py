@@ -49,14 +49,13 @@ def check_drone_heartbeats(db: Session):
             "timestamp": now.isoformat()
         }
         
-        # Since this runs in async background context, we schedule the broadcast
+        # Since this runs in async background context (via to_thread), we schedule the broadcast
         try:
             import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(ws_manager.broadcast(alert_payload), loop)
+            asyncio.run(ws_manager.broadcast(alert_payload))
         except Exception as err:
             logger.error(f"Failed to broadcast heartbeat alert for {drone.drone_id}: {err}")
+
 
         logger.warning(f"🚨 HEARTBEAT ALERT: Drone '{drone.drone_id}' is SILENT since {drone.last_seen}")
 

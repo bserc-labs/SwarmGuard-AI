@@ -28,7 +28,7 @@ export function GeofenceControlPanel() {
     createMutation.mutate({
       name,
       zone_type: "CIRCLE",
-      coordinates: { center: [34.0522, -118.2437], radius },
+      coordinates: { center: [18.5204, 73.8567], radius },
       severity: "CRITICAL"
     });
   };

@@ -14,9 +14,15 @@ class ExplanationEngine:
             self.data_dir = os.path.normpath(os.path.join(current_dir, "..", "data"))
         else:
             self.data_dir = data_dir
+        
+        # Cache for loaded attack data
+        self.cache: Dict[str, Dict[str, Any]] = {}
 
     def load_attack_data(self, attack_type: str) -> Dict[str, Any]:
         """Loads the JSON data file for a specific attack type."""
+        if attack_type in self.cache:
+            return self.cache[attack_type]
+
         sanitized_name = os.path.basename(f"{attack_type}.json")
         file_path = os.path.join(self.data_dir, sanitized_name)
         
@@ -24,7 +30,9 @@ class ExplanationEngine:
             raise FileNotFoundError(f"Knowledge base file for attack '{attack_type}' not found.")
             
         with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            self.cache[attack_type] = data
+            return data
 
     def generate_explanation(self, attack_type: str) -> str:
         """

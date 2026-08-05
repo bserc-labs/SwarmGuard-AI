@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 import models
-from middleware.auth_middleware import get_operator_user
+from middleware.auth_middleware import get_operator_user, get_commander_user
 from pydantic import BaseModel
 from typing import List, Optional, Any
 from utils.logger import logger
@@ -33,7 +33,7 @@ def get_zones(db: Session = Depends(get_db), current_user: models.User = Depends
     return db.query(models.GeofenceZone).filter(models.GeofenceZone.is_active == True).all()
 
 @router.post("/zones", response_model=GeofenceResponse)
-def create_zone(zone: GeofenceCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
+def create_zone(zone: GeofenceCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_commander_user)):
     """Create a new restricted geofence zone."""
     try:
         new_zone = models.GeofenceZone(**zone.model_dump())
@@ -58,7 +58,7 @@ def create_zone(zone: GeofenceCreate, db: Session = Depends(get_db), current_use
         raise HTTPException(status_code=400, detail="Failed to create geofence zone. Name may already exist.")
 
 @router.delete("/zones/{zone_id}")
-def delete_zone(zone_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
+def delete_zone(zone_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_commander_user)):
     """Deactivate or remove a geofence zone."""
     zone = db.query(models.GeofenceZone).filter(models.GeofenceZone.id == zone_id).first()
     if not zone:

@@ -48,10 +48,14 @@ export default function ThreatsPage() {
   const pieData = Object.entries(attackCounts).map(([name, value]) => ({ name, value }));
   const PIE_COLORS = ['#00d9ff', '#ffb4ab', '#ffdeaa', '#b4c5ff', '#4ade80'];
 
-  // Chart Data: Weekly Trend (Mocked by Day of Week for demonstration since incidents might be scattered)
+  // Chart Data: Weekly Trend (Filtered to last 7 days)
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const recentIncidents = incidents.filter(i => new Date(i.created_at) >= sevenDaysAgo);
+  
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dayCounts = Array(7).fill(0);
-  incidents.forEach(i => {
+  recentIncidents.forEach(i => {
     const d = new Date(i.created_at).getDay();
     dayCounts[d]++;
   });

@@ -23,7 +23,8 @@ export function createWebSocket(options: WSOptions) {
       return;
     }
 
-    ws = new WebSocket(`ws://localhost:8000/ws/telemetry?token=${token}`);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry?token=${token}`);
 
     ws.onopen = () => {
       console.log("[WS] Connected to telemetry stream");

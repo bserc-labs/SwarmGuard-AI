@@ -136,12 +136,12 @@ export default function DashboardPage() {
         />
         <MetricCard
           title="System Health"
-          value={`${systemHealth?.status === 'OPERATIONAL' ? 98 : 98}%`}
+          value={`${systemHealth?.status === 'OPERATIONAL' ? 100 : 75}%`}
           icon="monitor_heart"
           loading={isLoading}
-          glowColor="#4ade80"
-          trend={systemHealth?.status === 'OPERATIONAL' ? 'Stable' : 'Stable'}
-          trendUp={true}
+          glowColor={systemHealth?.status === 'OPERATIONAL' ? '#4ade80' : '#ef4444'}
+          trend={systemHealth?.status === 'OPERATIONAL' ? 'Stable' : 'Degraded'}
+          trendUp={systemHealth?.status === 'OPERATIONAL'}
         />
         <MetricCard
           title="Critical Incidents"

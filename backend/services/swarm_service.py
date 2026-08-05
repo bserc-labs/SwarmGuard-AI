@@ -12,6 +12,7 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 def Math_atan2_sqrt(a: float) -> float:
+    a = min(1.0, max(0.0, a))
     return math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

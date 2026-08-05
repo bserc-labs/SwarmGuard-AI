@@ -81,15 +81,21 @@ def export_incidents_csv(
     writer = csv.writer(output)
     writer.writerow(["Incident ID", "Drone ID", "Attack Type", "Threat Level", "Severity", "Status", "Explanation", "Timestamp"])
 
+    def sanitize_csv(value):
+        value = str(value) if value else ""
+        if value and value[0] in ('=', '+', '-', '@', '\t', '\r'):
+            return "'" + value
+        return value
+
     for inc in incidents:
         writer.writerow([
             f"#SG-{inc.id:04d}",
-            inc.drone_id,
-            inc.attack_type,
+            sanitize_csv(inc.drone_id),
+            sanitize_csv(inc.attack_type),
             inc.threat_level,
             inc.severity,
             inc.status or "OPEN",
-            inc.explanation,
+            sanitize_csv(inc.explanation),
             inc.created_at.isoformat() if inc.created_at else ""
         ])
 

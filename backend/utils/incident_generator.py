@@ -4,19 +4,19 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 try:
-    from backend.services.threat_service import ThreatScoreEngine
-    from backend.utils.severity_mapper import map_severity
-    from backend.utils.explanation_engine import ExplanationEngine
-    from backend.utils.recommendation_engine import RecommendationEngine
+    from services.threat_service import ThreatScoreEngine
+    from utils.severity_mapper import map_severity
+    from utils.explanation_engine import ExplanationEngine
+    from utils.recommendation_engine import RecommendationEngine
 except ImportError:
     # Enable fallback path routing for standalone script executions
     import sys
-    # Parent of backend/utils is backend/ (two levels up is project root)
-    sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..")))
-    from backend.services.threat_service import ThreatScoreEngine
-    from backend.utils.severity_mapper import map_severity
-    from backend.utils.explanation_engine import ExplanationEngine
-    from backend.utils.recommendation_engine import RecommendationEngine
+    # Parent of backend/utils is backend/ (one level up)
+    sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
+    from services.threat_service import ThreatScoreEngine
+    from utils.severity_mapper import map_severity
+    from utils.explanation_engine import ExplanationEngine
+    from utils.recommendation_engine import RecommendationEngine
 
 
 class IncidentGenerator:

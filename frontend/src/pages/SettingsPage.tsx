@@ -21,6 +21,14 @@ export default function SettingsPage() {
     },
     onError: () => {
       toast.error("Failed to update system configuration.");
+      if (storedSettings) {
+        setCriticalThreshold(storedSettings.critical_threshold);
+        setHighThreshold(storedSettings.high_threshold);
+        setRefreshRate(storedSettings.refresh_rate);
+        setUiSound(storedSettings.ui_sound);
+        setPushNotif(storedSettings.push_notif);
+        setWebhooks(storedSettings.webhooks);
+      }
     }
   });
 
