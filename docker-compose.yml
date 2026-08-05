@@ -2,12 +2,19 @@ services:
   redis:
     image: redis:7-alpine
     container_name: swarmguard-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   postgres:
     image: postgres:16
     container_name: swarmguard-db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -26,28 +33,36 @@ services:
     build:
       context: ./backend
     container_name: swarmguard-backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql://postgres:password@postgres:5432/swarmguard
       - REDIS_URL=redis://redis:6379
       - SECRET_KEY=SWARMGUARD_DEFENSE_PRODUCTION_SECRET_KEY_2026
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=60
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   frontend:
     build:
       context: ./frontend
     container_name: swarmguard-frontend
+    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:
