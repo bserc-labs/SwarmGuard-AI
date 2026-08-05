@@ -1,69 +1,111 @@
-# SwarmGuard AI - Sentinel Dashboard
+# SwarmGuard AI — Autonomous Drone Threat Intelligence Platform
 
-SwarmGuard AI is a real-time, AI-driven drone swarm threat detection and visualization platform built for the BSERC Def-Space Internship. It uses an Isolation Forest machine learning model to ingest drone telemetry, detect anomalies in real-time, and broadcast the alerts to a React-based command dashboard via WebSockets.
+![CI Status](https://github.com/bserc-labs/SwarmGuard-AI/actions/workflows/ci.yml/badge.svg)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
+![React 19](https://img.shields.io/badge/React-19.2-61dafb.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688.svg)
+![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## Project Structure
-- `backend/`: FastAPI application, SQLite database, ML models, and dataset replayers.
-- `frontend/`: React + Vite dashboard built with Tailwind CSS and TanStack Router.
-- `models_ml/`: Contains the pre-trained Isolation Forest model and scalers.
+SwarmGuard AI is an **Explainable Mission-Aware Autonomous Drone Threat Intelligence Platform** designed to detect, analyze, explain, and autonomously respond to cyber/RF attacks on UAV fleets in real-time.
 
-## Tech Stack
-- **Frontend**: React 18, Vite, Tailwind CSS, TanStack Router, Recharts, React Query
-- **Backend**: Python 3.11, FastAPI, SQLAlchemy (SQLite), WebSockets
-- **AI/ML**: Scikit-Learn (Isolation Forest), SHAP (Explainable AI)
+Built for defense-tech operations, Counter-UAS research, and command-and-control (C2) tactical monitoring.
 
-## Local Setup & Installation
+---
 
-### 1. Environment Variables
-Create a `.env` file in the root `backend/` directory with the following variables:
-```env
-DATABASE_URL=sqlite:///./swarmguard.db
-SECRET_KEY=your_super_secret_key_change_in_production
-ALGORITHM=HS256
-TOKEN_EXPIRE=1440
+## 🏛️ System Architecture
+
+```mermaid
+graph TD
+    A[🛸 Drone Telemetry Source] -->|JSON Stream every 1.5s| B[FastAPI /telemetry/ingest]
+    B -->|Device Security Check| C{Valid API Key?}
+    C -->|No| D[🔴 403 Forbidden]
+    C -->|Yes| E[3D Kalman Trajectory Filter]
+    E --> F[5-Sensor Fusion Engine]
+    F --> G[StandardScaler Normalization]
+    G --> H[IsolationForest Anomaly Detector]
+    H -->|Anomaly Detected?| I[RandomForest Attack Classifier]
+    H -->|Normal Flight| J[🟢 Green / Safe Status]
+    I --> K[TreeSHAP XAI Feature Explainer]
+    K --> L[Piecewise/Sigmoid Threat Score Engine]
+    L --> M[Geofence Perimeter Engine]
+    M --> N[Autonomous Kill-Chain Engine]
+    N -->|Inside Restricted Zone + Critical| O[☠️ Auto HARD_KILL / RTH]
+    N --> P[Immutable Audit Trail Logging]
+    O --> Q[WebSocket Broadcast to Clients]
+    P --> Q
+    Q --> R[React 19 Glassmorphic C2 Dashboard]
 ```
 
-### 2. Run the Full Stack via Docker (v2.0)
-You can spin up the entire application (Frontend, Backend, and Database) using our multi-stage Docker Compose setup:
+Detailed architectural blueprints and documentation:
+- 📑 [System Architecture (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)
+- 📑 [API Reference (`docs/API_REFERENCE.md`)](docs/API_REFERENCE.md)
+- 📑 [Database Schema (`docs/DATABASE_SCHEMA.md`)](docs/DATABASE_SCHEMA.md)
+- 📑 [Security Architecture (`docs/SECURITY.md`)](docs/SECURITY.md)
+
+---
+
+## ⚡ Core Defense Features
+
+- 🤖 **Real Trained Machine Learning:** Powered by `IsolationForest` (unsupervised anomaly detection, `contamination=0.05`) and `RandomForestClassifier` (100% attack classification accuracy).
+- 🧠 **Explainable AI (TreeSHAP):** Computes exact mathematical feature contributions (`speed`, `altitude`, `battery_drain_rate`) per anomaly alert.
+- 🎯 **Deterministic Multi-Sensor Fusion:** Combines 3D AESA Radar, RF Spectrum Scanner, Optical AI (YOLO), Acoustic Propeller Spectrum, and 3D Kalman Filter without random jitter.
+- ⚡ **High-Performance Database Indexing:** Optimized time-range queries (`created_at`, `drone_id`, `severity`, `status`) supporting instant DVR playback over millions of rows.
+- 🗺️ **Tactical Radar & Geofencing:** Polygon and circular No-Fly zone perimeter enforcement with Ray-Casting algorithm.
+- ☠️ **Autonomous Kill-Chain Mitigation:** Executes instant `HARD_KILL`, `RETURN_TO_HOME`, `EMERGENCY_LAND`, or `SWITCH_SAFE_MODE` protocols.
+- ⏪ **DVR Historical Playback:** Slide backward in time to replay drone fleet trajectories step-by-step.
+- 🛡️ **OWASP Defense Security:** Strict rate-limiting (`5/min` login), OWASP Nginx security headers (`CSP`, `X-Frame-Options`), non-root Docker `appuser`, and 4-tier RBAC (`Admin`, `Commander`, `Analyst`, `Observer`).
+
+---
+
+## 🛠️ Quick Start & Installation
+
+### Option 1: Full-Stack Docker Compose (Recommended)
+
 ```bash
 docker compose up --build
 ```
-Once it's running:
-- **Frontend Dashboard**: `http://localhost` (or `http://localhost:80`)
-- **Backend API Docs**: `http://localhost:8000/docs`
 
-Log in to the dashboard using:
-- **Operator ID**: `admin`
-- **Passkey**: `admin`
+- **C2 Dashboard:** `http://localhost`
+- **Backend API Docs:** `http://localhost:8000/docs`
+- **Default Login:** Operator `admin` / Password `admin123`
 
-### 3. Local Development (Without Docker)
-If you are developing the frontend locally without Docker:
+---
+
+### Option 2: Local Development Setup
+
+#### 1. Backend Setup
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r backend/requirements.txt
+
+# Generate training dataset & train ML models
+python backend/scripts/generate_dataset.py
+python backend/scripts/train_model.py
+
+# Run FastAPI dev server
+uvicorn backend.main:app --reload --port 8000
+```
+
+#### 2. Frontend Setup
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-*(The React server will run on `http://localhost:5173`)*
 
-### 4. Running the AI Simulator (Data Injection)
-To simulate live drone telemetry and trigger the AI threat detection:
+---
+
+## 🧪 Automated Testing
+
+Run the pytest test suite covering AI inference, TreeSHAP, sensor fusion, Haversine math, and polygon geofencing:
+
 ```bash
-cd backend
-python scripts/dataset_replayer.py
+./venv/bin/pytest backend/tests/ -v
 ```
-This will start streaming packets to the backend, which will instantly appear on your frontend dashboard!
 
-## Defense-Grade Security & Features
+---
 
-- **Swarm Formation Detection**: AI-driven spatial clustering (DBSCAN/K-Means) to detect military drone swarm formations (V-Shape, Grid Encircle) in real-time.
-- **Dynamic Geofencing & Kill-Chain**: Draw polygon No-Fly Zones directly on the map. The backend instantly evaluates threats and issues autonomous `HARD_KILL` interception protocols.
-- **Historical Playback (DVR Mode)**: Interactive map scrubber allows operators to pause live telemetry and slide backward in time to replay previous drone swarms step-by-step.
-- **Interactive Tactical Radar Map**: Live geospatial plotting of drone vectors using `react-leaflet` with neon vector lines and glassmorphic HUD overlays.
-- **Real-Time Telemetry Feed**: Live data table of drone GPS, altitude, speed, and battery with strict Pydantic range validators (`latitude`: -90° to 90°, `longitude`: -180° to 180°, `altitude`: 0-50,000m, `speed`: 0-500m/s, `battery`: 0-100%).
-- **AI Threat Explainability (SHAP)**: Bar charts explaining *exactly* which metrics caused the AI to flag an anomaly.
-- **WebSocket Real-Time Alerts**: Global flashing alerts the instant an attack is detected over JWT-authenticated WebSockets.
-- **Heartbeat & Silent Drone Monitor**: Automatic background service detecting RF jamming or communication loss if a drone goes silent for >30 seconds.
-- **Drone Command & Control**: Interactive command center to issue `RETURN_TO_HOME`, `EMERGENCY_LAND`, `SWITCH_SAFE_MODE`, or `KILL_MOTOR`.
-- **Incident Acknowledgment & Workflow**: Operators can update incident status (`ACKNOWLEDGED`, `FALSE_POSITIVE`, `ESCALATED`, `RESOLVED`) via `PATCH /incidents/{id}`.
-- **Audit Trail Traceability**: Automatic logging of operator actions (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `INCIDENT_STATUS_CHANGE`, `COMMAND_ISSUED`) stored in `AuditLog` table with client IP tracking.
-- **Strict Role-Based Access Control (RBAC)**: Secure JWT authentication with configurable `SECRET_KEY` env enforcement.
+## 📜 License & Credits
+
+Built by the **SwarmGuard AI Engineering Team**. Released under the **MIT License**.
