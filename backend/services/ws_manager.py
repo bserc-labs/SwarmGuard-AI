@@ -40,6 +40,18 @@ class ConnectionManager:
                     print(f"Error processing pubsub message: {e}")
 
     async def broadcast(self, message: dict):
-        await broadcast_client.publish("swarmguard_alerts", json.dumps(message))
+        """Safely broadcast alerts to all WebSocket clients with pub/sub fallback."""
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+        try:
+            if broadcast_client.is_connected:
+                await broadcast_client.publish("swarmguard_alerts", json.dumps(message))
+        except Exception:
+            pass
+
 
 ws_manager = ConnectionManager()
