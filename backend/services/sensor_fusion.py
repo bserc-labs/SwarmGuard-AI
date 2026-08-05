@@ -18,21 +18,31 @@ class MultiSensorFusionEngine:
         # 1. Run Kalman Trajectory Prediction
         pred_lat, pred_lon, dev_m, kalman_anomaly = kalman_filter.predict_and_update(drone_id, lat, lon)
         
-        # 2. Simulate / Extract Multi-Sensor Data Signals
-        # 3D AESA Radar Signal (Radar Cross Section RCS in m^2)
-        radar_rcs = round(float(telemetry.get("radar_rcs", random.uniform(0.02, 0.15))), 3) # quadcopter ~0.05m^2, bird ~0.01m^2
-        radar_doppler = round(speed * random.uniform(0.95, 1.05), 1)
+        # 2. Extract / Deterministically Estimate Multi-Sensor Data Signals
+        battery = float(telemetry.get("battery", 80.0))
+
+        # 3D AESA Radar Signal (RCS in m^2: quadcopter ~0.05m^2, bird ~0.012m^2)
+        if "radar_rcs" in telemetry:
+            radar_rcs = round(float(telemetry["radar_rcs"]), 3)
+        else:
+            radar_rcs = round(0.05 if speed > 8.0 or alt > 20.0 else 0.012, 3)
+
+        radar_doppler = round(speed * 0.98, 1)
         
-        # RF Spectrum Scanner (2.4GHz / 5.8GHz)
-        rf_frequency = "2.4 GHz" if random.random() > 0.4 else "5.8 GHz"
-        rf_signal_dbm = round(float(telemetry.get("rf_dbm", random.uniform(-85.0, -45.0))), 1)
+        # RF Spectrum Scanner (2.4GHz / 5.8GHz derived from signal profile)
+        rf_frequency = "2.4 GHz" if int(alt + speed) % 2 == 0 else "5.8 GHz"
+        if "rf_dbm" in telemetry:
+            rf_signal_dbm = round(float(telemetry["rf_dbm"]), 1)
+        else:
+            rf_signal_dbm = round(max(-95.0, -30.0 - ((100.0 - battery) * 0.45)), 1)
         
         # Optical AI Camera (YOLOv11 / Vision Transformer)
-        optical_class = "QuadCopter_UAV" if speed > 5 or alt > 10 else "Commercial_Drone"
-        optical_confidence = round(random.uniform(0.88, 0.99), 2)
+        optical_class = "QuadCopter_UAV" if speed > 5.0 or alt > 15.0 else "Commercial_Drone"
+        optical_confidence = round(min(0.98, max(0.70, 0.70 + (alt / 600.0))), 2)
         
-        # Acoustic Array (Propeller Frequency Spectrum)
-        acoustic_freq_hz = round(random.uniform(180.0, 350.0), 1) # Typical quadcopter propeller harmonics
+        # Acoustic Array (Propeller Frequency Spectrum derived from speed/RPM)
+        acoustic_freq_hz = round(180.0 + (speed * 4.5), 1)
+
         
         # 3. Compute Sensor Fusion Confidence Score (Weighted Aggregation)
         # Weights: Radar 30%, RF 25%, Optical 25%, Acoustic 10%, Kalman Trajectory 10%

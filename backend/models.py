@@ -17,29 +17,31 @@ class TelemetryLog(Base):
     __tablename__ = "telemetry_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    drone_id = Column(String)
+    drone_id = Column(String, index=True)
     latitude = Column(Float)
     longitude = Column(Float)
     altitude = Column(Float)
     speed = Column(Float)
     battery = Column(Float)
     packet_sequence = Column(Integer)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class Incident(Base):
     __tablename__ = "incidents"
 
     id = Column(Integer, primary_key=True, index=True)
-    drone_id = Column(String)
+    drone_id = Column(String, index=True)
     attack_type = Column(String)
     anomaly_score = Column(Float)
     threat_level = Column(Integer)
-    severity = Column(String)
+    severity = Column(String, index=True)
     shap_values = Column(JSON)
     explanation = Column(String)
-    created_at = Column(DateTime, server_default=func.now())
-    status = Column(String, default="OPEN")  # OPEN, ACKNOWLEDGED, FALSE_POSITIVE, ESCALATED, RESOLVED
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    status = Column(String, default="OPEN", index=True)  # OPEN, ACKNOWLEDGED, FALSE_POSITIVE, ESCALATED, RESOLVED
+
 
 
 class Drone(Base):
