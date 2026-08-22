@@ -167,9 +167,11 @@ class IncidentEngine:
         Updates the threat score and updated_at timestamp of an ongoing incident
         to prevent duplicate spam while keeping the active incident fresh.
         """
+        # Matches on drone, not attack_type, to mirror the suppression rule:
+        # one ongoing event per drone, whose classification may change as the
+        # attack's signature develops.
         query = db.query(Incident).filter(
             Incident.drone_id == drone_id,
-            Incident.attack_type == attack_type,
             Incident.status.in_(["NEW", "OPEN", "ACKNOWLEDGED", "INVESTIGATING", "CONTAINED"])
         )
         if organization_id is not None:
@@ -180,11 +182,16 @@ class IncidentEngine:
             # Escalate threat score if the new one is higher
             if threat_score > incident.threat_score:
                 incident.threat_score = threat_score
+                # The label follows the worst reading seen so far. A jamming
+                # event that decays into a bare altitude violation should stay
+                # filed as jamming, not be relabelled by its own aftermath.
+                if attack_type and attack_type != incident.attack_type:
+                    incident.attack_type = attack_type
                 # Re-evaluate severity
                 incident.severity = alert_service.generate_alert_severity(threat_score)
                 # Re-evaluate priority
                 incident.priority = priority_service.calculate_priority(incident.threat_score, incident.anomaly_score, 1)
-            
+
             incident.updated_at = datetime.utcnow()
             db.commit()
 
