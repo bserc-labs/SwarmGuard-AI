@@ -1,0 +1,44 @@
+{
+    "model_version": "v2",
+    "training_timestamp": "2026-08-22T18:06:29.592065",
+    "dataset_source": "model_train/dataset/final_training_dataset_v2.csv",
+    "dataset_description": "Real PX4 ULog flights (Live GPS Spoofing and Jamming dataset), confound-cleaned by diagnostics/16_apply_confound_fixes.py",
+    "feature_list": [
+        "altitude",
+        "yaw",
+        "speed_change",
+        "yaw_change",
+        "time_delta",
+        "vertical_speed",
+        "gps_acceleration",
+        "gps_speed_error_abs",
+        "gps_speed_error_ratio"
+    ],
+    "algorithm": "RandomForestClassifier",
+    "task": "binary classification",
+    "positive_class": "GPS Spoofing",
+    "scope_limitation": "GPS Spoofing vs Normal only. Ping DoS is excluded: its signal lives in MAVLink link/heartbeat features that TelemetryPacket does not carry, so this model structurally cannot detect it.",
+    "excluded_features_reason": {
+        "roll, roll_change, pitch_change": "not present in TelemetryPacket",
+        "heartbeat_gap, heartbeat_lost, link_data_rate_change": "no link telemetry in ingest schema",
+        "latitude, longitude": "absolute position ties the boundary to the dataset's geography",
+        "battery, speed, pitch, link_data_rate": "dropped upstream as flight-identity confounds (ICC > 0.3)"
+    },
+    "validation_protocol": "leave-one-flight-out (LOFO)",
+    "n_training_rows": 39441,
+    "n_flights": 9,
+    "feature_importances": {
+        "altitude": 0.2821,
+        "yaw": 0.2134,
+        "yaw_change": 0.1191,
+        "speed_change": 0.0832,
+        "gps_speed_error_ratio": 0.0804,
+        "gps_acceleration": 0.0796,
+        "gps_speed_error_abs": 0.0747,
+        "vertical_speed": 0.062,
+        "time_delta": 0.0055
+    },
+    "python_version": "3.14.7",
+    "sklearn_version": "1.9.0",
+    "feature_count": 9
+}

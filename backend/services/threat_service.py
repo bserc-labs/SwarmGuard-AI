@@ -1,6 +1,10 @@
 import math
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Union
+
+import pandas as pd
+
+from utils.logger import logger
+
 
 class MappingStrategy(ABC):
     """
@@ -26,7 +30,7 @@ class PiecewiseLinearStrategy(MappingStrategy):
         (1.00, 100.0)
     ]
 
-    def __init__(self, points: List[Tuple[float, float]] = None):
+    def __init__(self, points: list[tuple[float, float]] = None):
         # Sort points by anomaly score (first element of tuple)
         self.points = sorted(points if points is not None else self.DEFAULT_POINTS, key=lambda p: p[0])
         self._validate_points()
@@ -109,7 +113,7 @@ class ThreatScoreEngine:
             raise TypeError("strategy must be an instance of MappingStrategy")
         self._strategy = strategy
 
-    def get_threat_score(self, anomaly_score: Union[int, float], round_output: bool = True) -> Union[int, float]:
+    def get_threat_score(self, anomaly_score: float, round_output: bool = True) -> int | float:
         """
         Convert an AI anomaly score to a standardized Threat Score (0 - 100).
         """
@@ -125,7 +129,7 @@ class ThreatScoreEngine:
         
         return final_score
 
-    def _validate_input(self, anomaly_score: Union[int, float]):
+    def _validate_input(self, anomaly_score: float):
         if not isinstance(anomaly_score, (int, float)):
             raise TypeError(
                 f"Anomaly score must be a number (float or int), got {type(anomaly_score).__name__}"
@@ -167,50 +171,77 @@ class ThreatIntelligenceService:
         base_exp = explanations.get(attack_type, "Unusual anomalous behavior detected in telemetry data.")
         return f"{severity} severity alert: {base_exp} Immediate operator review recommended."
 
-    def compute_real_shap(self, telemetry: dict = None) -> List[dict]:
-        """Compute real TreeSHAP feature importance values using trained IsolationForest."""
+    def compute_real_shap(self, telemetry_history: list[dict] | None = None) -> list[dict]:
+        """Compute real TreeSHAP feature attributions for the latest packet.
+
+        Takes a telemetry *history* window, not a single packet: every feature
+        the model consumes is a rolling statistic (variance, drift, delta), so
+        a lone packet cannot produce a defined feature vector.
+
+        Returns [] when it cannot produce a real attribution. It does not
+        substitute placeholder numbers -- the previous implementation caught
+        every exception and returned a hardcoded triple, so an unexplainable
+        detection was indistinguishable from an explained one on the
+        dashboard. An empty list is honest; invented importances are not.
+        """
+        if not telemetry_history:
+            return []
+
+        import numpy as np
+        import shap
+
+        from services.ai_service import ai_service
+
+        ai_service._lazy_load_model()
+        if ai_service.model is None or ai_service.scaler is None:
+            logger.warning("SHAP attribution skipped: model unavailable.")
+            return []
+
         try:
-            import shap
-            import numpy as np
-            from services.ai_service import ai_service
-            from models_ml.preprocess import extract_features
+            df = pd.DataFrame(telemetry_history)
+            feature_cols = ai_service.engineer.get_feature_columns()
+            df_features = ai_service.engineer.transform(df)
+            latest = df_features[feature_cols].iloc[[-1]].values
 
-            if not ai_service.anomaly_detector or not ai_service.scaler:
-                ai_service.load_models()
+            if pd.isna(latest).any():
+                # Warm-up: not enough history for the rolling window yet.
+                return []
 
-            if ai_service.anomaly_detector and ai_service.scaler and telemetry:
-                explainer = shap.TreeExplainer(ai_service.anomaly_detector)
-                features = extract_features(telemetry)
-                features_scaled = ai_service.scaler.transform(features)
-                
-                shap_vals = explainer.shap_values(features_scaled)
-                vals = np.abs(shap_vals[0])
-                feature_names = [
-                    "latitude", "longitude", "altitude", "speed",
-                    "battery", "packet_sequence", "speed_alt_ratio", "battery_drain_rate"
-                ]
-                
-                total = float(np.sum(vals)) + 1e-6
-                contributions = []
-                for name, v in zip(feature_names, vals):
-                    contributions.append({
-                        "feature": name,
-                        "importance": round(float(v / total), 2)
-                    })
-                contributions.sort(key=lambda x: x["importance"], reverse=True)
-                return contributions[:3]
-        except Exception:
-            pass
+            scaled = ai_service.scaler.transform(latest)
+            explainer = shap.TreeExplainer(ai_service.model)
+            shap_vals = explainer.shap_values(scaled)
 
-        # Deterministic fallback if SHAP engine is initializing
-        return [
-            {"feature": "speed", "importance": 0.48},
-            {"feature": "altitude", "importance": 0.32},
-            {"feature": "battery_drain_rate", "importance": 0.20}
-        ]
+            vals = np.abs(np.asarray(shap_vals)[0]).ravel()
+            total = float(np.sum(vals))
+            if total <= 0:
+                return []
 
-    def generate_alert(self, is_anomaly: bool, anomaly_score: float, attack_type: str, telemetry: dict = None) -> dict:
-        """Alert generation combining all components."""
+            # Feature names come from the loaded model's own column list, so a
+            # retrained model with different features cannot silently mislabel
+            # its attributions against a stale hardcoded list.
+            contributions = [
+                {"feature": name, "importance": round(float(v / total), 4)}
+                for name, v in zip(feature_cols, vals)
+            ]
+            contributions.sort(key=lambda x: x["importance"], reverse=True)
+            return contributions[:3]
+        except Exception as e:
+            logger.error(f"SHAP attribution failed: {e}", exc_info=True)
+            return []
+
+    def generate_alert(
+        self,
+        is_anomaly: bool,
+        anomaly_score: float,
+        attack_type: str,
+        telemetry_history: list[dict] | None = None,
+    ) -> dict:
+        """Alert generation combining all components.
+
+        `telemetry_history` is the rolling window the attribution is computed
+        over. When it is absent or too short, `shap_top3` comes back empty
+        rather than filled with placeholders.
+        """
         if not is_anomaly:
             return {
                 "is_anomaly": False,
@@ -225,7 +256,7 @@ class ThreatIntelligenceService:
         threat_level = self.calculate_threat_score(anomaly_score, attack_type)
         severity = self.map_severity(threat_level)
         explanation = self.get_human_readable_explanation(attack_type, severity)
-        shap_top3 = self.compute_real_shap(telemetry)
+        shap_top3 = self.compute_real_shap(telemetry_history)
         
         return {
             "is_anomaly": True,

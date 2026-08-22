@@ -1,7 +1,132 @@
+# ==============================================================================
+# General
+# ==============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .env
-backend/.venv
-frontend/node_modules
-frontend/dist
-__pycache__
-*.db
-backend/*.db
+.env.local
+.env.*.local
+
+# ==============================================================================
+# Python / FastAPI (Backend)
+# ==============================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# FastAPI / SQLAlchemy specific
+alembic.ini
+*.sqlite3
+
+# ==============================================================================
+# Node.js / Vite / React (Frontend)
+# ==============================================================================
+# dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/build
+/dist
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# misc
+.eslintcache
+.stylelintcache
+.prettiercache
+
+# Vite specific
+dist-ssr
+*.local
+
+# Ablation / experiment model registries. Only the registered model version
+# named by MODEL_VERSION belongs in the repo; reproduce ablations with
+# SWARMGUARD_FEATURE_SET=<name> python model_train/scripts/train_deployable_v2.py
+backend/models_ml/v2_*/
+
+# --- Training data and research environments ---------------------------
+# The raw flight corpus is 2.4 GB with individual .ulg/.tlog files over
+# GitHub's 100 MB file limit. It is third-party data (Live GPS Spoofing and
+# Jamming dataset) and belongs in DVC / release assets, not in git history.
+# The training scripts and the resulting registered model are tracked; the
+# inputs are not. See model_train/README for how to obtain the corpus.
+model_train/dataset/
+model_train/uav_venv/
+model_train/reports/
+*.ulg
+*.tlog
+
+# Large generated artifacts
+backend/data/*.csv
+project_dump*.txt

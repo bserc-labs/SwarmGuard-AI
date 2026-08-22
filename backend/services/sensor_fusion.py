@@ -1,14 +1,31 @@
-import random
-from typing import Dict, Any
+from typing import Any
+
 from services.kalman_service import kalman_filter
 
+
 class MultiSensorFusionEngine:
+    """Fusion scaffold for radar / RF / optical / acoustic inputs.
+
+    **No physical sensor is connected.** Read the code before quoting this
+    module's output as a sensor reading.
+
+    Each channel accepts a real measurement if the caller supplies one
+    (`radar_rcs`, `rf_dbm`), and otherwise *derives a stand-in value from the
+    telemetry packet* -- radar cross-section from speed and altitude, RF signal
+    strength from battery level, optical class from speed, acoustic frequency
+    from speed. `TelemetryPacket` carries none of those fields, so on the live
+    path every channel is synthesised.
+
+    That makes this a working fusion and weighting layer waiting for hardware,
+    not a multi-sensor detection capability. The Kalman trajectory filter is
+    the one channel operating on real data, because position is genuinely
+    ingested.
+
+    Keep the distinction visible: a fused confidence score built from four
+    formulas over one telemetry packet is a restatement of that packet, not
+    corroboration of it.
     """
-    Defense-Grade Sensor Fusion Engine.
-    Fuses Radar + RF Scanner + Optical AI (YOLO) + Acoustic Array + Kalman Trajectory Filter
-    to eliminate false positives (e.g. Birds) and compute fused threat confidence score.
-    """
-    def fuse_sensors(self, telemetry: Dict[str, Any]) -> Dict[str, Any]:
+    def fuse_sensors(self, telemetry: dict[str, Any]) -> dict[str, Any]:
         drone_id = telemetry.get("drone_id", "drone_unknown")
         lat = float(telemetry.get("latitude", 0.0))
         lon = float(telemetry.get("longitude", 0.0))

@@ -1,0 +1,9 @@
+{
+    "algorithm": "RandomForestClassifier",
+    "n_estimators": 150,
+    "max_depth": 12,
+    "class_weight": "balanced_subsample",
+    "random_seed": 42,
+    "preprocessing_configuration": "StandardScaler",
+    "feature_engineering_configuration": "per-drone diffs + haversine GPS kinematics"
+}

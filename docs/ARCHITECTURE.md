@@ -8,7 +8,31 @@
 
 ## Executive Overview
 
-SwarmGuard AI is a real-time, defense-grade Counter-UAS (Unmanned Aerial System) Command & Control (C2) platform. It fuses multi-sensor telemetry (3D AESA Radar, RF Spectrum Analyzer, Optical AI YOLO, Acoustic Array, 3D Kalman Filter), detects airborne cyber threats via trained Machine Learning models (IsolationForest & RandomForest), provides Explainable AI (TreeSHAP) reasoning, and executes autonomous kill-chain mitigation protocols against rogue drone swarms.
+SwarmGuard AI is a real-time Counter-UAS (Unmanned Aerial System) Command &
+Control (C2) platform. It ingests MAVLink telemetry, detects GPS spoofing and
+jamming, raises explainable incidents to an operator dashboard, and provides a
+kill-chain response framework.
+
+**What is real, and what is scaffold** — stated up front because this document
+previously implied capabilities the code does not have:
+
+| Component | Status |
+|---|---|
+| MAVLink / REST telemetry ingest | **Real** |
+| Kinematic guard (deterministic physics detection) | **Real**, live |
+| 3D Kalman trajectory filter | **Real** — operates on ingested position |
+| Multi-tenant isolation, RBAC, audit log | **Real** |
+| Incident lifecycle, WebSocket feed, dashboard | **Real** |
+| ML anomaly model (RandomForest on real PX4 flights) | **Trained, disabled** — LOFO F1 0.086, see README |
+| 3D AESA Radar, RF Spectrum Analyzer, Optical AI (YOLO), Acoustic Array | **Scaffold only — no hardware connected** |
+
+The sensor-fusion engine (`services/sensor_fusion.py`) implements the fusion
+and weighting layer and accepts real measurements if a caller supplies them,
+but `TelemetryPacket` carries no sensor fields, so on the live path radar
+cross-section, RF signal strength, optical class, and acoustic frequency are
+all *derived from the telemetry packet by formula*. A fused confidence score
+built that way restates the packet; it does not corroborate it. Treat it as an
+integration point awaiting hardware.
 
 ---
 
@@ -17,15 +41,19 @@ SwarmGuard AI is a real-time, defense-grade Counter-UAS (Unmanned Aerial System)
 ```mermaid
 graph TD
     A[🛸 Drone Telemetry Source] -->|JSON Stream every 1.5s| B[FastAPI /telemetry/ingest]
-    B -->|Device Security Check| C{Valid API Key?}
-    C -->|No| D[🔴 403 Forbidden]
-    C -->|Yes| E[3D Kalman Trajectory Filter]
-    E --> F[5-Sensor Fusion Engine]
-    F --> G[StandardScaler Normalization]
-    G --> H[IsolationForest Anomaly Detector]
-    H -->|Anomaly Detected?| I[RandomForest Attack Classifier]
-    H -->|Normal Flight| J[🟢 Green / Safe Status]
-    I --> K[TreeSHAP XAI Feature Explainer]
+    B -->|Operator JWT + Device API Key| C{Authenticated?}
+    C -->|No| D[🔴 401 / 403]
+    C -->|Yes| E[Persist to TimescaleDB, commit]
+    E --> E2[Background: detection_pipeline]
+    E2 --> T1[Tier 1: Kinematic Guard - deterministic physics]
+    T1 -->|Violation| K[Incident + violation records]
+    T1 -->|Clean| T2{AI_INCIDENTS_ENABLED?}
+    T2 -->|false - default| J[🟢 Green / Safe Status]
+    T2 -->|true| G[StandardScaler Normalization]
+    G --> H[RandomForest v2 - LOFO F1 0.086, off by default]
+    H -->|Anomaly| K2[TreeSHAP XAI Feature Explainer]
+    H -->|Normal Flight| J
+    K2 --> K
     K --> L[Piecewise/Sigmoid Threat Score Engine]
     L --> M[Geofence Perimeter Engine]
     M --> N[Autonomous Kill-Chain Engine]
@@ -96,12 +124,31 @@ graph LR
 - State Vector: $X = [\text{lat}, \text{lon}, \text{alt}, v_{\text{lat}}, v_{\text{lon}}, v_{\text{alt}}]^T$
 - Constant velocity motion model detects sudden spatial position jumps ($> 150$m deviation) or uncommanded altitude crashes.
 
-### 3.3 Real Machine Learning Inference
-- **IsolationForest:** Trained with `n_estimators=200` and `contamination=0.05` to compute decision scores for unsupervised anomaly detection.
-- **RandomForestClassifier:** Classifies anomalous flight behavior into specific threat vectors (`GPS_SPOOFING`, `JAMMING`, `DOS`, `REPLAY_ATTACK`).
+### 3.3 Detection
+
+**Tier 1 — kinematic guard (`services/kinematic_guard.py`). This is what runs.**
+Deterministic physical-plausibility checks: GNSS-implied ground speed against
+the airframe envelope, GNSS speed against airframe-reported speed, climb rate,
+and satellite-count collapse. No training data, no false positives on
+physically valid flight, and every alert carries observed value, threshold, and
+exceedance factor.
+
+**Tier 2 — ML anomaly model. Trained but disabled** (`AI_INCIDENTS_ENABLED=false`).
+
+- **RandomForestClassifier (v2):** binary GPS Spoofing vs Normal, trained on
+  real PX4 ULog flights. Under leave-one-flight-out validation it scores
+  **F1 0.086 with a 0.862 false-positive rate** — it does not generalize across
+  flights, so it does not raise incidents. Full analysis in the root README.
+- **IsolationForest (v1):** legacy, trained on synthetic data. Retained only so
+  `MODEL_VERSION=v1` remains loadable.
 
 ### 3.4 TreeSHAP Explainability
-- Calculates exact mathematical contribution of each telemetry feature to the threat score, answering *why* a drone was flagged.
+- Calculates the mathematical contribution of each telemetry feature to the
+  model's score, answering *why* a drone was flagged. Applies to Tier 2 only;
+  Tier 1 explains itself through its violation records, which carry the
+  arithmetic rather than an attribution.
+- Attributions are labelled from the loaded model's own feature list, so a
+  retrained model cannot mislabel them against a stale hardcoded list.
 
 ### 3.5 Autonomous Kill-Chain Response
 - Evaluates threat severity, geofence breaches, and signal loss ($> 30$ seconds).
