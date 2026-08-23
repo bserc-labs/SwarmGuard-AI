@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     THREAT_SCORE_MED: float = 60.0
     THREAT_SCORE_HIGH: float = 80.0
 
+    # --- Database connection pool ------------------------------------------
+    #
+    # Ingest consumes two connections per packet -- the request session and the
+    # background detection task's own session, held concurrently. Sized to
+    # clear the 50 req/s ingest rate limit with headroom, and to stay inside
+    # PostgreSQL's default max_connections of 100 for one backend instance.
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 40
+    # Fail fast under saturation instead of holding requests for SQLAlchemy's
+    # 30 s default, which the client times out before and so hides the cause.
+    DB_POOL_TIMEOUT: int = 10
+
     # --- Tier 1: kinematic guard -------------------------------------------
     #
     # Physical limits of the airframe, with margin. These are deliberately set
