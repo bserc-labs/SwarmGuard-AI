@@ -1,0 +1,27 @@
+{
+    "model_version": "v1",
+    "training_timestamp": "2026-08-05T22:11:23.825005",
+    "dataset_source": "data/telemetry_dataset_v1.csv",
+    "feature_list": [
+        "speed_variance",
+        "gps_drift",
+        "altitude_deviation",
+        "battery_discharge_rate",
+        "heading_deviation",
+        "flight_mode_transitions",
+        "satellite_variation",
+        "velocity_consistency"
+    ],
+    "algorithm": "IsolationForest",
+    "selection_evidence": {
+        "IsolationForest_F1": 0.0,
+        "LocalOutlierFactor_F1": 0.0,
+        "OneClassSVM_F1": 0.0
+    },
+    "python_version": "3.14.3",
+    "sklearn_version": "1.9.0",
+    "model_hash_sha256": "3b286a1ebeafac2d5e042037f6bdf1665c20cef5bdac04a3f91289631c98ecaf",
+    "scaler_hash_sha256": "b48b47d34fa19f4ebd3673a435e2869822f4414c3a446fd97d9a97b534b7f1e8",
+    "model_size_bytes": 140777,
+    "feature_count": 8
+}

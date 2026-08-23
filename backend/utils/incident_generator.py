@@ -1,22 +1,22 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import Any
 
 try:
     from services.threat_service import ThreatScoreEngine
-    from utils.severity_mapper import map_severity
     from utils.explanation_engine import ExplanationEngine
     from utils.recommendation_engine import RecommendationEngine
+    from utils.severity_mapper import map_severity
 except ImportError:
     # Enable fallback path routing for standalone script executions
     import sys
     # Parent of backend/utils is backend/ (one level up)
     sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
     from services.threat_service import ThreatScoreEngine
-    from utils.severity_mapper import map_severity
     from utils.explanation_engine import ExplanationEngine
     from utils.recommendation_engine import RecommendationEngine
+    from utils.severity_mapper import map_severity
 
 
 class IncidentGenerator:
@@ -35,7 +35,7 @@ class IncidentGenerator:
         attack_type: str,
         anomaly_score: float,
         status: str = "Active"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generates a complete incident object containing:
         - Incident ID (UUID)
@@ -86,7 +86,7 @@ class IncidentGenerator:
         return incident
 
     @staticmethod
-    def prepare_timeline(incidents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def prepare_timeline(incidents: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Aggregates a list of incidents into a dashboard-ready timeline object,
         grouped by status and featuring high-level threat telemetry.

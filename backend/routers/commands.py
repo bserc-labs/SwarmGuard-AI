@@ -1,104 +1,161 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+"""
+Secure Command Framework — DRY-RUN / OBSERVER MODE
+
+Sprint 7: This module receives, validates, and records command requests.
+It does NOT transmit any physical drone commands.
+"""
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+
 import models
 import schemas
 from database import get_db
-from middleware.auth_middleware import get_operator_user, get_commander_user
-from services.ws_manager import ws_manager
+from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission
+from middleware.rbac import Permissions
+from services.audit_service import audit_service
 from utils.logger import logger
 
 router = APIRouter(prefix="/drones", tags=["commands"])
 
-VALID_COMMANDS = ["RETURN_TO_HOME", "EMERGENCY_LAND", "SWITCH_SAFE_MODE", "KILL_MOTOR", "RESUME_MISSION"]
+VALID_COMMANDS = ["RETURN_TO_HOME", "LAND", "HOLD", "EMERGENCY_LAND", "SWITCH_SAFE_MODE", "RESUME_MISSION"]
+# KILL_MOTOR is explicitly excluded from Sprint 7.
 
-@router.get("", response_model=List[schemas.DroneOut])
-def get_all_drones(db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
-    return db.query(models.Drone).all()
 
-@router.post("/{drone_id}/command", response_model=schemas.CommandOut)
-def issue_drone_command(
-    drone_id: str,
-    cmd_in: schemas.CommandCreate,
-    background_tasks: BackgroundTasks,
+@router.get("", response_model=list[schemas.DroneOut])
+def get_all_drones(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_commander_user)
+    tenant: TenantContext = Depends(require_permission(Permissions.DRONE_READ))
 ):
+    """List all drones belonging to the current tenant."""
+    return db.query(models.Drone).filter(
+        models.Drone.organization_id == tenant.organization_id
+    ).all()
+
+
+@router.post("/{drone_id}/command", response_model=schemas.CommandRequestOut)
+def request_command(
+    drone_id: str,
+    cmd_in: schemas.CommandRequestCreate,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.DRONE_COMMAND_REQUEST))
+):
+    """
+    Submit a command request (DRY-RUN ONLY).
+
+    This endpoint:
+    1. Validates authorization (RBAC).
+    2. Validates drone ownership (tenant isolation).
+    3. Validates command type.
+    4. Records the request with status=PENDING.
+    5. Creates an audit event.
+
+    It does NOT transmit any physical command.
+    """
     if cmd_in.command_type not in VALID_COMMANDS:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid command type. Must be one of: {', '.join(VALID_COMMANDS)}"
         )
 
-    # Find or register drone
-    drone = db.query(models.Drone).filter(models.Drone.drone_id == drone_id).first()
+    # Validate drone belongs to this tenant
+    drone = db.query(models.Drone).filter(
+        models.Drone.drone_id == drone_id,
+        models.Drone.organization_id == tenant.organization_id
+    ).first()
     if not drone:
-        drone = models.Drone(drone_id=drone_id, status="ACTIVE")
-        db.add(drone)
-        db.commit()
-        db.refresh(drone)
+        raise HTTPException(status_code=404, detail="Drone not found in your organization.")
 
-    # Safety Interlocks
-    latest_log = db.query(models.TelemetryLog).filter(models.TelemetryLog.drone_id == drone_id).order_by(models.TelemetryLog.id.desc()).first()
-    
-    if cmd_in.command_type == "KILL_MOTOR" and latest_log and latest_log.altitude > 10:
-        raise HTTPException(status_code=400, detail="SAFETY INTERLOCK: Cannot kill motor. Drone is above 10 meters.")
-    if cmd_in.command_type == "RETURN_TO_HOME" and latest_log and latest_log.altitude <= 0:
-        raise HTTPException(status_code=400, detail="SAFETY INTERLOCK: Cannot return to home. Drone is already grounded.")
-
-    # Update drone status based on command
-    if cmd_in.command_type == "RETURN_TO_HOME":
-        drone.status = "RETURNING"
-    elif cmd_in.command_type in ["EMERGENCY_LAND", "KILL_MOTOR"]:
-        drone.status = "GROUNDED"
-    elif cmd_in.command_type == "RESUME_MISSION":
-        drone.status = "ACTIVE"
-    elif cmd_in.command_type == "SWITCH_SAFE_MODE":
-        drone.status = "SAFE_MODE"
-        
-    drone.last_command = cmd_in.command_type
-
-    # Log command
-    cmd_record = models.DroneCommand(
+    # Safety: Do NOT change drone status. This is a request, not an execution.
+    cmd_record = models.CommandRequest(
+        organization_id=tenant.organization_id,
         drone_id=drone_id,
+        requested_by=tenant.username,
         command_type=cmd_in.command_type,
         reason=cmd_in.reason,
-        issued_by=current_user.username,
-        status="EXECUTED"
+        status="PENDING"  # Always PENDING in dry-run mode
     )
-    
     db.add(cmd_record)
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
+        action="COMMAND_REQUESTED",
+        resource="command_request",
+        target=drone_id,
+        new_state="PENDING",
+        details=f"Type: {cmd_in.command_type}, Reason: {cmd_in.reason}"
+    )
+
     db.commit()
     db.refresh(cmd_record)
 
-    # Broadcast command alert via WebSocket
-    command_broadcast = {
-        "event_type": "DRONE_COMMAND",
-        "drone_id": drone_id,
-        "command_type": cmd_in.command_type,
-        "reason": cmd_in.reason,
-        "issued_by": current_user.username,
-        "status": drone.status
-    }
-    background_tasks.add_task(ws_manager.broadcast, command_broadcast)
-    logger.info(f"Command '{cmd_in.command_type}' issued to drone '{drone_id}' by {current_user.username}")
+    logger.info(f"[DRY-RUN] Command request '{cmd_in.command_type}' for drone '{drone_id}' by {tenant.username} (org:{tenant.organization_id})")
 
     return cmd_record
 
-@router.get("/{drone_id}/commands", response_model=List[schemas.CommandOut])
+
+@router.post("/{drone_id}/command/{command_id}/approve", response_model=schemas.CommandRequestOut)
+def approve_command(
+    drone_id: str,
+    command_id: int,
+    approval: schemas.CommandApproval,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.DRONE_COMMAND_APPROVE))
+):
+    """
+    Approve or reject a command request (DRY-RUN ONLY).
+
+    This validates:
+    - The command exists and belongs to the current tenant.
+    - The command is in PENDING status.
+    - Records approval/rejection and audit event.
+
+    It does NOT transmit any physical command, even if approved.
+    """
+    cmd = db.query(models.CommandRequest).filter(
+        models.CommandRequest.command_id == command_id,
+        models.CommandRequest.drone_id == drone_id,
+        models.CommandRequest.organization_id == tenant.organization_id
+    ).first()
+
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Command request not found.")
+
+    if cmd.status != "PENDING":
+        raise HTTPException(status_code=400, detail=f"Command is already {cmd.status}. Cannot modify.")
+
+    previous_state = cmd.status
+    cmd.status = "APPROVED" if approval.approved else "REJECTED"
+    cmd.approved_by = tenant.username
+    cmd.approved_at = datetime.utcnow()
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
+        action="COMMAND_APPROVAL",
+        resource="command_request", resource_id=str(command_id),
+        target=drone_id,
+        previous_state=previous_state, new_state=cmd.status,
+        reason=approval.reason,
+        details=f"DRY-RUN: Command {cmd.command_type} {'approved' if approval.approved else 'rejected'}. No physical execution."
+    )
+
+    db.commit()
+    db.refresh(cmd)
+
+    logger.info(f"[DRY-RUN] Command {command_id} {cmd.status} by {tenant.username}")
+
+    return cmd
+
+
+@router.get("/{drone_id}/commands", response_model=list[schemas.CommandRequestOut])
 def get_drone_command_history(
     drone_id: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_operator_user)
+    tenant: TenantContext = Depends(require_permission(Permissions.DRONE_READ))
 ):
-    return db.query(models.DroneCommand).filter(models.DroneCommand.drone_id == drone_id).all()
-
-from services.heartbeat_service import check_drone_heartbeats
-
-@router.post("/check-heartbeats")
-def trigger_heartbeat_check(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_operator_user)
-):
-    alerts = check_drone_heartbeats(db)
-    return {"status": "ok", "silent_drones_detected": alerts}
+    """Get command history for a drone (tenant-scoped)."""
+    return db.query(models.CommandRequest).filter(
+        models.CommandRequest.drone_id == drone_id,
+        models.CommandRequest.organization_id == tenant.organization_id
+    ).order_by(models.CommandRequest.created_at.desc()).all()

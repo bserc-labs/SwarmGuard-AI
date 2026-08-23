@@ -1,26 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import timedelta
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from sqlalchemy import or_
+
 import models
 import schemas
 from database import get_db
-from services.auth_service import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from middleware.auth_middleware import get_current_user, get_admin_user
+from services.auth_service import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    create_access_token,
+    verify_password,
+)
+from services.audit_service import audit_service
+from middleware.auth_middleware import get_current_user
+# The shared, Redis-backed limiter. This module previously constructed its own
+# in-memory Limiter, so the login limit was counted separately from every other
+# rate-limited route and was lost on restart.
+from utils.limiter import limiter
 
-limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _log_audit(db: Session, username: str, action: str, ip: str = None):
-    audit = models.AuditLog(username=username, action=action, ip_address=ip)
-    db.add(audit)
+def _log_audit(db: Session, username: str, action: str, ip: str = None, organization_id: int = None):
+    """Log an authentication audit event with the new expanded schema."""
+    audit_service.log(
+        db=db,
+        actor=username,
+        action=action,
+        organization_id=organization_id,
+        resource="auth",
+        resource_id=username,
+        ip_address=ip,
+    )
     db.commit()
 
-
-from sqlalchemy import or_
 
 @router.post("/login", response_model=schemas.TokenResponse)
 @limiter.limit("5/minute")
@@ -37,21 +52,54 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+
     if not verify_password(form_data.password, user.password):
-        _log_audit(db, form_data.username, "LOGIN_FAILED", client_ip)
+        _log_audit(db, form_data.username, "LOGIN_FAILED", client_ip, organization_id=user.organization_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role}, expires_delta=access_token_expires
+        data={
+            "sub": user.username,
+            "role": user.role,
+            "org_id": user.organization_id,
+            # Compared against the DB on every request; see get_current_user.
+            "tv": user.token_version,
+        },
+        expires_delta=access_token_expires
     )
-    
-    _log_audit(db, user.username, "LOGIN_SUCCESS", client_ip)
-    
+
+    _log_audit(db, user.username, "LOGIN_SUCCESS", client_ip, organization_id=user.organization_id)
+
     return {"access_token": access_token, "token_type": "bearer", "role": user.role}
 
+
+@router.post("/logout")
+def logout(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Sign out everywhere.
+
+    JWTs are stateless, so discarding the client copy alone leaves the token
+    valid until it expires. Incrementing token_version invalidates every token
+    issued to this user — including any an attacker already holds — which is the
+    behaviour "sign out" should have on a security console.
+    """
+    current_user.token_version = (current_user.token_version or 0) + 1
+
+    _log_audit(
+        db,
+        current_user.username,
+        "LOGOUT",
+        request.client.host if request.client else None,
+        organization_id=current_user.organization_id,
+    )
+
+    return {"message": "Signed out. All sessions for this account are now invalid."}

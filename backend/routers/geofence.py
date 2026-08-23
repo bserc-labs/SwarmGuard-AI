@@ -1,10 +1,14 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from database import get_db
-import models
-from middleware.auth_middleware import get_operator_user, get_commander_user
 from pydantic import BaseModel
-from typing import List, Optional, Any
+from sqlalchemy.orm import Session
+
+import models
+from database import get_db
+from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission
+from middleware.rbac import Permissions
+from services.audit_service import audit_service
 from utils.logger import logger
 
 router = APIRouter(prefix="/geofence", tags=["geofence"])
@@ -23,34 +27,46 @@ class GeofenceResponse(BaseModel):
     coordinates: Any
     severity: str
     is_active: bool
+    organization_id: int | None = None
 
     class Config:
         from_attributes = True
 
-@router.get("/zones", response_model=List[GeofenceResponse])
-def get_zones(db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
-    """Fetch all active geofence zones."""
-    return db.query(models.GeofenceZone).filter(models.GeofenceZone.is_active == True).all()
+@router.get("/zones", response_model=list[GeofenceResponse])
+def get_zones(
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.GEOFENCE_READ))
+):
+    """Fetch all active geofence zones for the current tenant."""
+    return db.query(models.GeofenceZone).filter(
+        models.GeofenceZone.organization_id == tenant.organization_id,
+        models.GeofenceZone.is_active == True
+    ).all()
 
 @router.post("/zones", response_model=GeofenceResponse)
-def create_zone(zone: GeofenceCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_commander_user)):
+def create_zone(
+    zone: GeofenceCreate,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.GEOFENCE_MANAGE))
+):
     """Create a new restricted geofence zone."""
     try:
-        new_zone = models.GeofenceZone(**zone.model_dump())
+        new_zone = models.GeofenceZone(
+            **zone.model_dump(),
+            organization_id=tenant.organization_id
+        )
         db.add(new_zone)
-        db.commit()
-        db.refresh(new_zone)
-        
-        # Audit log
-        audit = models.AuditLog(
-            username=current_user.username,
+
+        audit_service.log_from_context(
+            db=db, tenant=tenant,
             action="CREATE_GEOFENCE",
-            target=zone.name,
+            resource="geofence_zone", resource_id=zone.name,
+            new_state="ACTIVE",
             details=f"Type: {zone.zone_type}"
         )
-        db.add(audit)
         db.commit()
-        
+        db.refresh(new_zone)
+
         return new_zone
     except Exception as e:
         db.rollback()
@@ -58,22 +74,28 @@ def create_zone(zone: GeofenceCreate, db: Session = Depends(get_db), current_use
         raise HTTPException(status_code=400, detail="Failed to create geofence zone. Name may already exist.")
 
 @router.delete("/zones/{zone_id}")
-def delete_zone(zone_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_commander_user)):
-    """Deactivate or remove a geofence zone."""
-    zone = db.query(models.GeofenceZone).filter(models.GeofenceZone.id == zone_id).first()
+def delete_zone(
+    zone_id: int,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.GEOFENCE_MANAGE))
+):
+    """Deactivate or remove a geofence zone (tenant-scoped)."""
+    zone = db.query(models.GeofenceZone).filter(
+        models.GeofenceZone.id == zone_id,
+        models.GeofenceZone.organization_id == tenant.organization_id
+    ).first()
     if not zone:
         raise HTTPException(status_code=404, detail="Zone not found")
-    
+
     zone.is_active = False
-    
-    # Audit log
-    audit = models.AuditLog(
-        username=current_user.username,
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
         action="DEACTIVATE_GEOFENCE",
+        resource="geofence_zone", resource_id=str(zone_id),
         target=zone.name,
-        details=""
+        previous_state="ACTIVE", new_state="INACTIVE",
     )
-    db.add(audit)
     db.commit()
-    
+
     return {"status": "success", "message": f"Zone {zone.name} deactivated."}

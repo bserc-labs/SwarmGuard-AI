@@ -1,269 +1,310 @@
 @import "tailwindcss";
 
-/* ===== DESIGN SYSTEM: SwarmGuard AI ===== */
+/* ==========================================================================
+   SwarmGuard AI — design tokens
+
+   A calm, high-density operations console. The palette is deliberately narrow:
+   graphite surfaces carry the layout, cyan marks only what is active or
+   selected, and amber/red are reserved for states the backend actually
+   reports as degraded or critical. Colour is information here, not decoration.
+   ========================================================================== */
 
 @theme {
-  /* Background & Surface */
-  --color-sg-bg: #0e1417;
-  --color-sg-surface: #1a2123;
-  --color-sg-surface-low: #161d1f;
-  --color-sg-surface-high: #242b2d;
-  --color-sg-surface-highest: #2f3638;
-  --color-sg-surface-dim: #080f11;
+  /* --- surfaces: a graphite ramp, slightly cool ------------------------- */
+  --color-surface-base: #0f1214;
+  --color-surface-sunken: #0a0c0e;
+  --color-surface-raised: #161a1e;
+  --color-surface-overlay: #1c2126;
+  --color-surface-hover: #22282e;
+  --color-surface-active: #2a3138;
 
-  /* Primary Accent (Cyan) */
-  --color-sg-primary: #00d9ff;
-  --color-sg-primary-soft: #afecff;
-  --color-sg-primary-dark: #003641;
-  --color-sg-primary-container: #005b6c;
+  /* --- borders --------------------------------------------------------- */
+  --color-line: #242a30;
+  --color-line-strong: #333b43;
+  --color-line-subtle: #1b2025;
 
-  /* Secondary (Steel Blue) */
-  --color-sg-secondary: #b4c5ff;
-  --color-sg-secondary-container: #0053db;
+  /* --- text: 4.5:1 or better on surface-base --------------------------- */
+  --color-content: #e4e8ec;
+  --color-content-muted: #9aa4b0;
+  --color-content-dim: #6c7783;
+  --color-content-inverse: #0f1214;
 
-  /* Tertiary (Amber/Gold) */
-  --color-sg-tertiary: #ffdeaa;
-  --color-sg-tertiary-container: #ffbb2a;
+  /* --- accent: a restrained teal-cyan, not a neon ----------------------- */
+  --color-accent: #4fa8c5;
+  --color-accent-bright: #6fc0d9;
+  --color-accent-dim: #2d6a80;
+  --color-accent-wash: #14282f;
 
-  /* Error/Danger */
-  --color-sg-error: #ffb4ab;
-  --color-sg-error-container: #93000a;
-  --color-sg-error-dark: #690005;
+  /* --- semantic: earned states only ------------------------------------ */
+  --color-critical: #e05a52;
+  --color-critical-wash: #2e1613;
+  --color-warning: #d99a3e;
+  --color-warning-wash: #2b2113;
+  --color-nominal: #4d9e6a;
+  --color-nominal-wash: #14251a;
+  --color-neutral: #7c8794;
+  --color-neutral-wash: #1c2126;
 
-  /* Text */
-  --color-sg-text: #dde4e6;
-  --color-sg-text-muted: #bbc9ce;
-  --color-sg-text-dim: #859398;
+  /* --- type: system stacks, no external font requests ------------------ */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 
-  /* Borders */
-  --color-sg-border: rgba(255, 255, 255, 0.08);
-  --color-sg-border-top: rgba(255, 255, 255, 0.15);
-  --color-sg-outline: #3c494d;
-
-  /* Fonts */
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "Courier Prime", ui-monospace, monospace;
-
-  /* Shadows */
-  --shadow-glow-cyan: 0 0 20px rgba(0, 217, 255, 0.3);
-  --shadow-glow-cyan-lg: 0 0 35px rgba(0, 217, 255, 0.5);
-  --shadow-glow-red: 0 0 15px rgba(255, 180, 171, 0.15);
+  --radius-panel: 6px;
+  --radius-control: 5px;
+  --radius-chip: 4px;
 }
 
-/* ===== BASE STYLES ===== */
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
+  margin: 0;
   font-family: var(--font-sans);
-  background-color: var(--color-sg-bg);
-  color: var(--color-sg-text);
+  font-size: 14px;
+  line-height: 1.55;
+  background-color: var(--color-surface-base);
+  color: var(--color-content);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== GLASS MORPHISM ===== */
-@utility glass-card {
-  background: rgba(14, 20, 23, 0.6);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--color-sg-border);
-  border-top-color: var(--color-sg-border-top);
-  border-radius: 12px;
+/* Digits that sit in columns must not jitter as values update. */
+.tabular,
+table,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
 }
 
-@utility glass-panel {
-  background: rgba(26, 33, 35, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 1px solid rgba(255, 255, 255, 0.04);
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
-@utility glass-input {
-  background: rgba(14, 20, 23, 0.8);
-  border: 1px solid var(--color-sg-outline);
-  border-radius: 8px;
-  color: var(--color-sg-text);
-  transition: all 0.3s ease;
-  &:focus {
-    border-color: var(--color-sg-primary);
-    box-shadow: 0 0 12px rgba(0, 217, 255, 0.15);
-    outline: none;
-  }
-}
+/* ==========================================================================
+   Focus — every interactive element must show it
+   ========================================================================== */
 
-@utility primary-glow {
-  box-shadow: var(--shadow-glow-cyan);
-  transition: all 0.3s ease;
-  &:hover {
-    box-shadow: var(--shadow-glow-cyan-lg);
-    transform: translateY(-1px);
-  }
-}
-
-@utility glow-cyan {
-  box-shadow: 0 0 15px rgba(0, 217, 255, 0.1);
-}
-
-@utility glow-red {
-  box-shadow: var(--shadow-glow-red);
-}
-
-/* ===== GRID BACKGROUND ===== */
-.grid-bg {
-  background-image:
-    linear-gradient(rgba(0, 217, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 217, 255, 0.03) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-
-/* ===== ANIMATIONS ===== */
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
-}
-
-@keyframes pulse-red {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 180, 171, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(255, 180, 171, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 180, 171, 0); }
-}
-
-@keyframes pulse-cyan {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-@keyframes shine {
-  to { background-position: 200% center; }
-}
-
-@keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-}
-
-@keyframes glitch {
-  0%, 100% { text-shadow: 2px 0 #00d9ff, -2px 0 #ff4444; }
-  25% { text-shadow: -2px -2px #00d9ff, 2px 2px #ff4444; }
-  50% { text-shadow: 2px 2px #00d9ff, -2px -2px #ff4444; }
-  75% { text-shadow: -2px 0 #00d9ff, 2px 0 #ff4444; }
-}
-
-/* Utility Animation Classes */
-.animate-scanline::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, transparent, rgba(0, 217, 255, 0.05), transparent);
-  animation: scanline 8s linear infinite;
-  pointer-events: none;
-}
-
-.animate-pulse-red {
-  animation: pulse-red 2s infinite;
-}
-
-.animate-pulse-cyan {
-  animation: pulse-cyan 2s ease-in-out infinite;
-}
-
-.shimmer-text {
-  background: linear-gradient(90deg, #afecff 0%, #00d9ff 50%, #afecff 100%);
-  background-size: 200% auto;
-  color: transparent;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shine 4s linear infinite;
-}
-
-.animate-fade-in {
-  animation: fade-in 0.5s ease-out forwards;
-}
-
-.animate-float {
-  animation: float 3s ease-in-out infinite;
-}
-
-.animate-glitch {
-  animation: glitch 1s infinite;
-}
-
-/* Radar Sweep */
-.radar-scan {
-  position: relative;
-  overflow: hidden;
-  border-radius: 50%;
-}
-
-.radar-scan::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 200%;
-  height: 200%;
-  background: conic-gradient(from 0deg, transparent 0%, rgba(0, 217, 255, 0.2) 20%, transparent 40%);
-  transform-origin: center center;
-  animation: rotate 4s linear infinite;
-  margin-top: -100%;
-  margin-left: -100%;
-}
-
-/* ===== SCROLLBAR ===== */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--color-sg-bg);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--color-sg-outline);
+:focus-visible {
+  outline: 2px solid var(--color-accent-bright);
+  outline-offset: 2px;
   border-radius: 3px;
 }
 
+/* Only suppress the ring for pointer input, never for keyboard. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Skip link, revealed on keyboard focus. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 200;
+  padding: 0.6rem 1rem;
+  background: var(--color-surface-overlay);
+  color: var(--color-content);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-control);
+}
+.skip-link:focus {
+  left: 0.75rem;
+  top: 0.75rem;
+}
+
+/* ==========================================================================
+   Scrollbars — present but quiet
+   ========================================================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 5px;
+  border: 2px solid var(--color-surface-base);
+}
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-sg-primary);
+  background: #454e58;
 }
 
-/* ===== MATERIAL ICONS ===== */
-.material-symbols-outlined {
-  font-family: "Material Symbols Outlined";
-  font-weight: normal;
-  font-style: normal;
-  font-size: 24px;
-  display: inline-block;
-  line-height: 1;
-  text-transform: none;
-  letter-spacing: normal;
-  word-wrap: normal;
-  white-space: nowrap;
-  direction: ltr;
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+/* ==========================================================================
+   Motion — a single subtle transition, and an honest liveness pulse.
+   No scanlines, radar sweeps, glitch, shimmer, or float.
+   ========================================================================== */
+
+@keyframes sg-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.material-symbols-outlined.filled {
-  font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
+.sg-enter {
+  animation: sg-fade-in 140ms ease-out;
 }
 
-/* ===== SKELETON LOADING ===== */
-@keyframes skeleton-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.1; }
+/* Marks a feed that is genuinely receiving data. Never used decoratively. */
+@keyframes sg-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-.skeleton {
-  background: linear-gradient(90deg, var(--color-sg-surface) 25%, var(--color-sg-surface-high) 50%, var(--color-sg-surface) 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s ease-in-out infinite;
-  border-radius: 6px;
+.sg-live-dot {
+  animation: sg-live 2s ease-in-out infinite;
+}
+
+/*
+ * A geofence zone currently containing an aircraft. The dash offset crawls so
+ * the perimeter reads as active rather than merely drawn. Applied only when a
+ * real containment test passes — never as decoration.
+ */
+@keyframes sg-perimeter {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.sg-zone-breached {
+  animation: sg-perimeter 1.4s linear infinite;
+}
+
+/* Skeletons indicate pending requests only. */
+@keyframes sg-skeleton {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.sg-skeleton {
+  background: var(--color-surface-overlay);
+  border-radius: var(--radius-chip);
+  animation: sg-skeleton 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   Leaflet — reskinned to match the console rather than its default light chrome
+   ========================================================================== */
+
+.leaflet-container {
+  background: var(--color-surface-sunken);
+  font-family: var(--font-sans);
+}
+
+.leaflet-control-zoom a {
+  background: var(--color-surface-overlay) !important;
+  color: var(--color-content-muted) !important;
+  border-color: var(--color-line) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: var(--color-surface-hover) !important;
+  color: var(--color-content) !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(15, 18, 20, 0.85) !important;
+  color: var(--color-content-dim) !important;
+  font-size: 10px !important;
+}
+
+.leaflet-control-attribution a {
+  color: var(--color-content-muted) !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--color-surface-overlay);
+  color: var(--color-content);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: none;
+}
+
+.leaflet-popup-content {
+  margin: 10px 12px;
+  font-size: 12px;
+}
+
+/* Dim the basemap so data overlays read as the foreground. */
+.leaflet-tile-pane {
+  filter: grayscale(0.45) brightness(0.62) contrast(1.05);
+}
+
+/* ==========================================================================
+   Form controls
+   ========================================================================== */
+
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-content-dim);
+}
+
+/* Firefox renders these with a light background otherwise. */
+select option {
+  background: var(--color-surface-overlay);
+  color: var(--color-content);
+}
+
+input[type="range"] {
+  accent-color: var(--color-accent);
 }

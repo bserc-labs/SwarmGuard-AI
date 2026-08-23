@@ -12,6 +12,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Mirrors frontend/nginx.conf so dev and production share one origin model.
     proxy: {
       "/api": {
         target: "http://localhost:8000",

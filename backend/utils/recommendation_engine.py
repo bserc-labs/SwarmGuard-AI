@@ -1,6 +1,7 @@
-import os
 import json
-from typing import List, Dict, Any
+import os
+from typing import Any
+
 
 class RecommendationEngine:
     """
@@ -15,7 +16,7 @@ class RecommendationEngine:
         else:
             self.data_dir = data_dir
 
-    def load_attack_data(self, attack_type: str) -> Dict[str, Any]:
+    def load_attack_data(self, attack_type: str) -> dict[str, Any]:
         """Loads the JSON data file for a specific attack type."""
         sanitized_name = os.path.basename(f"{attack_type}.json")
         file_path = os.path.join(self.data_dir, sanitized_name)
@@ -26,7 +27,7 @@ class RecommendationEngine:
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    def generate_recommendations(self, attack_type: str, threat_score: int, severity: str) -> List[str]:
+    def generate_recommendations(self, attack_type: str, threat_score: int, severity: str) -> list[str]:
         """
         Generates mitigation steps combining standard attack playbook instructions
         with dynamic severity-level overrides.

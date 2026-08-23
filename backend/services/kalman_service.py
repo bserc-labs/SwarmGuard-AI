@@ -1,5 +1,6 @@
+
 import numpy as np
-from typing import Dict, Tuple
+
 
 class KalmanTrajectoryFilter:
     """
@@ -30,11 +31,11 @@ class KalmanTrajectoryFilter:
         self.R = np.eye(2) * 0.001
         
         # Drone track histories: drone_id -> state vector X
-        self.tracks: Dict[str, np.ndarray] = {}
+        self.tracks: dict[str, np.ndarray] = {}
         # Drone error covariances: drone_id -> P matrix
-        self.covariances: Dict[str, np.ndarray] = {}
+        self.covariances: dict[str, np.ndarray] = {}
 
-    def predict_and_update(self, drone_id: str, lat: float, lon: float) -> Tuple[float, float, float, bool]:
+    def predict_and_update(self, drone_id: str, lat: float, lon: float) -> tuple[float, float, float, bool]:
         """
         Runs Kalman prediction and measurement update.
         Returns: (predicted_lat, predicted_lon, deviation_distance_meters, is_trajectory_anomaly)

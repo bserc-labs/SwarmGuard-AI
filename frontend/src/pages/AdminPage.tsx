@@ -1,272 +1,381 @@
-import React, { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type Drone } from "@/services/api";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { toast } from 'sonner';
+/**
+ * Fleet control.
+ *
+ * Exposes the two-person command flow the backend implements but that the UI
+ * previously did not surface at all: a request creates a PENDING record, and a
+ * second authorised user approves it. That separation is the point of the
+ * feature, so the page states it plainly.
+ *
+ * Also removed: the "check heartbeats" button, which called
+ * POST /drones/check-heartbeats. No such route exists — heartbeat evaluation is
+ * a server-side background task and cannot be triggered from the client.
+ */
+
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import {
+  api,
+  COMMAND_TYPES,
+  type CommandRequest,
+  type CommandType,
+  type Drone,
+} from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import {
+  DataState,
+  EmptyState,
+  LoadingState,
+  PermissionDeniedState,
+  UnavailableState,
+} from "@/components/ui/DataState";
+import { Icon } from "@/components/ui/Icon";
+import {
+  Button,
+  Chip,
+  Field,
+  Input,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  Select,
+} from "@/components/ui/primitives";
+import { droneStatusTone } from "@/lib/constants";
+import { formatDateTime, humanizeEnum, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
 import { useAuth } from "@/hooks/useAuth";
-import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+
+function commandStatusTone(status: string): "critical" | "warning" | "accent" | "neutral" {
+  switch (status.toUpperCase()) {
+    case "PENDING":
+      return "warning";
+    case "APPROVED":
+      return "accent";
+    case "REJECTED":
+      return "critical";
+    default:
+      return "neutral";
+  }
+}
 
 export default function AdminPage() {
-  const { user, role } = useAuth();
   const queryClient = useQueryClient();
-  const [newDroneId, setNewDroneId] = useState("");
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
 
-  const activeRole = (user?.role || role || "observer").toLowerCase();
-  const isCommander = activeRole === "commander" || activeRole === "admin";
+  const canReadDrones = hasPermission(effectiveRole, Permissions.DRONE_READ);
+  const canRequest = hasPermission(effectiveRole, Permissions.DRONE_COMMAND_REQUEST);
+  const canApprove = hasPermission(effectiveRole, Permissions.DRONE_COMMAND_APPROVE);
 
-  // Fetch real drones from backend
-  const { data: drones = [], isLoading, isError } = useQuery({
+  const [selectedDrone, setSelectedDrone] = useState<string>("");
+  const [commandType, setCommandType] = useState<CommandType>("RETURN_TO_HOME");
+  const [reason, setReason] = useState("");
+
+  const dronesQuery = useQuery({
     queryKey: ["drones"],
     queryFn: () => api.getDrones(),
-    refetchInterval: 5000,
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canReadDrones,
   });
 
-  // Issue command mutation
-  const issueCmdMutation = useMutation({
-    mutationFn: ({ droneId, cmd, reason }: { droneId: string; cmd: string; reason?: string }) =>
-      api.issueCommand(droneId, cmd, reason),
-    onSuccess: (data) => {
-      setActionMessage(`✅ Command '${data.command_type}' issued to ${data.drone_id}`);
-      queryClient.invalidateQueries({ queryKey: ["drones"] });
-      setTimeout(() => setActionMessage(null), 4000);
-      toast.success(`Command '${data.command_type}' issued to ${data.drone_id}`);
-    },
-    onError: (err: any) => {
-      setActionMessage(`❌ Error: ${err.message}`);
-      setTimeout(() => setActionMessage(null), 4000);
-      toast.error(`Error: ${err.message}`);
-    },
+  const commandsQuery = useQuery({
+    queryKey: ["commands", selectedDrone],
+    queryFn: () => api.getDroneCommands(selectedDrone),
+    enabled: canReadDrones && selectedDrone !== "",
+    refetchInterval: POLL_INTERVALS.fleet,
   });
 
-  // Check heartbeats mutation
-  const checkHeartbeatsMutation = useMutation({
-    mutationFn: () => api.checkHeartbeats(),
-    onSuccess: (data) => {
-      setActionMessage(`📡 Heartbeat audit complete: ${data.silent_drones_detected} silent drone(s) detected.`);
-      queryClient.invalidateQueries({ queryKey: ["drones"] });
-      setTimeout(() => setActionMessage(null), 4000);
-      toast.success(`Heartbeat audit complete: ${data.silent_drones_detected} silent drone(s) detected.`);
+  const drones = useMemo(
+    () => [...(dronesQuery.data ?? [])].sort((a, b) => a.drone_id.localeCompare(b.drone_id)),
+    [dronesQuery.data],
+  );
+
+  const invalidateCommands = () =>
+    queryClient.invalidateQueries({ queryKey: ["commands"] });
+
+  const requestCommand = useMutation({
+    mutationFn: () => api.requestCommand(selectedDrone, commandType, reason.trim() || undefined),
+    onSuccess: (command) => {
+      toast.success(
+        `Request #${command.command_id} recorded as ${command.status.toLowerCase()}. It requires approval before it takes effect.`,
+      );
+      setReason("");
+      invalidateCommands();
     },
+    onError: (error: unknown) =>
+      toast.error(error instanceof Error ? error.message : "Could not record the request."),
   });
 
-  useKeyboardShortcuts({
-    enabled: isCommander,
-    onEmergencyLand: () => {
-      if (!isCommander) return;
-      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "EMERGENCY_LAND", reason: "Shortcut override" }));
+  const decide = useMutation({
+    mutationFn: ({ command, approved }: { command: CommandRequest; approved: boolean }) =>
+      api.approveCommand(command.drone_id, command.command_id, approved),
+    onSuccess: (command) => {
+      toast.success(`Request #${command.command_id} ${command.status.toLowerCase()}`);
+      invalidateCommands();
     },
-    onReturnToHome: () => {
-      if (!isCommander) return;
-      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "RETURN_TO_HOME", reason: "Shortcut override" }));
-    },
-    onSafeMode: () => {
-      if (!isCommander) return;
-      drones.forEach((d: Drone) => issueCmdMutation.mutate({ droneId: d.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Shortcut override" }));
-    }
+    onError: (error: unknown) =>
+      toast.error(error instanceof Error ? error.message : "Could not record the decision."),
   });
 
-  const handleAddDrone = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newDroneId.trim() || !isCommander) return;
-    issueCmdMutation.mutate({
-      droneId: newDroneId.trim(),
-      cmd: "RESUME_MISSION",
-      reason: "Initial registration",
-    });
-    setNewDroneId("");
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "ACTIVE":
-        return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-      case "RETURNING":
-        return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
-      case "SAFE_MODE":
-        return "bg-amber-500/10 text-amber-400 border-amber-500/20";
-      case "GROUNDED":
-      case "SILENT_POSSIBLE_JAMMING":
-        return "bg-red-500/10 text-red-400 border-red-500/20 animate-pulse";
-      default:
-        return "bg-gray-500/10 text-gray-400 border-gray-500/20";
-    }
-  };
+  if (!canReadDrones) {
+    return (
+      <>
+        <PageHeader title="Fleet control" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
+    );
+  }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto text-[#dde4e6] font-['Inter'] min-h-screen bg-[#0e1417]">
-      {/* Header */}
-      <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between border-b border-[#ffffff14] pb-4 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[#00d9ff] to-[#afecff]">
-            Drone Command & Tactical Control
-          </h1>
-          <p className="text-[#859398] mt-1 text-sm font-['Courier_Prime'] flex items-center gap-2">
-            AUTHORIZED OPERATOR COMMAND CENTER • 
-            <span className={`px-2 py-0.5 rounded font-mono text-xs border ${
-              isCommander 
-                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                : activeRole === "analyst"
-                ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
-                : "bg-gray-500/20 border-gray-500/40 text-gray-300"
-            }`}>
-              {isCommander ? "🎖️ LEVEL 3: COMMANDER CLEARANCE" : activeRole === "analyst" ? "🔍 LEVEL 2: ANALYST CLEARANCE" : "👁️ LEVEL 1: OBSERVER CLEARANCE"}
-            </span>
-          </p>
+    <>
+      <PageHeader
+        title="Fleet control"
+        description="Request and approve drone commands. Requests are recorded and require a second authorised user to approve."
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
+        {/* Request form */}
+        <div className="flex flex-col gap-4">
+          <Panel>
+            <PanelHeader
+              title="Request a command"
+              description={
+                canRequest
+                  ? "Recorded as pending. It does not actuate until approved."
+                  : undefined
+              }
+            />
+            {!canRequest ? (
+              <PermissionDeniedState
+                compact
+                detail="Requesting commands requires the drone.command.request permission."
+              />
+            ) : (
+              <PanelBody className="flex flex-col gap-3">
+                <Field label="Drone" htmlFor="command-drone">
+                  <Select
+                    id="command-drone"
+                    value={selectedDrone}
+                    onChange={(e) => setSelectedDrone(e.target.value)}
+                  >
+                    <option value="">Select a drone</option>
+                    {drones.map((drone) => (
+                      <option key={drone.id} value={drone.drone_id}>
+                        {drone.drone_id} — {humanizeEnum(drone.status)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Command" htmlFor="command-type">
+                  <Select
+                    id="command-type"
+                    value={commandType}
+                    onChange={(e) => setCommandType(e.target.value as CommandType)}
+                  >
+                    {COMMAND_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {humanizeEnum(type)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field
+                  label="Reason"
+                  htmlFor="command-reason"
+                  hint="Recorded in the audit log alongside your username."
+                >
+                  <Input
+                    id="command-reason"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="Why this command is needed"
+                  />
+                </Field>
+
+                <Button
+                  variant="primary"
+                  disabled={!selectedDrone || requestCommand.isPending}
+                  loading={requestCommand.isPending}
+                  onClick={() => requestCommand.mutate()}
+                >
+                  Submit request
+                </Button>
+
+                <p className="flex items-start gap-2 rounded-control border border-line bg-surface-overlay px-2.5 py-2 text-[11px] leading-relaxed text-content-muted">
+                  <Icon name="info" size={13} className="mt-0.5 shrink-0 text-content-dim" />
+                  <span>
+                    The backend records commands but does not transmit them to the aircraft. This is
+                    an authorization record, not an uplink.
+                  </span>
+                </p>
+              </PanelBody>
+            )}
+          </Panel>
+
+          <Panel>
+            <PanelHeader title="Fleet" description={`${drones.length} registered`} />
+            <DataState
+              isLoading={dronesQuery.isLoading}
+              isError={dronesQuery.isError}
+              error={dronesQuery.error}
+              data={drones}
+              onRetry={() => dronesQuery.refetch()}
+              compact
+              empty={<EmptyState compact icon="drone" title="No drones registered" />}
+            >
+              {(list: Drone[]) => (
+                <ul className="divide-y divide-line-subtle">
+                  {list.map((drone) => (
+                    <li key={drone.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDrone(drone.drone_id)}
+                        aria-pressed={selectedDrone === drone.drone_id}
+                        className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-surface-overlay ${
+                          selectedDrone === drone.drone_id ? "bg-accent-wash" : ""
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <Mono className="text-content">{drone.drone_id}</Mono>
+                          <p className="mt-0.5 text-[11px] text-content-dim">
+                            Last seen {relativeTime(drone.last_seen)}
+                          </p>
+                        </div>
+                        <Chip tone={droneStatusTone(drone.status)}>
+                          {humanizeEnum(drone.status)}
+                        </Chip>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DataState>
+          </Panel>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => checkHeartbeatsMutation.mutate()}
-            disabled={checkHeartbeatsMutation.isPending || !isCommander}
-            className={`transition-all px-3 py-2 rounded flex items-center gap-2 text-xs font-semibold border ${
-              isCommander
-                ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30"
-                : "bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed"
-            }`}
-          >
-            <span className="material-symbols-outlined text-base">monitor_heart</span>
-            Run Heartbeat Audit
-          </button>
-        </div>
-      </div>
-
-      {/* Action Notification Toast */}
-      {actionMessage && (
-        <div className="mb-6 p-4 rounded-lg bg-sg-surface border border-sg-primary/30 text-sm font-mono text-sg-primary animate-fade-in flex items-center justify-between">
-          <span>{actionMessage}</span>
-          <button onClick={() => setActionMessage(null)} className="text-sg-text-dim hover:text-white">✕</button>
-        </div>
-      )}
-
-      {/* Add New Drone Form */}
-      <GlassCard className="mb-6 p-4 border-[#ffffff14]">
-        <form onSubmit={handleAddDrone} className="flex items-center gap-3">
-          <span className="material-symbols-outlined text-sg-primary">add_circle</span>
-          <input
-            type="text"
-            placeholder="Enter new Drone ID (e.g. drone_delta)..."
-            value={newDroneId}
-            onChange={(e) => setNewDroneId(e.target.value)}
-            className="bg-black/30 border border-white/10 rounded px-3 py-2 text-sm font-mono text-sg-text focus:outline-none focus:border-sg-primary flex-1"
+        {/* Command history */}
+        <Panel>
+          <PanelHeader
+            title="Command requests"
+            description={
+              selectedDrone
+                ? `For ${selectedDrone}. Pending requests await approval.`
+                : "Select a drone to view its command history."
+            }
           />
-          <button
-            type="submit"
-            className="bg-sg-primary/20 hover:bg-sg-primary/30 text-sg-primary border border-sg-primary/40 px-4 py-2 rounded text-xs font-semibold font-mono tracking-wider transition-all"
-          >
-            REGISTER DRONE
-          </button>
-        </form>
-      </GlassCard>
 
-      {/* Drones Table */}
-      <GlassCard className="p-0 overflow-hidden border-[#ffffff14]">
-        <div className="overflow-x-auto">
-          {isLoading ? (
-            <div className="p-12 flex justify-center"><LoadingSpinner /></div>
-          ) : isError ? (
-            <div className="p-8 text-center text-red-400 font-mono">Failed to load drones from backend</div>
-          ) : drones.length === 0 ? (
-            <div className="p-12 text-center text-sg-text-dim font-mono">
-              No registered drones found. Send telemetry data or register a drone above.
-            </div>
+          {!selectedDrone ? (
+            <UnavailableState
+              title="No drone selected"
+              detail="Command history is retrieved per drone. Choose one from the fleet list."
+            />
+          ) : commandsQuery.isLoading ? (
+            <LoadingState rows={4} />
           ) : (
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-[#080f11]/80 border-b border-[#ffffff14]">
-                  <th className="p-4 text-xs font-semibold text-[#bbc9ce] uppercase tracking-wider font-['Courier_Prime']">
-                    Drone ID
-                  </th>
-                  <th className="p-4 text-xs font-semibold text-[#bbc9ce] uppercase tracking-wider font-['Courier_Prime']">
-                    Status
-                  </th>
-                  <th className="p-4 text-xs font-semibold text-[#bbc9ce] uppercase tracking-wider font-['Courier_Prime']">
-                    Last Command
-                  </th>
-                  <th className="p-4 text-xs font-semibold text-[#bbc9ce] uppercase tracking-wider font-['Courier_Prime']">
-                    Last Seen
-                  </th>
-                  <th className="p-4 text-xs font-semibold text-[#bbc9ce] uppercase tracking-wider font-['Courier_Prime'] text-right">
-                    Tactical Override Commands
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#ffffff0a]">
-                {drones.map((drone: Drone) => (
-                  <tr key={drone.id} className="hover:bg-[#ffffff05] transition-colors">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <span className="material-symbols-outlined text-[#859398]">flight</span>
-                        <span className="font-medium text-[#dde4e6] font-mono">{drone.drone_id}</span>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2.5 py-1 rounded text-xs font-mono font-semibold border ${getStatusBadge(drone.status)}`}>
-                        {drone.status}
-                      </span>
-                    </td>
-                    <td className="p-4 text-sm text-[#bbc9ce] font-mono">
-                      {drone.last_command || "NONE"}
-                    </td>
-                    <td className="p-4 text-xs text-[#859398] font-mono">
-                      {new Date(drone.last_seen).toLocaleTimeString()}
-                    </td>
-                    <td className="p-4 flex gap-2 justify-end">
-                      {isCommander ? (
-                        <>
-                          <button
-                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "RETURN_TO_HOME", reason: "Operator tactical override" })}
-                            className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/40 transition-all flex items-center gap-1 font-mono"
-                            title="Return to Base"
-                          >
-                            <span className="material-symbols-outlined text-[14px]">home</span>
-                            RTH
-                          </button>
-                          <button
-                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "SWITCH_SAFE_MODE", reason: "Operator risk mitigation" })}
-                            className="px-3 py-1.5 text-xs font-medium rounded bg-[#1a2123] border border-[#ffffff14] text-amber-400 hover:bg-amber-500/20 hover:border-amber-500/40 transition-all flex items-center gap-1 font-mono"
-                            title="Switch to Safe Mode"
-                          >
-                            <span className="material-symbols-outlined text-[14px]">security</span>
-                            Safe Mode
-                          </button>
-                          <button
-                            onClick={() => issueCmdMutation.mutate({ droneId: drone.drone_id, cmd: "EMERGENCY_LAND", reason: "Emergency landing forced" })}
-                            className="px-3 py-1.5 text-xs font-medium rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all flex items-center gap-1 font-mono"
-                            title="Emergency Land"
-                          >
-                            <span className="material-symbols-outlined text-[14px]">warning</span>
-                            E-Land
-                          </button>
-                        </>
-                      ) : (
-                        <span className="px-3 py-1.5 text-xs font-mono text-gray-500 bg-gray-500/10 border border-gray-500/20 rounded flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[14px]">lock</span>
-                          COMMANDER CLEARANCE REQUIRED
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </GlassCard>
+            <DataState
+              isLoading={false}
+              isError={commandsQuery.isError}
+              error={commandsQuery.error}
+              data={commandsQuery.data}
+              onRetry={() => commandsQuery.refetch()}
+              empty={
+                <EmptyState
+                  title="No commands requested"
+                  detail={`Nothing has been requested for ${selectedDrone}.`}
+                />
+              }
+            >
+              {(commands) => (
+                <ul className="divide-y divide-line-subtle">
+                  {[...commands]
+                    .sort(
+                      (a, b) =>
+                        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+                    )
+                    .map((command) => {
+                      const pending = command.status.toUpperCase() === "PENDING";
+                      const selfRequested = command.requested_by === user?.username;
 
-      {/* Keyboard Shortcuts Help */}
-      <GlassCard className="mt-6 p-4 border-[#ffffff14]">
-        <h3 className="text-sm font-semibold text-[#00d9ff] uppercase tracking-wider font-['Courier_Prime'] mb-3">
-          <span className="material-symbols-outlined align-middle mr-2 text-[18px]">keyboard</span>
-          Keyboard Shortcuts
-        </h3>
-        <div className="flex flex-wrap gap-6 text-sm font-mono text-[#bbc9ce]">
-          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + E</span> Emergency Land All</div>
-          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + R</span> Return To Home All</div>
-          <div className="flex items-center"><span className="text-[#dde4e6] font-bold bg-[#ffffff14] px-1.5 py-0.5 rounded mr-2">Alt + S</span> Safe Mode All</div>
-        </div>
-      </GlassCard>
-    </div>
+                      return (
+                        <li key={command.command_id} className="px-4 py-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-[13px] font-medium text-content">
+                                {humanizeEnum(command.command_type)}
+                              </p>
+                              <p className="mt-0.5 flex flex-wrap items-center gap-x-2.5 text-[11px] text-content-dim">
+                                <Mono>#{command.command_id}</Mono>
+                                <span>
+                                  by <Mono className="text-content-muted">{command.requested_by}</Mono>
+                                </span>
+                                <span title={formatDateTime(command.created_at)}>
+                                  {relativeTime(command.created_at)}
+                                </span>
+                              </p>
+                            </div>
+                            <Chip tone={commandStatusTone(command.status)}>
+                              {humanizeEnum(command.status)}
+                            </Chip>
+                          </div>
+
+                          {command.reason ? (
+                            <p className="mt-1.5 text-[12px] text-content-muted">{command.reason}</p>
+                          ) : null}
+
+                          {command.approved_by ? (
+                            <p className="mt-1.5 text-[11px] text-content-dim">
+                              Decided by{" "}
+                              <Mono className="text-content-muted">{command.approved_by}</Mono>
+                              {command.approved_at ? ` ${relativeTime(command.approved_at)}` : ""}
+                            </p>
+                          ) : null}
+
+                          {pending && canApprove ? (
+                            selfRequested ? (
+                              <p className="mt-2 text-[11px] text-warning">
+                                You requested this command. A different authorised user must approve
+                                it.
+                              </p>
+                            ) : (
+                              <div className="mt-2.5 flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  disabled={decide.isPending}
+                                  onClick={() => decide.mutate({ command, approved: true })}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="danger"
+                                  disabled={decide.isPending}
+                                  onClick={() => decide.mutate({ command, approved: false })}
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            )
+                          ) : pending ? (
+                            <p className="mt-2 text-[11px] text-content-dim">
+                              Awaiting approval from a user with the approval permission.
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+            </DataState>
+          )}
+        </Panel>
+      </div>
+    </>
   );
 }

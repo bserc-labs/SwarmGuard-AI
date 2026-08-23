@@ -1,5 +1,6 @@
 import math
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any
+
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate distance in meters between two lat/lng points using Haversine formula."""
@@ -35,7 +36,7 @@ class SwarmFormationDetector:
     swarm formations (V-Shape, Grid Encircle, Leader-Follower, or Dispersed).
     """
 
-    def analyze_swarm(self, drone_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def analyze_swarm(self, drone_list: list[dict[str, Any]]) -> dict[str, Any]:
         valid_drones = [
             d for d in drone_list
             if isinstance(d.get("latitude"), (int, float)) and isinstance(d.get("longitude"), (int, float))

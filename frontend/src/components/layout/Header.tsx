@@ -1,259 +1,316 @@
-import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Incident, type Drone } from "@/services/api";
+/**
+ * Application header.
+ *
+ * The previous version showed a hardcoded "System Online" chip that stayed green
+ * while the socket was closed. Status here comes from two measured sources: the
+ * telemetry feed state, and GET /system/health. When the health request fails,
+ * that is shown as unknown rather than assumed healthy.
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { api, type Drone, type Incident } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { useWebSocketContext } from "@/contexts/WebSocketContext";
+import { FeedStatus } from "@/components/ui/FeedStatus";
+import { Icon } from "@/components/ui/Icon";
+import { Chip, Mono } from "@/components/ui/primitives";
+import { formatUtcClock, humanizeEnum, relativeTime } from "@/lib/format";
+import { severityTone } from "@/lib/constants";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
+import { cn } from "@/lib/utils";
 
-export function Header() {
+function useUtcClock(): string {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return formatUtcClock(now);
+}
+
+/** Closes a popover on outside click. */
+function useDismissOnOutside(onDismiss: () => void, active: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const handler = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onDismiss();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDismiss();
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [active, onDismiss]);
+  return ref;
+}
+
+export function Header({
+  onOpenMobileNav,
+  onToggleRail,
+  railCollapsed,
+}: {
+  onOpenMobileNav: () => void;
+  onToggleRail: () => void;
+  railCollapsed: boolean;
+}) {
   const navigate = useNavigate();
-  const [time, setTime] = useState(new Date());
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLDivElement>(null);
+  const clock = useUtcClock();
+  const { feedState } = useWebSocketContext();
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
 
-  useEffect(() => {
-    const interval = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
-  // Close dropdowns on click outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
-        setIsSearchOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  const searchRef = useDismissOnOutside(() => setSearchOpen(false), searchOpen);
+  const notificationsRef = useDismissOnOutside(() => setNotificationsOpen(false), notificationsOpen);
 
-  // Fetch recent incidents for notifications
-  const { data: incidents = [] } = useQuery({
-    queryKey: ["header-notifications"],
+  const canReadIncidents = hasPermission(effectiveRole, Permissions.INCIDENT_READ);
+  const canReadDrones = hasPermission(effectiveRole, Permissions.DRONE_READ);
+
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents", "header"],
     queryFn: () => api.getIncidents(undefined, 50),
-    refetchInterval: 10_000,
+    refetchInterval: POLL_INTERVALS.incidents,
+    enabled: canReadIncidents,
   });
 
-  // Fetch drones for search
-  const { data: drones = [] } = useQuery({
-    queryKey: ["header-drones"],
+  const dronesQuery = useQuery({
+    queryKey: ["drones", "header"],
     queryFn: () => api.getDrones(),
-    refetchInterval: 10_000,
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canReadDrones && searchOpen,
   });
 
-  const utcString = time.toISOString().slice(11, 19);
-  const unreadCount = incidents.filter(i => i.severity === "CRITICAL" || i.severity === "HIGH").length;
+  const incidents = useMemo(() => incidentsQuery.data ?? [], [incidentsQuery.data]);
+  const drones = useMemo(() => dronesQuery.data ?? [], [dronesQuery.data]);
 
-  // Search Results Filtering
-  const filteredIncidents = searchQuery.trim()
-    ? incidents.filter(
-        i =>
-          i.drone_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          i.attack_type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          i.explanation.toLowerCase().includes(searchQuery.toLowerCase())
-      ).slice(0, 5)
+  const unresolved = useMemo(
+    () =>
+      incidents.filter(
+        (i) =>
+          (i.severity === "CRITICAL" || i.severity === "HIGH") &&
+          i.status !== "RESOLVED" &&
+          i.status !== "CLOSED",
+      ),
+    [incidents],
+  );
+
+  const trimmed = query.trim().toLowerCase();
+  const matchedIncidents: Incident[] = trimmed
+    ? incidents
+        .filter(
+          (i) =>
+            i.drone_id.toLowerCase().includes(trimmed) ||
+            i.attack_type.toLowerCase().includes(trimmed) ||
+            String(i.id) === trimmed,
+        )
+        .slice(0, 5)
     : [];
 
-  const filteredDrones = searchQuery.trim()
-    ? drones.filter(
-        d =>
-          d.drone_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          d.status.toLowerCase().includes(searchQuery.toLowerCase())
-      ).slice(0, 5)
+  const matchedDrones: Drone[] = trimmed
+    ? drones.filter((d) => d.drone_id.toLowerCase().includes(trimmed)).slice(0, 5)
     : [];
 
-  const availableCommands = ["RETURN_TO_HOME", "EMERGENCY_LAND", "SWITCH_SAFE_MODE", "KILL_MOTOR", "RESUME_MISSION"];
-  const filteredCommands = searchQuery.trim()
-    ? availableCommands.filter(c => c.toLowerCase().includes(searchQuery.toLowerCase()))
-    : [];
-
-  const hasSearchResults = filteredIncidents.length > 0 || filteredDrones.length > 0 || filteredCommands.length > 0;
+  const hasResults = matchedIncidents.length > 0 || matchedDrones.length > 0;
 
   return (
-    <header className="h-16 border-b border-white/5 bg-sg-surface-dim/60 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-40">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-line bg-surface-raised px-3 sm:px-4">
+      {/* Mobile menu */}
+      <button
+        type="button"
+        onClick={onOpenMobileNav}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] text-content-muted hover:bg-surface-overlay hover:text-content md:hidden"
+      >
+        <Icon name="menu" size={18} title="Open navigation" />
+      </button>
+
+      {/* Rail toggle (tablet and up) */}
+      <button
+        type="button"
+        onClick={onToggleRail}
+        className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-[5px] text-content-muted hover:bg-surface-overlay hover:text-content md:flex"
+        aria-pressed={railCollapsed}
+      >
+        <Icon
+          name={railCollapsed ? "chevron-right" : "chevron-left"}
+          size={16}
+          title={railCollapsed ? "Expand navigation" : "Collapse navigation"}
+        />
+      </button>
+
       {/* Search */}
-      <div className="relative flex-1 max-w-md" ref={searchRef}>
-        <div className="flex items-center gap-3">
-          <span className="material-symbols-outlined text-sg-text-dim text-xl">search</span>
+      <div ref={searchRef} className="relative min-w-0 flex-1 md:max-w-sm">
+        <div className="flex h-8 items-center gap-2 rounded-[5px] border border-line-strong bg-surface-sunken px-2.5 focus-within:border-accent">
+          <Icon name="search" size={14} className="shrink-0 text-content-dim" />
           <input
-            type="text"
-            placeholder="Search commands, drones, incidents..."
-            value={searchQuery}
+            type="search"
+            value={query}
+            placeholder="Search drones and incidents"
+            aria-label="Search drones and incidents"
             onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setIsSearchOpen(true);
+              setQuery(e.target.value);
+              setSearchOpen(true);
             }}
-            onFocus={() => setIsSearchOpen(true)}
-            className="bg-transparent border-none outline-none text-sm text-sg-text-muted placeholder:text-sg-text-dim/50 w-full"
+            onFocus={() => setSearchOpen(true)}
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content-dim"
           />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery("")} className="text-sg-text-dim hover:text-white text-xs font-mono">
-              CLEAR
-            </button>
-          )}
         </div>
 
-        {/* Search Results Dropdown */}
-        {isSearchOpen && searchQuery.trim() && (
-          <div className="absolute left-0 right-0 mt-2 glass-card p-0 overflow-hidden animate-fade-in shadow-2xl z-50 max-h-96 overflow-y-auto">
-            {!hasSearchResults ? (
-              <div className="p-4 text-center text-sg-text-dim text-xs font-mono">
-                No matching drones, commands, or incidents found
-              </div>
+        {searchOpen && trimmed ? (
+          <div className="sg-enter absolute left-0 right-0 top-full z-40 mt-1.5 max-h-80 overflow-y-auto rounded-[6px] border border-line-strong bg-surface-overlay shadow-xl">
+            {!hasResults ? (
+              <p className="px-3 py-4 text-center text-[12px] text-content-dim">
+                Nothing matches “{query.trim()}”.
+              </p>
             ) : (
-              <div className="divide-y divide-white/5">
-                {/* Drones */}
-                {filteredDrones.length > 0 && (
-                  <div className="p-2">
-                    <div className="text-[10px] font-mono text-sg-primary px-2 py-1 uppercase tracking-wider font-semibold">
-                      Drones
-                    </div>
-                    {filteredDrones.map(d => (
+              <>
+                {matchedDrones.length > 0 && (
+                  <section className="border-b border-line-subtle p-1.5">
+                    <h3 className="px-2 py-1 text-[11px] font-semibold text-content-dim">Drones</h3>
+                    {matchedDrones.map((d) => (
                       <Link
                         key={d.id}
-                        to="/admin"
-                        onClick={() => setIsSearchOpen(false)}
-                        className="flex items-center justify-between p-2 hover:bg-white/5 rounded text-xs transition-colors"
+                        to="/fleet"
+                        onClick={() => setSearchOpen(false)}
+                        className="flex items-center justify-between gap-2 rounded-[4px] px-2 py-1.5 hover:bg-surface-hover"
                       >
-                        <span className="font-mono font-semibold text-sg-text">{d.drone_id}</span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/10 text-sg-primary">
-                          {d.status}
+                        <Mono className="truncate text-content">{d.drone_id}</Mono>
+                        <span className="shrink-0 text-[11px] text-content-muted">
+                          {humanizeEnum(d.status)}
                         </span>
                       </Link>
                     ))}
-                  </div>
+                  </section>
                 )}
-
-                {/* Commands */}
-                {filteredCommands.length > 0 && (
-                  <div className="p-2">
-                    <div className="text-[10px] font-mono text-amber-400 px-2 py-1 uppercase tracking-wider font-semibold">
-                      Tactical Commands
-                    </div>
-                    {filteredCommands.map(cmd => (
+                {matchedIncidents.length > 0 && (
+                  <section className="p-1.5">
+                    <h3 className="px-2 py-1 text-[11px] font-semibold text-content-dim">Incidents</h3>
+                    {matchedIncidents.map((i) => (
                       <Link
-                        key={cmd}
-                        to="/admin"
-                        onClick={() => setIsSearchOpen(false)}
-                        className="flex items-center justify-between p-2 hover:bg-white/5 rounded text-xs transition-colors"
+                        key={i.id}
+                        to="/incidents/$id"
+                        params={{ id: String(i.id) }}
+                        onClick={() => setSearchOpen(false)}
+                        className="flex items-center justify-between gap-2 rounded-[4px] px-2 py-1.5 hover:bg-surface-hover"
                       >
-                        <span className="font-mono text-amber-300 font-semibold">{cmd}</span>
-                        <span className="text-[10px] font-mono text-sg-text-dim">Execute in Management</span>
+                        <span className="min-w-0 truncate text-[12px] text-content">
+                          <Mono className="text-content-muted">#{i.id}</Mono>{" "}
+                          {humanizeEnum(i.attack_type)}
+                        </span>
+                        <Chip tone={severityTone(i.severity)}>{humanizeEnum(i.severity)}</Chip>
                       </Link>
                     ))}
-                  </div>
+                  </section>
                 )}
-
-                {/* Incidents */}
-                {filteredIncidents.length > 0 && (
-                  <div className="p-2">
-                    <div className="text-[10px] font-mono text-red-400 px-2 py-1 uppercase tracking-wider font-semibold">
-                      Incidents
-                    </div>
-                    {filteredIncidents.map(inc => (
-                      <Link
-                        key={inc.id}
-                        to="/incidents"
-                        onClick={() => setIsSearchOpen(false)}
-                        className="flex items-center justify-between p-2 hover:bg-white/5 rounded text-xs transition-colors"
-                      >
-                        <span className="font-mono text-sg-text truncate max-w-[200px]">
-                          #{inc.id} {inc.attack_type} ({inc.drone_id})
-                        </span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-red-500/20 text-red-400">
-                          {inc.severity}
-                        </span>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
+              </>
             )}
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Right Section */}
-      <div className="flex items-center gap-4">
-        {/* System Status */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-semibold">System Online</span>
-        </div>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <FeedStatus state={feedState} showLabel={false} className="sm:hidden" />
+        <FeedStatus state={feedState} className="hidden sm:inline-flex" />
 
-        {/* UTC Clock */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/3">
-          <span className="material-symbols-outlined text-sg-text-dim text-base">schedule</span>
-          <span className="text-xs font-mono text-sg-text-muted tracking-wider">{utcString} UTC</span>
-        </div>
+        <Mono className="hidden text-content-muted lg:inline" data-numeric>
+          {clock}
+        </Mono>
 
-        {/* Notifications */}
-        <div className="relative" ref={dropdownRef}>
-          <button 
-            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className={`relative p-2 rounded-lg transition-colors ${isDropdownOpen ? 'bg-white/10' : 'hover:bg-white/5'}`}
-          >
-            <span className="material-symbols-outlined text-sg-text-muted text-xl">notifications</span>
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-[#080f11]" />
-            )}
-          </button>
+        {canReadIncidents ? (
+          <div ref={notificationsRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setNotificationsOpen((v) => !v)}
+              aria-expanded={notificationsOpen}
+              aria-haspopup="dialog"
+              className={cn(
+                "relative flex h-8 w-8 items-center justify-center rounded-[5px] text-content-muted transition-colors hover:bg-surface-overlay hover:text-content",
+                notificationsOpen && "bg-surface-overlay text-content",
+              )}
+            >
+              <Icon
+                name="bell"
+                size={16}
+                title={`Notifications${unresolved.length ? ` (${unresolved.length} unresolved)` : ""}`}
+              />
+              {unresolved.length > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-critical"
+                />
+              ) : null}
+            </button>
 
-          {/* Dropdown Menu */}
-          {isDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-80 glass-card p-0 overflow-hidden animate-fade-in shadow-2xl origin-top-right">
-              <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between bg-white/5">
-                <span className="text-sm font-semibold tracking-wide text-sg-text">Notifications</span>
-                {unreadCount > 0 && (
-                  <span className="text-[10px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded uppercase font-bold tracking-wider">
-                    {unreadCount} Unread
-                  </span>
-                )}
-              </div>
-              
-              <div className="max-h-96 overflow-y-auto">
-                {!incidents || incidents.length === 0 ? (
-                  <div className="p-6 text-center text-sg-text-dim text-sm">
-                    No recent notifications
-                  </div>
-                ) : (
-                  incidents.slice(0, 5).map((incident: Incident) => (
-                    <div key={incident.id} className="p-3 border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer group">
-                      <div className="flex items-start gap-3">
-                        <span className={`material-symbols-outlined text-lg mt-0.5 ${incident.severity === 'CRITICAL' ? 'text-red-500' : incident.severity === 'HIGH' ? 'text-amber-500' : 'text-sg-primary'}`}>
-                          {incident.severity === 'CRITICAL' ? 'warning' : 'info'}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-sg-text mb-1 truncate">{incident.attack_type}</p>
-                          <p className="text-[11px] text-sg-text-muted line-clamp-2 leading-relaxed">
-                            Anomaly detected on Drone ID: <span className="font-mono text-sg-primary">{incident.drone_id}</span>
+            {notificationsOpen ? (
+              <div
+                role="dialog"
+                aria-label="Recent incidents"
+                className="sg-enter absolute right-0 top-full z-40 mt-1.5 w-[min(20rem,calc(100vw-1.5rem))] overflow-hidden rounded-[6px] border border-line-strong bg-surface-overlay shadow-xl"
+              >
+                <div className="flex items-center justify-between border-b border-line-subtle px-3 py-2">
+                  <h3 className="text-[12px] font-semibold text-content">Unresolved</h3>
+                  <span className="text-[11px] tabular text-content-dim">{unresolved.length}</span>
+                </div>
+
+                <div className="max-h-72 overflow-y-auto">
+                  {incidentsQuery.isLoading ? (
+                    <p className="px-3 py-5 text-center text-[12px] text-content-dim">Loading…</p>
+                  ) : incidentsQuery.isError ? (
+                    <p className="px-3 py-5 text-center text-[12px] text-content-muted">
+                      Could not load incidents.
+                    </p>
+                  ) : unresolved.length === 0 ? (
+                    <p className="px-3 py-5 text-center text-[12px] text-content-dim">
+                      No unresolved high or critical incidents.
+                    </p>
+                  ) : (
+                    unresolved.slice(0, 6).map((i) => (
+                      <Link
+                        key={i.id}
+                        to="/incidents/$id"
+                        params={{ id: String(i.id) }}
+                        onClick={() => setNotificationsOpen(false)}
+                        className="block border-b border-line-subtle px-3 py-2.5 last:border-b-0 hover:bg-surface-hover"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="min-w-0 flex-1 truncate text-[12px] font-medium text-content">
+                            {humanizeEnum(i.attack_type)}
                           </p>
-                          <p className="text-[9px] text-sg-text-dim mt-2 uppercase tracking-wider">
-                            {new Date(incident.created_at).toLocaleTimeString()}
-                          </p>
+                          <Chip tone={severityTone(i.severity)}>{humanizeEnum(i.severity)}</Chip>
                         </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-              
-              <div className="p-2 border-t border-white/5 bg-black/20">
-                <Link 
-                  to="/incidents" 
-                  onClick={() => setIsDropdownOpen(false)}
-                  className="block w-full text-center text-xs text-sg-primary hover:text-white transition-colors py-1.5 uppercase tracking-widest font-semibold"
+                        <p className="mt-1 flex items-center gap-2 text-[11px] text-content-dim">
+                          <Mono>{i.drone_id}</Mono>
+                          <span>{relativeTime(i.detection_time ?? i.created_at)}</span>
+                        </p>
+                      </Link>
+                    ))
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNotificationsOpen(false);
+                    navigate({ to: "/incidents" });
+                  }}
+                  className="w-full border-t border-line-subtle px-3 py-2 text-[12px] text-accent-bright hover:bg-surface-hover"
                 >
-                  View All Incidents
-                </Link>
+                  View all incidents
+                </button>
               </div>
-            </div>
-          )}
-        </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </header>
   );

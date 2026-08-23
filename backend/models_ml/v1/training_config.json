@@ -1,0 +1,6 @@
+{
+    "contamination_factor": 0.05,
+    "random_seed": 42,
+    "preprocessing_configuration": "StandardScaler",
+    "feature_engineering_configuration": "Rolling Window = 5"
+}

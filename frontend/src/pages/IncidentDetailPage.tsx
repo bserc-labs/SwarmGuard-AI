@@ -1,161 +1,431 @@
-import { useParams, Link } from '@tanstack/react-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/services/api';
-import { GlassCard } from '@/components/shared/GlassCard';
-import { SeverityBadge } from '@/components/shared/SeverityBadge';
-import { SHAPBarChart } from '@/components/shared/SHAPBarChart';
-import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
-import { toast } from 'sonner';
+/**
+ * Single incident.
+ *
+ * Everything shown is read from the incident record. Where the record lacks a
+ * field — model version, attribution, recommended action — the page says so
+ * rather than substituting a default.
+ */
+
+import { useState } from "react";
+import { Link, useParams } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api } from "@/services/api";
+import { AttributionChart } from "@/components/shared/AttributionChart";
+import { IncidentTimeline } from "@/components/shared/IncidentTimeline";
+import {
+  ErrorState,
+  LoadingState,
+  PermissionDeniedState,
+  UnavailableState,
+} from "@/components/ui/DataState";
+import { Icon } from "@/components/ui/Icon";
+import {
+  Button,
+  Chip,
+  Field,
+  Input,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelBody,
+  PanelHeader,
+} from "@/components/ui/primitives";
+import { incidentStatusTone, severityTone } from "@/lib/constants";
+import {
+  buildForensicReport,
+  downloadReport,
+  forensicFilename,
+  forensicReportToCsv,
+} from "@/lib/forensicExport";
+import { formatDateTime, humanizeEnum, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function IncidentDetailPage() {
-  const { id } = useParams({ from: '/incidents/$id' });
+  const { id } = useParams({ from: "/layout/incidents/$id" });
+  const incidentId = Number(id);
   const queryClient = useQueryClient();
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
 
-  const { data: incident, isLoading, error } = useQuery({
-    queryKey: ['incident', id],
-    queryFn: () => api.getIncident(Number(id)),
+  const canRead = hasPermission(effectiveRole, Permissions.INCIDENT_READ);
+  const canAcknowledge = hasPermission(effectiveRole, Permissions.INCIDENT_ACKNOWLEDGE);
+  const canAssign = hasPermission(effectiveRole, Permissions.INCIDENT_ASSIGN);
+  const canResolve = hasPermission(effectiveRole, Permissions.INCIDENT_RESOLVE);
+  const canClose = hasPermission(effectiveRole, Permissions.INCIDENT_CLOSE);
+  const canReadAudit = hasPermission(effectiveRole, Permissions.AUDIT_READ);
+
+  const [reason, setReason] = useState("");
+  const [assignee, setAssignee] = useState("");
+
+  const incidentQuery = useQuery({
+    queryKey: ["incident", incidentId],
+    queryFn: () => api.getIncident(incidentId),
+    enabled: canRead && Number.isFinite(incidentId),
   });
 
-  const { mutate: updateStatus, isPending } = useMutation({
-    mutationFn: (status: string) => api.updateIncidentStatus(Number(id), status),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['incident', id] });
-      queryClient.invalidateQueries({ queryKey: ['incidents'] });
-      toast.success(`Incident status updated to ${variables}`);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : 'Failed to update status');
-    }
+  const auditQuery = useQuery({
+    queryKey: ["audit-logs"],
+    queryFn: () => api.getAuditLogs(),
+    enabled: canReadAudit,
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center min-h-[50vh]">
-        <LoadingSpinner />
-      </div>
-    );
-  }
-
-  if (error || !incident) {
-    return (
-      <div className="flex flex-col h-full items-center justify-center gap-4 min-h-[50vh]">
-        <p className="text-sg-error font-mono">Error loading incident data.</p>
-        <Link to="/incidents" className="text-sg-primary hover:underline font-mono text-sm">
-          Return to Incidents
-        </Link>
-      </div>
-    );
-  }
-
-  const handleAction = (status: string) => {
-    updateStatus(status);
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["incident", incidentId] });
+    queryClient.invalidateQueries({ queryKey: ["incidents"] });
+    queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
   };
 
+  const transition = useMutation({
+    mutationFn: ({ action }: { action: "acknowledge" | "resolve" | "close" }) => {
+      const note = reason.trim() || undefined;
+      if (action === "acknowledge") return api.acknowledgeIncident(incidentId, note);
+      if (action === "resolve") return api.resolveIncident(incidentId, note);
+      return api.closeIncident(incidentId, note);
+    },
+    onSuccess: (_data, { action }) => {
+      toast.success(`Incident ${action}d`);
+      setReason("");
+      refresh();
+    },
+    onError: (error: unknown) =>
+      toast.error(error instanceof Error ? error.message : "The transition failed."),
+  });
+
+  const assign = useMutation({
+    mutationFn: () => api.assignIncident(incidentId, assignee.trim()),
+    onSuccess: () => {
+      toast.success(`Assigned to ${assignee.trim()}`);
+      setAssignee("");
+      refresh();
+    },
+    onError: (error: unknown) =>
+      toast.error(error instanceof Error ? error.message : "Assignment failed."),
+  });
+
+  if (!canRead) {
+    return (
+      <>
+        <PageHeader title="Incident" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
+    );
+  }
+
+  if (!Number.isFinite(incidentId)) {
+    return (
+      <>
+        <PageHeader title="Incident" />
+        <Panel>
+          <UnavailableState title="Invalid incident reference" detail={`“${id}” is not an incident number.`} />
+        </Panel>
+      </>
+    );
+  }
+
+  if (incidentQuery.isLoading) {
+    return (
+      <Panel>
+        <LoadingState rows={8} />
+      </Panel>
+    );
+  }
+
+  if (incidentQuery.isError || !incidentQuery.data) {
+    return (
+      <>
+        <PageHeader title="Incident" />
+        <Panel>
+          <ErrorState error={incidentQuery.error} onRetry={() => incidentQuery.refetch()} />
+        </Panel>
+      </>
+    );
+  }
+
+  const incident = incidentQuery.data;
+
+  /**
+   * Forensic export. Built entirely from what the API returned — absent fields
+   * export as null rather than a default, and the report records whether the
+   * audit log was readable so a reader can distinguish "no activity" from
+   * "activity not visible to the exporter".
+   */
+  function exportReport(format: "json" | "csv") {
+    const at = new Date();
+    try {
+      const report = buildForensicReport({
+        incident,
+        auditLogs: auditQuery.data ?? [],
+        user,
+        auditAccessible: canReadAudit && !auditQuery.isError,
+        generatedAt: at,
+      });
+
+      downloadReport(
+        forensicFilename(incident, format, at),
+        format === "json" ? JSON.stringify(report, null, 2) : forensicReportToCsv(report),
+        format === "json" ? "application/json" : "text/csv",
+      );
+
+      toast.success(
+        report.report.notes.length > 0
+          ? `Report exported with ${report.report.notes.length} noted omission${report.report.notes.length === 1 ? "" : "s"}.`
+          : "Report exported.",
+      );
+    } catch {
+      toast.error("Could not generate the report.");
+    }
+  }
+
+  const status = incident.status.toUpperCase();
+  const isClosed = status === "CLOSED";
+  const isResolved = status === "RESOLVED";
+  const isNew = status === "NEW" || status === "OPEN";
+  const hasActions = !isClosed && (canAcknowledge || canResolve || canClose || canAssign);
+
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
-      {/* Page Header */}
-      <div className="flex items-center gap-4">
-        <Link
-          to="/incidents"
-          className="flex items-center justify-center w-8 h-8 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 text-sg-text-muted transition-colors"
-        >
-          <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-        </Link>
-        <h1 className="text-2xl font-bold text-sg-text font-inter flex items-center gap-3">
-          Incident <span className="text-sg-primary font-mono">#SG-{incident.id.toString().padStart(4, '0')}</span>
-        </h1>
-        <SeverityBadge severity={incident.severity} size="md" />
-      </div>
+    <>
+      <Link
+        to="/incidents"
+        className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-content-muted hover:text-content"
+      >
+        <Icon name="arrow-left" size={13} />
+        All incidents
+      </Link>
 
-      {/* Row 1: Two-column summary cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Incident metadata */}
-        <GlassCard>
-          <h2 className="text-lg font-semibold text-sg-text mb-4">Incident Details</h2>
-          <div className="space-y-4">
-            <div>
-              <span className="text-xs text-sg-text-dim uppercase tracking-wider block mb-1">Drone ID</span>
-              <span className="font-mono text-sg-primary text-sm">{incident.drone_id}</span>
-            </div>
-            <div>
-              <span className="text-xs text-sg-text-dim uppercase tracking-wider block mb-1">Attack Type</span>
-              <span className="text-sg-text text-sm">{incident.attack_type}</span>
-            </div>
-            <div>
-              <span className="text-xs text-sg-text-dim uppercase tracking-wider block mb-2">Threat Level</span>
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-sm text-sg-text">{incident.threat_level.toFixed(1)}</span>
-                <div className="h-2 w-full max-w-[200px] bg-white/10 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-sg-error transition-all duration-500"
-                    style={{ width: `${Math.min(100, incident.threat_level)}%` }}
-                  />
+      <PageHeader
+        title={humanizeEnum(incident.attack_type)}
+        description={`Incident #${incident.id} on ${incident.drone_id}`}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Chip tone={severityTone(incident.severity)}>{humanizeEnum(incident.severity)}</Chip>
+            <Chip tone={incidentStatusTone(incident.status)}>{humanizeEnum(incident.status)}</Chip>
+            <Button size="sm" icon="download" onClick={() => exportReport("json")}>
+              JSON
+            </Button>
+            <Button size="sm" icon="download" onClick={() => exportReport("csv")}>
+              CSV
+            </Button>
+          </div>
+        }
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+        <div className="flex flex-col gap-4">
+          {/* Summary */}
+          <Panel>
+            <PanelHeader title="Summary" />
+            <PanelBody>
+              <p className="max-w-[80ch] text-[13px] leading-relaxed text-content-muted">
+                {incident.explanation || "No description was stored with this incident."}
+              </p>
+
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                <div>
+                  <dt className="text-[11px] text-content-dim">Drone</dt>
+                  <dd className="mt-0.5">
+                    <Mono className="text-[13px] text-content">{incident.drone_id}</Mono>
+                  </dd>
                 </div>
-              </div>
-            </div>
-            <div>
-              <span className="text-xs text-sg-text-dim uppercase tracking-wider block mb-1">Status</span>
-              {/* Note: getting status from server is preferable, we just show generic here or rely on the toast */}
-              <span className="text-sg-text text-sm capitalize">Pending</span>
-            </div>
-            <div>
-              <span className="text-xs text-sg-text-dim uppercase tracking-wider block mb-1">Created At</span>
-              <span className="font-mono text-sg-text-muted text-sm">{new Date(incident.created_at).toLocaleString()}</span>
-            </div>
-          </div>
-        </GlassCard>
+                <div>
+                  <dt className="text-[11px] text-content-dim">Detected</dt>
+                  <dd className="mt-0.5 text-[13px] text-content">
+                    {formatDateTime(incident.detection_time ?? incident.created_at)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-content-dim">Assignee</dt>
+                  <dd className="mt-0.5 text-[13px]">
+                    {incident.assigned_analyst ? (
+                      <Mono className="text-content">{incident.assigned_analyst}</Mono>
+                    ) : (
+                      <span className="text-content-dim">Unassigned</span>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-content-dim">Mission</dt>
+                  <dd className="mt-0.5 text-[13px]">
+                    {incident.mission_id ? (
+                      <Mono className="text-content">{incident.mission_id}</Mono>
+                    ) : (
+                      <span className="text-content-dim">Not recorded</span>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-content-dim">Feature version</dt>
+                  <dd className="mt-0.5 text-[13px]">
+                    {incident.feature_version ? (
+                      <Mono className="text-content">{incident.feature_version}</Mono>
+                    ) : (
+                      <span className="text-content-dim">Not recorded</span>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-content-dim">Resolved</dt>
+                  <dd className="mt-0.5 text-[13px]">
+                    {incident.resolution_time ? (
+                      <span className="text-content">{formatDateTime(incident.resolution_time)}</span>
+                    ) : (
+                      <span className="text-content-dim">Not yet</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            </PanelBody>
+          </Panel>
 
-        {/* Right: AI Explanation text */}
-        <GlassCard>
-          <h2 className="text-lg font-semibold text-sg-text mb-4">AI Explanation</h2>
-          <div className="bg-white/5 border border-white/10 rounded-lg p-4 h-[calc(100%-3rem)] overflow-y-auto">
-            <p className="text-sm text-sg-text-muted leading-relaxed font-mono whitespace-pre-wrap">
-              {incident.explanation || "No detailed explanation available for this incident."}
-            </p>
-          </div>
-        </GlassCard>
-      </div>
+          {/* Attribution */}
+          <Panel>
+            <PanelHeader
+              title="Detection detail"
+              description="Values as recorded on this incident by the backend."
+            />
+            <PanelBody>
+              <AttributionChart incident={incident} />
+            </PanelBody>
+          </Panel>
 
-      {/* Row 2: SHAP Analysis Section */}
-      <GlassCard>
-        <h2 className="text-lg font-semibold text-sg-text mb-4">AI Feature Importance &middot; SHAP Analysis</h2>
-        <SHAPBarChart values={incident.shap_values} />
-      </GlassCard>
-
-      {/* Row 3: Action Buttons */}
-      <GlassCard>
-        <h2 className="text-lg font-semibold text-sg-text mb-4">Take Action</h2>
-        <div className="flex flex-wrap gap-4">
-          <button
-            onClick={() => handleAction("ACKNOWLEDGED")}
-            disabled={isPending}
-            className="rounded border border-sg-primary/30 bg-sg-primary/10 px-4 py-2 text-sm font-medium uppercase tracking-wide text-sg-primary transition-colors hover:bg-sg-primary/20 disabled:opacity-50"
-          >
-            Acknowledge
-          </button>
-          <button
-            onClick={() => handleAction("RESOLVED")}
-            disabled={isPending}
-            className="rounded border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium uppercase tracking-wide text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
-          >
-            Resolve
-          </button>
-          <button
-            onClick={() => handleAction("FALSE_POSITIVE")}
-            disabled={isPending}
-            className="rounded border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-medium uppercase tracking-wide text-amber-300 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
-          >
-            False Positive
-          </button>
-          <button
-            onClick={() => handleAction("ESCALATED")}
-            disabled={isPending}
-            className="rounded border border-sg-error/30 bg-sg-error/10 px-4 py-2 text-sm font-medium uppercase tracking-wide text-sg-error transition-colors hover:bg-sg-error/20 disabled:opacity-50"
-          >
-            Escalate
-          </button>
+          {/* Recommended action */}
+          <Panel>
+            <PanelHeader title="Recommended action" />
+            <PanelBody>
+              {incident.recommended_action ?? incident.explanation_summary?.recommended_action ? (
+                <p className="max-w-[80ch] text-[13px] leading-relaxed text-content-muted">
+                  {incident.recommended_action ?? incident.explanation_summary?.recommended_action}
+                </p>
+              ) : (
+                <UnavailableState
+                  compact
+                  title="None recorded"
+                  detail="No recommended action was stored with this incident."
+                />
+              )}
+            </PanelBody>
+          </Panel>
         </div>
-      </GlassCard>
-    </div>
+
+        <div className="flex flex-col gap-4">
+          {/* Actions */}
+          {hasActions ? (
+            <Panel>
+              <PanelHeader title="Actions" description="Recorded in the audit log with your username." />
+              <PanelBody className="flex flex-col gap-3">
+                <Field label="Note" htmlFor="transition-reason" hint="Optional. Stored with the transition.">
+                  <Input
+                    id="transition-reason"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="Reason or context"
+                  />
+                </Field>
+
+                <div className="flex flex-wrap gap-2">
+                  {canAcknowledge && isNew ? (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={transition.isPending}
+                      onClick={() => transition.mutate({ action: "acknowledge" })}
+                    >
+                      Acknowledge
+                    </Button>
+                  ) : null}
+                  {canResolve && !isResolved ? (
+                    <Button
+                      size="sm"
+                      disabled={transition.isPending}
+                      onClick={() => transition.mutate({ action: "resolve" })}
+                    >
+                      Resolve
+                    </Button>
+                  ) : null}
+                  {canClose && isResolved ? (
+                    <Button
+                      size="sm"
+                      disabled={transition.isPending}
+                      onClick={() => transition.mutate({ action: "close" })}
+                    >
+                      Close
+                    </Button>
+                  ) : null}
+                </div>
+
+                {canAssign ? (
+                  <div className="border-t border-line-subtle pt-3">
+                    <Field label="Assign to" htmlFor="assignee" hint="Username of an analyst in your organization.">
+                      <Input
+                        id="assignee"
+                        value={assignee}
+                        onChange={(e) => setAssignee(e.target.value)}
+                        placeholder="username"
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Button
+                      size="sm"
+                      className="mt-2"
+                      disabled={!assignee.trim() || assign.isPending}
+                      loading={assign.isPending}
+                      onClick={() => assign.mutate()}
+                    >
+                      Assign
+                    </Button>
+                  </div>
+                ) : null}
+              </PanelBody>
+            </Panel>
+          ) : isClosed ? (
+            <Panel>
+              <PanelBody>
+                <p className="text-[13px] text-content-muted">
+                  This incident is closed. No further transitions are available.
+                </p>
+              </PanelBody>
+            </Panel>
+          ) : null}
+
+          {/* Timeline */}
+          <Panel>
+            <PanelHeader
+              title="Activity"
+              description={canReadAudit ? "From the audit log." : undefined}
+            />
+            <PanelBody>
+              {!canReadAudit ? (
+                <UnavailableState
+                  compact
+                  title="Audit log not accessible"
+                  detail="Your role does not include permission to read audit records, so activity cannot be shown."
+                />
+              ) : auditQuery.isLoading ? (
+                <LoadingState rows={4} compact />
+              ) : auditQuery.isError ? (
+                <UnavailableState
+                  compact
+                  title="Activity unavailable"
+                  detail="The audit log could not be read."
+                />
+              ) : (
+                <IncidentTimeline incident={incident} auditLogs={auditQuery.data ?? []} />
+              )}
+            </PanelBody>
+          </Panel>
+
+          <Panel>
+            <PanelBody className="py-2.5">
+              <p className="text-[11px] text-content-dim">
+                Last updated {relativeTime(incident.updated_at)}
+              </p>
+            </PanelBody>
+          </Panel>
+        </div>
+      </div>
+    </>
   );
 }

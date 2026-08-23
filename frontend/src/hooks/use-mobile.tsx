@@ -1,19 +1,30 @@
-import * as React from "react";
+import { useSyncExternalStore } from "react";
 
 const MOBILE_BREAKPOINT = 768;
+const QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`;
 
-export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined);
+/**
+ * Tracks the mobile breakpoint.
+ *
+ * useSyncExternalStore rather than useState + useEffect: matchMedia is an
+ * external store, and reading it during render avoids the flash of a
+ * wrong-breakpoint layout on the first paint.
+ */
+function subscribe(onChange: () => void): () => void {
+  const mql = window.matchMedia(QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
 
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    };
-    mql.addEventListener("change", onChange);
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
+function getSnapshot(): boolean {
+  return window.matchMedia(QUERY).matches;
+}
 
-  return !!isMobile;
+/** Server render has no viewport; assume desktop so the shell renders wide. */
+function getServerSnapshot(): boolean {
+  return false;
+}
+
+export function useIsMobile(): boolean {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

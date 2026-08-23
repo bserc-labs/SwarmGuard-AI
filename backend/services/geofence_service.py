@@ -1,8 +1,10 @@
 import math
-from typing import List, Dict, Tuple
+
 from sqlalchemy.orm import Session
+
 import models
 from utils.logger import logger
+
 
 class GeofenceEngine:
     @staticmethod
@@ -28,7 +30,7 @@ class GeofenceEngine:
         return distance
 
     @staticmethod
-    def is_point_in_polygon(lat: float, lon: float, polygon: List[List[float]]) -> bool:
+    def is_point_in_polygon(lat: float, lon: float, polygon: list[list[float]]) -> bool:
         """
         Ray-casting algorithm to determine if a point is inside a polygon.
         polygon is a list of [lat, lng] points.
@@ -53,7 +55,7 @@ class GeofenceEngine:
         return inside
 
     @staticmethod
-    def check_geofence_violations(db: Session, lat: float, lon: float) -> List[models.GeofenceZone]:
+    def check_geofence_violations(db: Session, lat: float, lon: float) -> list[models.GeofenceZone]:
         """
         Check if a given lat/lon violates any active restricted zones.
         Returns a list of violated zones.

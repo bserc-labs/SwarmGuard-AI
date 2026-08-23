@@ -2,60 +2,201 @@ name: SwarmGuard AI CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches:
+      - main
+      - develop
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+      - develop
+
+# Cancel superseded runs on the same ref so a busy PR does not queue behind itself.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-test:
-    name: Backend Pytest & Syntax Check
+    name: Backend tests
     runs-on: ubuntu-latest
 
+    services:
+      # Matches docker-compose.yml. The plain timescaledb image is what the
+      # application actually runs against, and the initial migration issues
+      # CREATE EXTENSION timescaledb + create_hypertable, so the test database
+      # must be a real TimescaleDB.
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: swarmguard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:password@localhost:5432/swarmguard_test
+      TEST_DATABASE_URL: postgresql://postgres:password@localhost:5432/swarmguard_test
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          # shap 0.52.0 has no wheels for 3.11. Do not downgrade this without
+          # also pinning shap — see commit 2359981.
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
 
-      - name: Install Backend Dependencies
+      - name: Install backend dependencies
+        working-directory: ./backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
 
-      - name: Generate Synthetic Dataset & Train ML Models
+      - name: Generate ephemeral secrets
+        # config.py rejects any value in KNOWN_PUBLIC_SECRETS, which is why the
+        # old hardcoded `test_ci_secret_key` now fails settings validation at
+        # import time. Generating per-run values keeps CI green without putting
+        # another well-known string into the repository.
         run: |
-          python backend/scripts/generate_dataset.py
-          python backend/scripts/train_model.py
+          echo "SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "DRONE_API_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
-      - name: Run Pytest Suite
-        run: |
-          python -m pytest backend/tests/ -v
+      - name: Apply database migrations
+        working-directory: ./backend
+        run: alembic upgrade head
 
-  frontend-build:
-    name: Frontend Vite Build & TypeScript Check
+      - name: Run tests
+        working-directory: ./backend
+        run: pytest -v --cov=. --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: warn
+
+  backend-lint:
+    name: Backend lint & types
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linting tools
+        run: pip install ruff==0.16.1 mypy==2.3.0
+
+      - name: Run Ruff
+        working-directory: ./backend
+        run: ruff check --output-format=github .
+
+      # No `ruff format --check` yet: the existing source is unformatted, and a
+      # repo-wide reformat would bury the Phase 3 diff. Add it as its own commit.
+
+      - name: Run Mypy
+        working-directory: ./backend
+        # Scoped in pyproject.toml to the modules that carry the security and
+        # tenancy logic. Widen the `files` list as annotations land.
+        run: mypy
+
+  frontend:
+    name: Frontend build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package.json
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Frontend Dependencies
-        run: |
-          cd frontend
-          npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build Frontend Application
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  security-scan:
+    name: Dependency & secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the secret scanner can diff across commits.
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The two dependency audits are advisory for now. Neither backlog has been
+      # triaged, and a CVE published against a transitive pin would turn every
+      # unrelated PR red. Flip both to blocking (drop continue-on-error) once
+      # the first triage pass is done — that is a deliberate decision, not a
+      # thing to leave until it happens by accident.
+      - name: Audit Python dependencies (advisory)
+        continue-on-error: true
+        working-directory: ./backend
         run: |
-          cd frontend
-          npm run build
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Audit npm dependencies (advisory)
+        continue-on-error: true
+        working-directory: ./frontend
+        run: npm audit --audit-level=high
+
+      # Secret scanning blocks. This is the check that catches a SECRET_KEY or
+      # DRONE_API_KEY committed back into docker-compose.yml or config.py, which
+      # is exactly the regression Phase 0 just finished removing.
+      - name: Scan for committed secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          exit-code: "1"
+
+      - name: Scan for vulnerabilities and misconfiguration (advisory)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true

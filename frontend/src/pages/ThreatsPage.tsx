@@ -1,187 +1,275 @@
+/**
+ * Threat intelligence.
+ *
+ * Aggregations come from GET /incidents/stats, which the backend computes. The
+ * page presents them as historical counts of stored incidents, not as a threat
+ * assessment or model output — the backend does not produce either.
+ */
+
+import { useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { api, type Incident } from "@/services/api";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { SeverityBadge } from "@/components/shared/SeverityBadge";
-import { MetricCard } from "@/components/shared/MetricCard";
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { SEVERITY_COLORS } from "@/lib/constants";
+import { api, type IncidentStats } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { StatTile } from "@/components/shared/StatTile";
+import {
+  DataState,
+  EmptyState,
+  LoadingState,
+  PermissionDeniedState,
+  UnavailableState,
+} from "@/components/ui/DataState";
+import {
+  Chip,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelBody,
+  PanelHeader,
+} from "@/components/ui/primitives";
+import { incidentStatusTone, severityTone } from "@/lib/constants";
+import { formatDuration, humanizeEnum, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
+
+/** Horizontal bar list. Shares are computed against the largest bucket. */
+function DistributionList({
+  entries,
+  tone,
+  emptyLabel,
+}: {
+  entries: [string, number][];
+  tone?: (key: string) => "critical" | "warning" | "accent" | "neutral";
+  emptyLabel: string;
+}) {
+  if (entries.length === 0) {
+    return <EmptyState compact title={emptyLabel} />;
+  }
+
+  const max = Math.max(...entries.map(([, count]) => count), 1);
+
+  return (
+    <ul className="flex flex-col gap-2 p-4">
+      {entries.map(([key, count]) => (
+        <li key={key}>
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 truncate text-[12px] text-content-muted">
+              {humanizeEnum(key)}
+            </span>
+            <Mono className="shrink-0 text-content">{count}</Mono>
+          </div>
+          <div
+            className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-active"
+            role="presentation"
+          >
+            <div
+              className={
+                tone?.(key) === "critical"
+                  ? "h-full bg-critical"
+                  : tone?.(key) === "warning"
+                    ? "h-full bg-warning"
+                    : "h-full bg-accent"
+              }
+              style={{ width: `${(count / max) * 100}%` }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function sortedEntries(record: Record<string, number> | undefined): [string, number][] {
+  if (!record) return [];
+  return Object.entries(record)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1]);
+}
 
 export default function ThreatsPage() {
-  const { data: incidents = [], isLoading } = useQuery({
-    queryKey: ['incidents-threats'],
-    queryFn: () => api.getIncidents(),
-    refetchInterval: 30000,
+  const { user, role } = useAuth();
+  const canRead = hasPermission(user?.role ?? role, Permissions.INCIDENT_READ);
+
+  const statsQuery = useQuery({
+    queryKey: ["incident-stats"],
+    queryFn: () => api.getIncidentStats(),
+    refetchInterval: POLL_INTERVALS.stats,
+    enabled: canRead,
   });
 
-  if (isLoading) {
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents", "threats"],
+    queryFn: () => api.getIncidents(undefined, 200),
+    refetchInterval: POLL_INTERVALS.incidents,
+    enabled: canRead,
+  });
+
+  const stats: IncidentStats | undefined = statsQuery.data;
+
+  const severityEntries = useMemo(() => sortedEntries(stats?.by_severity), [stats]);
+  const attackEntries = useMemo(() => sortedEntries(stats?.by_threat_type), [stats]);
+  const droneEntries = useMemo(() => sortedEntries(stats?.by_drone).slice(0, 10), [stats]);
+  const statusEntries = useMemo(() => sortedEntries(stats?.by_status), [stats]);
+
+  const mostAffected = droneEntries[0] ?? null;
+
+  const recent = useMemo(
+    () =>
+      [...(incidentsQuery.data ?? [])]
+        .sort(
+          (a, b) =>
+            new Date(b.detection_time ?? b.created_at).getTime() -
+            new Date(a.detection_time ?? a.created_at).getTime(),
+        )
+        .slice(0, 10),
+    [incidentsQuery.data],
+  );
+
+  if (!canRead) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <LoadingSpinner />
-      </div>
+      <>
+        <PageHeader title="Threat intelligence" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
     );
   }
 
-  // Calculate stats
-  const totalEvents = incidents.length;
-  const criticalThreats = incidents.filter(i => i.severity === 'CRITICAL').length;
-  
-  // Most common attack
-  const attackCounts: Record<string, number> = {};
-  incidents.forEach(i => {
-    attackCounts[i.attack_type] = (attackCounts[i.attack_type] || 0) + 1;
-  });
-  let mostCommonAttack = "None";
-  let maxCount = 0;
-  Object.entries(attackCounts).forEach(([attack, count]) => {
-    if (count > maxCount) {
-      mostCommonAttack = attack;
-      maxCount = count;
-    }
-  });
-
-  const avgThreatScore = totalEvents > 0
-    ? (incidents.reduce((sum, i) => sum + i.threat_level, 0) / totalEvents).toFixed(2)
-    : "0";
-
-  // Chart Data: Threat Distribution
-  const pieData = Object.entries(attackCounts).map(([name, value]) => ({ name, value }));
-  const PIE_COLORS = ['#00d9ff', '#ffb4ab', '#ffdeaa', '#b4c5ff', '#4ade80'];
-
-  // Chart Data: Weekly Trend (Filtered to last 7 days)
-  const now = new Date();
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const recentIncidents = incidents.filter(i => new Date(i.created_at) >= sevenDaysAgo);
-  
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const dayCounts = Array(7).fill(0);
-  recentIncidents.forEach(i => {
-    const d = new Date(i.created_at).getDay();
-    dayCounts[d]++;
-  });
-  const barData = days.map((day, i) => ({ name: day, count: dayCounts[i] }));
-
   return (
-    <div className="flex flex-col gap-6 p-6">
-      {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-sg-text font-inter">Threat Intelligence Hub</h1>
-        <p className="text-sm text-sg-text-muted mt-1">AI-powered threat analysis and correlation</p>
-      </div>
+    <>
+      <PageHeader
+        title="Threat intelligence"
+        description="Aggregated counts across incidents stored for your organization."
+      />
 
-      {/* Row 1: Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <MetricCard title="Total Events" value={totalEvents.toString()} icon="security" />
-        <MetricCard title="Critical Threats" value={criticalThreats.toString()} icon="warning" />
-        <MetricCard title="Most Common Attack" value={mostCommonAttack} icon="troubleshoot" />
-        <MetricCard title="Avg Threat Score" value={avgThreatScore} icon="monitoring" />
-      </div>
+      {statsQuery.isLoading ? (
+        <Panel>
+          <LoadingState rows={5} />
+        </Panel>
+      ) : statsQuery.isError ? (
+        <Panel>
+          <UnavailableState
+            title="Statistics unavailable"
+            detail="The incident statistics endpoint could not be read, so no aggregates can be shown."
+          />
+        </Panel>
+      ) : (
+        <>
+          <section aria-label="Totals" className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+            <StatTile label="Total incidents" icon="shield" value={stats?.total ?? null} />
+            <StatTile
+              label="Critical"
+              icon="alert"
+              value={stats?.by_severity?.CRITICAL ?? 0}
+              tone={stats?.by_severity?.CRITICAL ? "critical" : "nominal"}
+            />
+            <StatTile
+              label="Mean time to resolve"
+              icon="clock"
+              value={
+                stats?.avg_resolution_time_seconds
+                  ? formatDuration(stats.avg_resolution_time_seconds)
+                  : null
+              }
+              detail={
+                stats?.avg_resolution_time_seconds
+                  ? "Across resolved incidents"
+                  : "No incidents resolved yet"
+              }
+            />
+            <StatTile
+              label="Most affected drone"
+              icon="drone"
+              value={mostAffected ? mostAffected[0] : null}
+              detail={
+                mostAffected
+                  ? `${mostAffected[1]} ${mostAffected[1] === 1 ? "incident" : "incidents"}`
+                  : undefined
+              }
+            />
+          </section>
 
-      {/* Row 2: Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <GlassCard title="Threat Distribution" className="h-[300px] flex flex-col">
-          {totalEvents === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-sg-text-muted text-sm">No data available</div>
-          ) : (
-            <div className="flex-1 min-h-0 relative">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#1a2123', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '4px' }}
-                    itemStyle={{ color: '#dde4e6' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-bold font-mono text-sg-text">{totalEvents}</span>
-                <span className="text-[10px] uppercase text-sg-text-muted tracking-wider">Total</span>
-              </div>
-            </div>
-          )}
-        </GlassCard>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <Panel>
+              <PanelHeader title="By severity" />
+              <DistributionList
+                entries={severityEntries}
+                tone={(key) => severityTone(key)}
+                emptyLabel="No incidents recorded"
+              />
+            </Panel>
 
-        <GlassCard title="Weekly Trend" className="h-[300px] flex flex-col">
-           {totalEvents === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-sg-text-muted text-sm">No data available</div>
-          ) : (
-            <div className="flex-1 min-h-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <XAxis dataKey="name" stroke="#859398" fontSize={10} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#859398" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip 
-                    cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                    contentStyle={{ backgroundColor: '#1a2123', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '4px' }}
-                  />
-                  <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-                    {barData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill="url(#colorCyan)" />
-                    ))}
-                  </Bar>
-                  <defs>
-                    <linearGradient id="colorCyan" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#00d9ff" stopOpacity={1}/>
-                      <stop offset="100%" stopColor="#005b6c" stopOpacity={1}/>
-                    </linearGradient>
-                  </defs>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </GlassCard>
-      </div>
+            <Panel>
+              <PanelHeader title="By attack type" />
+              <DistributionList entries={attackEntries} emptyLabel="No attack types recorded" />
+            </Panel>
 
-      {/* Row 3: Active Intelligence Feed */}
-      <GlassCard title="Active Intelligence Feed">
-        <div className="flex flex-col gap-3">
-          {incidents.length === 0 ? (
-            <div className="p-6 text-center text-sg-text-muted text-sm font-mono flex items-center justify-center gap-2">
-              <span className="material-symbols-outlined text-green-400">shield</span>
-              No active threats. Perimeter secure.
-            </div>
-          ) : (
-            incidents.slice(0, 8).map(incident => {
-               // Determine border color based on severity
-               let borderColorClass = 'border-l-sg-text-dim';
-               if (incident.severity === 'CRITICAL') borderColorClass = 'border-l-sg-error';
-               else if (incident.severity === 'HIGH') borderColorClass = 'border-l-sg-amber';
-               else if (incident.severity === 'MEDIUM') borderColorClass = 'border-l-blue-400';
-               else if (incident.severity === 'LOW') borderColorClass = 'border-l-green-400';
+            <Panel>
+              <PanelHeader title="By status" />
+              <DistributionList
+                entries={statusEntries}
+                tone={(key) => incidentStatusTone(key)}
+                emptyLabel="No incidents recorded"
+              />
+            </Panel>
 
-               return (
-                <div key={incident.id} className={`flex items-start gap-4 p-4 rounded bg-white/[0.02] border border-white/5 border-l-4 ${borderColorClass} hover:bg-white/5 transition-colors`}>
-                  <div className="mt-1">
-                    <SeverityBadge severity={incident.severity} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="text-sm font-medium text-sg-text">{incident.attack_type}</h4>
-                      <span className="text-xs font-mono text-sg-text-dim">{new Date(incident.created_at).toLocaleString()}</span>
-                    </div>
-                    <div className="text-xs text-sg-text-muted mb-2">Target: <span className="font-mono text-sg-primary">{incident.drone_id}</span></div>
-                    <p className="text-xs text-sg-text-muted leading-relaxed">
-                      {incident.explanation || "No explanation provided for this event."}
-                    </p>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </GlassCard>
-    </div>
+            <Panel>
+              <PanelHeader title="By drone" description="Top 10 by incident count." />
+              <DistributionList entries={droneEntries} emptyLabel="No incidents recorded" />
+            </Panel>
+          </div>
+
+          <Panel className="mt-4">
+            <PanelHeader title="Most recent" description="Newest first." />
+            <DataState
+              isLoading={incidentsQuery.isLoading}
+              isError={incidentsQuery.isError}
+              error={incidentsQuery.error}
+              data={recent}
+              onRetry={() => incidentsQuery.refetch()}
+              compact
+              empty={<EmptyState compact title="No incidents recorded" />}
+            >
+              {(items) => (
+                <ul className="divide-y divide-line-subtle">
+                  {items.map((incident) => (
+                    <li key={incident.id}>
+                      <Link
+                        to="/incidents/$id"
+                        params={{ id: String(incident.id) }}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 hover:bg-surface-overlay"
+                      >
+                        <Chip tone={severityTone(incident.severity)}>
+                          {humanizeEnum(incident.severity)}
+                        </Chip>
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-content">
+                          {humanizeEnum(incident.attack_type)}
+                        </span>
+                        <Mono className="text-content-muted">{incident.drone_id}</Mono>
+                        <span className="text-[11px] text-content-dim">
+                          {relativeTime(incident.detection_time ?? incident.created_at)}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DataState>
+          </Panel>
+
+          <Panel className="mt-4">
+            <PanelBody>
+              <h2 className="text-[13px] font-semibold text-content">Scope of these figures</h2>
+              <p className="mt-1 max-w-[80ch] text-[12px] leading-relaxed text-content-muted">
+                These are counts of incident records, not a threat assessment. The backend prunes
+                telemetry older than three days, so incidents may outlive the readings that produced
+                them.
+              </p>
+            </PanelBody>
+          </Panel>
+        </>
+      )}
+    </>
   );
 }

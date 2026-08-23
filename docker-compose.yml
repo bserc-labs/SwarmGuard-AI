@@ -1,10 +1,13 @@
+# Secrets are read from a local .env file that is never committed.
+# Copy .env.example to .env and fill it in before the first `docker compose up`.
 services:
   redis:
     image: redis:7-alpine
     container_name: swarmguard-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # Not published to the host: the backend reaches it over the compose network.
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -12,19 +15,20 @@ services:
       retries: 5
 
   postgres:
-    image: postgres:16
+    image: timescale/timescaledb:latest-pg16
     container_name: swarmguard-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: swarmguard
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-swarmguard}
+    # Not published to the host. For a shell: docker compose exec postgres psql -U <user>
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -42,11 +46,17 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/swarmguard
-      - REDIS_URL=redis://redis:6379
-      - SECRET_KEY=SWARMGUARD_DEFENSE_PRODUCTION_SECRET_KEY_2026
-      - ALGORITHM=HS256
-      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-swarmguard}
+      REDIS_URL: redis://redis:6379
+      # Required. Startup fails on a missing, short, or publicly known value.
+      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY is required - generate with openssl rand -hex 32}"
+      DRONE_API_KEY: "${DRONE_API_KEY:?DRONE_API_KEY is required - generate with openssl rand -hex 32}"
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      # Optional: provisions the default organization and its admin on first start.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s

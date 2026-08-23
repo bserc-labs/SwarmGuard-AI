@@ -1,6 +1,7 @@
-import os
 import json
-from typing import Dict, Any
+import os
+from typing import Any
+
 
 class ExplanationEngine:
     """
@@ -16,9 +17,9 @@ class ExplanationEngine:
             self.data_dir = data_dir
         
         # Cache for loaded attack data
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.cache: dict[str, dict[str, Any]] = {}
 
-    def load_attack_data(self, attack_type: str) -> Dict[str, Any]:
+    def load_attack_data(self, attack_type: str) -> dict[str, Any]:
         """Loads the JSON data file for a specific attack type."""
         if attack_type in self.cache:
             return self.cache[attack_type]
@@ -61,4 +62,4 @@ class ExplanationEngine:
             )
             return explanation
         except Exception as e:
-            return f"Error generating explanation for attack '{attack_type}': {str(e)}"
+            return f"Error generating explanation for attack '{attack_type}': {e!s}"

@@ -1,6 +1,7 @@
 import csv
-import random
 import os
+import random
+
 
 def generate_dataset(output_path="backend/data/swarmguard_training_dataset.csv", total_rows=2500):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

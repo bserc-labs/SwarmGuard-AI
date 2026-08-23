@@ -1,5 +1,6 @@
 import signal
-import sys
+
+
 def handler(*args): raise Exception("Timeout")
 signal.signal(signal.SIGALRM, handler)
 

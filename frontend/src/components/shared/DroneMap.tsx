@@ -1,319 +1,427 @@
-import { useMemo, useState, useEffect } from "react";
-import { MapContainer, Marker, Popup, TileLayer, Circle, Polyline } from "react-leaflet";
+/**
+ * Fleet map.
+ *
+ * Leaflet and react-leaflet are preserved, as are the geofence overlay and DVR
+ * playback. Removed: the swarm-formation overlay (GET /telemetry/swarm-formation
+ * does not exist on this backend and returned 404), the rotating radar sweep,
+ * and the marker glow.
+ *
+ * Marker colour encodes battery and geofence state, both of which come from the
+ * payload. Nothing on this map is inferred beyond the breach test, which is
+ * computed here from real coordinates and real zone geometry.
+ */
+
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer } from "react-leaflet";
 import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
-import { GlassCard } from "./GlassCard";
-import { GeofenceControlPanel } from "./GeofenceControlPanel";
-import { DVRScrubber } from "./DVRScrubber";
-import type { DroneMapLocation } from "@/lib/demoDroneLocations";
-import { playCriticalSiren, toggleAudioAlarms, isAudioEnabled } from "@/utils/audioAlarms";
-import { api, type TelemetryPacket } from "@/services/api";
+import { api, type GeofenceZone } from "@/services/api";
+import { Chip, Mono } from "@/components/ui/primitives";
+import { UnavailableState } from "@/components/ui/DataState";
+import { formatTime, latLon, num } from "@/lib/format";
+import { hasPlottablePosition, signalQuality, type MappedDrone } from "@/lib/telemetry";
+import { cn } from "@/lib/utils";
 
-interface DroneMapProps {
-  drones: DroneMapLocation[];
-  className?: string;
-}
+/** Fallback view when no drone has reported a position. */
+const FALLBACK_CENTER: [number, number] = [34.0522, -118.2437];
+const FALLBACK_ZOOM = 11;
 
-const DEFAULT_CENTER: [number, number] = [34.0522, -118.2437]; // Los Angeles Base Sector
-const DEFAULT_ZOOM = 12;
+/* --------------------------------------------------------------- geometry */
 
-// Haversine formula to compute distance in meters between two points
-function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+/** Metres between two coordinates. Used for circular geofence containment. */
+function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function createMarkerIcon(threatStatus?: string, isGeofenceBreach = false, isDvrMode = false) {
-  if (isGeofenceBreach || threatStatus === "Critical") {
+/** Ray casting. Points are [lat, lng] pairs, matching the stored format. */
+function pointInPolygon(lat: number, lng: number, polygon: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [latI, lngI] = polygon[i];
+    const [latJ, lngJ] = polygon[j];
+    const intersects =
+      lngI > lng !== lngJ > lng &&
+      lat < ((latJ - latI) * (lng - lngI)) / (lngJ - lngI) + latI;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+type CircleZone = { kind: "circle"; center: [number, number]; radius: number };
+type PolygonZone = { kind: "polygon"; points: [number, number][] };
+
+/**
+ * Coordinates are stored as an untyped JSON column, so the shape is validated
+ * rather than asserted. A zone that does not parse is skipped, not guessed at.
+ */
+function parseZoneGeometry(zone: GeofenceZone): CircleZone | PolygonZone | null {
+  const coords = zone.coordinates;
+
+  if (zone.zone_type?.toUpperCase() === "CIRCLE") {
+    if (typeof coords !== "object" || coords === null) return null;
+    const c = coords as { center?: unknown; radius?: unknown };
+    if (
+      Array.isArray(c.center) &&
+      c.center.length === 2 &&
+      typeof c.center[0] === "number" &&
+      typeof c.center[1] === "number" &&
+      typeof c.radius === "number"
+    ) {
+      return { kind: "circle", center: [c.center[0], c.center[1]], radius: c.radius };
+    }
+    return null;
+  }
+
+  if (Array.isArray(coords)) {
+    const points = coords.filter(
+      (p): p is [number, number] =>
+        Array.isArray(p) && p.length === 2 && typeof p[0] === "number" && typeof p[1] === "number",
+    );
+    return points.length >= 3 ? { kind: "polygon", points } : null;
+  }
+
+  return null;
+}
+
+function isBreaching(drone: MappedDrone, geometry: CircleZone | PolygonZone): boolean {
+  if (geometry.kind === "circle") {
+    return (
+      haversineMetres(drone.latitude, drone.longitude, geometry.center[0], geometry.center[1]) <=
+      geometry.radius
+    );
+  }
+  return pointInPolygon(drone.latitude, drone.longitude, geometry.points);
+}
+
+/* ---------------------------------------------------------------- markers */
+
+const MARKER_COLORS = {
+  breach: "#e05a52",
+  low: "#d99a3e",
+  normal: "#4fa8c5",
+  replay: "#7c8794",
+} as const;
+
+type MarkerTone = keyof typeof MARKER_COLORS;
+
+/**
+ * Aircraft marker.
+ *
+ * When the payload carries a heading the marker is a directional chevron
+ * rotated to that bearing; without one it falls back to a plain dot. The two
+ * shapes are visually distinct on purpose — an operator can tell at a glance
+ * which aircraft are reporting attitude and which are not, rather than seeing a
+ * north-pointing arrow that is actually just a default.
+ */
+function markerIcon(tone: MarkerTone, heading: number | null | undefined): L.DivIcon {
+  const color = MARKER_COLORS[tone];
+  const hasHeading =
+    heading !== null && heading !== undefined && Number.isFinite(heading);
+
+  if (!hasHeading) {
     return L.divIcon({
-      html: `<div style="background:#ef4444;width:18px;height:18px;border-radius:9999px;border:3px solid #ffffff;box-shadow:0 0 15px #ef4444;animation:pulse 1s infinite"></div>`,
-      className: "bg-transparent border-none",
-      iconSize: [18, 18],
-      iconAnchor: [9, 9],
+      html:
+        `<span style="display:block;width:11px;height:11px;border-radius:9999px;` +
+        `background:${color};border:2px solid #0f1214;box-shadow:0 0 0 1px ${color}"></span>`,
+      className: "",
+      iconSize: [11, 11],
+      iconAnchor: [5.5, 5.5],
     });
   }
 
-  const color = isDvrMode ? "#f59e0b" : (threatStatus === "Warning" ? "#f59e0b" : "#00d9ff");
-
+  const bearing = ((heading as number) % 360 + 360) % 360;
   return L.divIcon({
-    html: `<div style="background:${color};width:14px;height:14px;border-radius:9999px;border:2px solid white;box-shadow:0 0 10px ${color}"></div>`,
-    className: "bg-transparent border-none",
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
+    html:
+      `<svg width="22" height="22" viewBox="0 0 22 22" ` +
+      `style="transform:rotate(${bearing}deg);transform-origin:50% 50%;display:block">` +
+      `<path d="M11 2 L16.5 18 L11 14.4 L5.5 18 Z" fill="${color}" ` +
+      `stroke="#0f1214" stroke-width="1.5" stroke-linejoin="round"/>` +
+      `</svg>`,
+    className: "",
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
   });
 }
 
-// Tactical Radar Sweep Icon
-function createRadarIcon(isDvrMode = false) {
-  const color = isDvrMode ? "rgba(245, 158, 11, " : "rgba(0, 217, 255, ";
-  const solidColor = isDvrMode ? "#f59e0b" : "#00d9ff";
-  return L.divIcon({
-    html: `<div class="${!isDvrMode ? 'radar-scan' : ''}" style="width: 800px; height: 800px; border: 1px solid ${color}0.15); border-radius: 50%; box-shadow: inset 0 0 40px ${color}0.05);">
-             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 6px; height: 6px; background: ${solidColor}; border-radius: 50%; box-shadow: 0 0 10px ${solidColor};"></div>
-             <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: ${color}0.1);"></div>
-             <div style="position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: ${color}0.1);"></div>
-             <div style="position: absolute; top: 25%; left: 25%; right: 25%; bottom: 25%; border: 1px solid ${color}0.05); border-radius: 50%;"></div>
-           </div>`,
-    className: "bg-transparent border-none pointer-events-none",
-    iconSize: [800, 800],
-    iconAnchor: [400, 400],
-  });
-}
+/* ------------------------------------------------------------------- view */
 
-export function DroneMap({ drones, className = "" }: DroneMapProps) {
-  const [audioActive, setAudioActive] = useState(isAudioEnabled());
-  const [dvrData, setDvrData] = useState<TelemetryPacket[] | null>(null);
+export function DroneMap({
+  drones,
+  replayMode = false,
+  className,
+}: {
+  drones: MappedDrone[];
+  /** True while showing recorded telemetry rather than the live feed. */
+  replayMode?: boolean;
+  className?: string;
+}) {
+  const [showZones, setShowZones] = useState(true);
 
-  const { data: swarmFormation } = useQuery({
-    queryKey: ['swarm-formation'],
-    queryFn: () => api.getSwarmFormation(),
-    refetchInterval: 5000,
-  });
-
-  const { data: geofences = [] } = useQuery({
-    queryKey: ['geofences'],
+  const zonesQuery = useQuery({
+    queryKey: ["geofences"],
     queryFn: () => api.getGeofences(),
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
   });
 
-  const validDrones = useMemo(() => {
-    // Use DVR data if active, otherwise use live drones props
-    const sourceData = dvrData ? dvrData.map(d => ({
-      ...d,
-      threat_status: (d.battery < 30 ? "Critical" : d.battery < 60 ? "Warning" : "Normal") as "Normal"|"Warning"|"Critical"
-    })) : drones;
+  const zones = useMemo(
+    () =>
+      (zonesQuery.data ?? [])
+        .filter((z) => z.is_active)
+        .map((zone) => ({ zone, geometry: parseZoneGeometry(zone) }))
+        .filter((z): z is { zone: GeofenceZone; geometry: CircleZone | PolygonZone } =>
+          z.geometry !== null,
+        ),
+    [zonesQuery.data],
+  );
 
-    return sourceData.filter((drone) => {
-      const hasLat = Number.isFinite(drone.latitude);
-      const hasLng = Number.isFinite(drone.longitude);
-      return hasLat && hasLng;
-    });
-  }, [drones, dvrData]);
+  const positioned = useMemo(() => drones.filter(hasPlottablePosition), [drones]);
 
-  const center = useMemo(() => {
-    if (validDrones.length === 0) {
-      return DEFAULT_CENTER;
-    }
-    const avgLat = validDrones.reduce((sum, drone) => sum + drone.latitude, 0) / validDrones.length;
-    const avgLng = validDrones.reduce((sum, drone) => sum + drone.longitude, 0) / validDrones.length;
-    return [avgLat, avgLng] as [number, number];
-  }, [validDrones]);
-
-  // Check for Geofence Breaches & Play Sirens
   const breaches = useMemo(() => {
-    let breachCount = 0;
-    validDrones.forEach((drone) => {
-      let isBreach = false;
-      for (const zone of geofences) {
-        if (zone.zone_type === "CIRCLE") {
-          const { center, radius } = zone.coordinates;
-          const dist = getDistanceMeters(center[0], center[1], drone.latitude, drone.longitude);
-          if (dist <= radius) {
-            isBreach = true;
-            break;
-          }
-        }
-      }
-      if (isBreach || drone.threat_status === "Critical") {
-        breachCount++;
-      }
-    });
-    return breachCount;
-  }, [validDrones, geofences]);
-
-  useEffect(() => {
-    // Only play siren if we are NOT in DVR mode
-    if (breaches > 0 && audioActive && !dvrData) {
-      playCriticalSiren();
+    const map = new Map<string, string[]>();
+    for (const drone of positioned) {
+      const hit = zones
+        .filter(({ geometry }) => isBreaching(drone, geometry))
+        .map(({ zone }) => zone.name);
+      if (hit.length > 0) map.set(drone.drone_id, hit);
     }
-  }, [breaches, audioActive, dvrData]);
+    return map;
+  }, [positioned, zones]);
 
-  const handleToggleAudio = () => {
-    const newState = toggleAudioAlarms();
-    setAudioActive(newState);
-  };
+  /** Zones that currently contain at least one aircraft. */
+  const breachedZoneNames = useMemo(
+    () => new Set([...breaches.values()].flat()),
+    [breaches],
+  );
+
+  const center = useMemo<[number, number]>(() => {
+    if (positioned.length === 0) return FALLBACK_CENTER;
+    const lat = positioned.reduce((s, d) => s + d.latitude, 0) / positioned.length;
+    const lng = positioned.reduce((s, d) => s + d.longitude, 0) / positioned.length;
+    return [lat, lng];
+  }, [positioned]);
+
+  if (positioned.length === 0) {
+    return (
+      <div className={cn("flex items-center justify-center", className)}>
+        <UnavailableState
+          title="No positions to plot"
+          detail="No drone in this organization has reported coordinates. The map appears once telemetry arrives."
+        />
+      </div>
+    );
+  }
 
   return (
-    <GlassCard className={`overflow-hidden p-0 ${className}`}>
-      <div className="flex h-[480px] flex-col relative">
-        <div className={`border-b px-5 py-4 transition-colors ${dvrData ? 'border-amber-500/30 bg-amber-500/5' : 'border-white/10'}`}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h3 className={`text-sm font-semibold uppercase tracking-[0.25em] flex items-center gap-2 ${dvrData ? 'text-amber-500' : 'text-[#00d9ff]'}`}>
-                <span className={`h-2 w-2 rounded-full animate-ping ${dvrData ? 'bg-amber-500' : 'bg-[#00d9ff]'}`} />
-                {dvrData ? "🛰 HISTORICAL PLAYBACK (DVR)" : "🛰 Tactical Radar & Geofence Perimeter"}
-              </h3>
-              <p className="mt-1 text-xs text-sg-text-dim">
-                {dvrData ? "Reviewing historical incident data" : "Real-time Restricted Airspace Monitoring"}
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              {swarmFormation && swarmFormation.formation_type !== "DISPERSED" && !dvrData && (
-                <span className="rounded-full bg-[#00d9ff]/20 border border-[#00d9ff]/40 px-3 py-1 text-[11px] font-mono text-[#00d9ff] animate-pulse">
-                  ⚡ FORMATION: {swarmFormation.formation_type} ({Math.round(swarmFormation.confidence * 100)}%)
-                </span>
-              )}
+    <div className={cn("relative", className)}>
+      <MapContainer
+        center={center}
+        zoom={positioned.length === 1 ? 14 : FALLBACK_ZOOM}
+        scrollWheelZoom
+        className="h-full w-full"
+        attributionControl
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="&copy; OpenStreetMap contributors"
+        />
 
-              {breaches > 0 && (
-                <span className="rounded-full bg-red-500/20 border border-red-500/40 px-3 py-1 text-[11px] font-mono text-red-400 animate-pulse">
-                  🚨 {breaches} NO-FLY ZONE BREACHES
-                </span>
-              )}
-              
-              <button
-                onClick={handleToggleAudio}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-mono border transition ${
-                  audioActive
-                    ? "bg-[#00d9ff]/10 border-[#00d9ff]/30 text-[#00d9ff]"
-                    : "bg-white/5 border-white/10 text-sg-text-muted hover:bg-white/10"
-                }`}
-              >
-                {audioActive ? "🔊 Sound FX: ON" : "🔇 Sound FX: OFF"}
-              </button>
+        {showZones &&
+          zones.map(({ zone, geometry }) => {
+            const critical = zone.severity?.toUpperCase() === "CRITICAL";
+            const color = critical ? MARKER_COLORS.breach : MARKER_COLORS.low;
 
-              <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] font-mono text-sg-text">
-                {validDrones.length} active units
-              </div>
-            </div>
-          </div>
-        </div>
+            // A zone currently containing an aircraft is emphasised: heavier
+            // stroke, denser fill, and a dashed perimeter. Emphasis is earned by
+            // a real containment test, never applied decoratively.
+            const breached = breachedZoneNames.has(zone.name);
+            const style = {
+              color,
+              weight: breached ? 3 : 1.5,
+              fillColor: color,
+              fillOpacity: breached ? 0.22 : 0.08,
+              dashArray: breached ? "6 4" : undefined,
+              className: breached ? "sg-zone-breached" : undefined,
+            };
 
-        {validDrones.length === 0 && !dvrData ? (
-          <div className="flex flex-1 items-center justify-center px-6 text-center relative">
-            <DVRScrubber onHistoricalDataUpdate={setDvrData} />
-            <div>
-              <p className="text-lg font-semibold text-sg-text">No drone telemetry streams active.</p>
-              <p className="mt-2 text-sm text-sg-text-dim">Run simulate_attack.py to stream live virtual drones.</p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 min-h-0 relative">
-            <GeofenceControlPanel />
-            <DVRScrubber onHistoricalDataUpdate={setDvrData} />
-            
-            <MapContainer
-              center={center}
-              zoom={DEFAULT_ZOOM}
-              scrollWheelZoom
-              className="h-full w-full"
+            return geometry.kind === "circle" ? (
+              <Circle key={zone.id} center={geometry.center} radius={geometry.radius} pathOptions={style}>
+                <Popup>
+                  <ZonePopup zone={zone} breached={breached} />
+                </Popup>
+              </Circle>
+            ) : (
+              <Polygon key={zone.id} positions={geometry.points} pathOptions={style}>
+                <Popup>
+                  <ZonePopup zone={zone} breached={breached} />
+                </Popup>
+              </Polygon>
+            );
+          })}
+
+        {positioned.map((drone) => {
+          const breached = breaches.get(drone.drone_id);
+          const tone: keyof typeof MARKER_COLORS = replayMode
+            ? "replay"
+            : breached
+              ? "breach"
+              : typeof drone.battery === "number" && drone.battery < 25
+                ? "low"
+                : "normal";
+
+          return (
+            <Marker
+              key={drone.drone_id}
+              position={[drone.latitude, drone.longitude]}
+              icon={markerIcon(tone, drone.heading)}
             >
-              <TileLayer
-                attribution='&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              />
+              <Popup>
+                <DronePopup drone={drone} breachedZones={breached ?? null} />
+              </Popup>
+            </Marker>
+          );
+        })}
+      </MapContainer>
 
-              {/* Radar Sweep Overlay */}
-              <Marker position={center} icon={createRadarIcon(!!dvrData)} interactive={false} />
+      {/* Overlay controls sit above the Leaflet pane (z-index 400+). */}
+      <div className="pointer-events-none absolute right-2.5 top-2.5 z-[500] flex flex-col items-end gap-1.5">
+        <button
+          type="button"
+          onClick={() => setShowZones((v) => !v)}
+          aria-pressed={showZones}
+          className="pointer-events-auto rounded-control border border-line-strong bg-surface-overlay/95 px-2.5 py-1.5 text-[12px] text-content hover:bg-surface-hover"
+        >
+          {showZones ? "Hide zones" : "Show zones"}
+          {zones.length > 0 ? (
+            <span className="ml-1.5 tabular text-content-dim">{zones.length}</span>
+          ) : null}
+        </button>
 
-              {/* Render Swarm Vector Formation Lines (Only live for now) */}
-              {!dvrData && swarmFormation?.formation_lines?.map((line, idx) => (
-                <Polyline
-                  key={idx}
-                  positions={line as [number, number][]}
-                  pathOptions={{
-                    color: "#00d9ff",
-                    weight: 2,
-                    dashArray: "6, 6",
-                    opacity: 0.8
-                  }}
-                />
-              ))}
+        {replayMode ? (
+          <span className="pointer-events-auto rounded-control border border-line-strong bg-surface-overlay/95 px-2.5 py-1.5 text-[12px] text-content-muted">
+            Showing recorded telemetry
+          </span>
+        ) : null}
 
-              {/* Render Active Geofences */}
-              {geofences.map((zone: any) => {
-                if (zone.zone_type === "CIRCLE") {
-                  return (
-                    <Circle
-                      key={zone.id}
-                      center={zone.coordinates.center as [number, number]}
-                      radius={zone.coordinates.radius}
-                      pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.12, dashArray: "6, 6", weight: 2 }}
-                    />
-                  );
-                }
-                return null;
-              })}
-
-              {/* Render Drones */}
-              {validDrones.map((drone) => {
-                let isBreach = false;
-                for (const zone of geofences) {
-                  if (zone.zone_type === "CIRCLE") {
-                    const { center: zCenter, radius } = zone.coordinates;
-                    const distMeters = getDistanceMeters(zCenter[0], zCenter[1], drone.latitude, drone.longitude);
-                    if (distMeters <= radius) {
-                      isBreach = true;
-                      break;
-                    }
-                  }
-                }
-
-                return (
-                  <Marker
-                    key={drone.drone_id}
-                    position={[drone.latitude, drone.longitude]}
-                    icon={createMarkerIcon(drone.threat_status, isBreach, !!dvrData)}
-                  >
-                    <Popup>
-                      <div className="min-w-[240px] space-y-2 text-sm text-sg-text font-mono">
-                        <div className="border-b border-white/10 pb-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#00d9ff]">
-                            {dvrData ? "Historical Unit Telemetry" : "Unit Telemetry"}
-                          </p>
-                          <p className="mt-1 font-bold text-sg-text flex items-center justify-between">
-                            {drone.drone_id}
-                            {isBreach && (
-                              <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/40 px-2 py-0.5 rounded">
-                                BREACH
-                              </span>
-                            )}
-                          </p>
-                        </div>
-                        <div className="grid gap-1.5 text-xs text-sg-text-dim">
-                          <div className="flex items-center justify-between">
-                            <span>Geofence Status</span>
-                            <span className={`font-bold ${isBreach ? "text-red-400" : "text-emerald-400"}`}>
-                              {isBreach ? "RESTRICTED" : "CLEAR"}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Coordinates</span>
-                            <span className="text-sg-text">{drone.latitude.toFixed(4)}, {drone.longitude.toFixed(4)}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Velocity</span>
-                            <span className="text-sg-text">{drone.speed.toFixed(1)} m/s</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Altitude</span>
-                            <span className="text-sg-text">{drone.altitude.toFixed(1)} m</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Threat Rating</span>
-                            <span className={`font-bold ${drone.threat_status === "Critical" ? "text-red-400" : "text-sg-text"}`}>
-                              {drone.threat_status ?? "NOMINAL"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                );
-              })}
-            </MapContainer>
-          </div>
-        )}
+        {breaches.size > 0 ? (
+          <span className="pointer-events-auto rounded-control border border-critical/40 bg-critical-wash/95 px-2.5 py-1.5 text-[12px] text-critical">
+            {breaches.size} in restricted {breaches.size === 1 ? "zone" : "zones"}
+          </span>
+        ) : null}
       </div>
-    </GlassCard>
+    </div>
+  );
+}
+
+function ZonePopup({ zone, breached }: { zone: GeofenceZone; breached: boolean }) {
+  return (
+    <div className="flex flex-col gap-1 text-[12px]">
+      <p className="font-semibold">{zone.name}</p>
+      <div className="flex items-center gap-1.5">
+        <Chip tone={zone.severity?.toUpperCase() === "CRITICAL" ? "critical" : "warning"}>
+          {zone.severity?.toLowerCase() ?? "unspecified"}
+        </Chip>
+        <Mono className="text-content-dim">{zone.zone_type?.toLowerCase()}</Mono>
+      </div>
+      {breached ? (
+        <p className="text-[11px] text-critical">One or more aircraft are inside this zone.</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Telemetry card. Every field renders an em dash when the payload omits it. */
+function DronePopup({
+  drone,
+  breachedZones,
+}: {
+  drone: MappedDrone;
+  breachedZones: string[] | null;
+}) {
+  const quality = signalQuality(drone.satellites);
+  const rows: Array<[string, ReactNode]> = [
+    ["Position", <Mono key="p">{latLon(drone.latitude, drone.longitude)}</Mono>],
+    [
+      "Altitude",
+      <Mono key="a">
+        {drone.altitude === null || drone.altitude === undefined ? "—" : `${num(drone.altitude)} m`}
+      </Mono>,
+    ],
+    [
+      "Speed",
+      <Mono key="s">
+        {drone.speed === null || drone.speed === undefined ? "—" : `${num(drone.speed)} m/s`}
+      </Mono>,
+    ],
+    [
+      "Heading",
+      <Mono key="h">
+        {drone.heading === null || drone.heading === undefined
+          ? "—"
+          : `${num(drone.heading, 0)}°`}
+      </Mono>,
+    ],
+    [
+      "Battery",
+      <Mono key="b" className={typeof drone.battery === "number" && drone.battery < 25 ? "text-warning" : undefined}>
+        {drone.battery === null || drone.battery === undefined
+          ? "—"
+          : `${num(drone.battery, 0)}%`}
+      </Mono>,
+    ],
+    [
+      "Signal",
+      quality === null ? (
+        <span key="q" className="text-content-dim">Not reported</span>
+      ) : (
+        <span key="q" className="flex items-center gap-1.5">
+          <Mono>{drone.satellites} sats</Mono>
+          <Chip tone={quality === "good" ? "nominal" : quality === "fair" ? "accent" : "warning"}>
+            {quality}
+          </Chip>
+        </span>
+      ),
+    ],
+    ["Mode", <Mono key="m">{drone.flight_mode ?? "—"}</Mono>],
+    [
+      "Armed",
+      <span key="ar">
+        {drone.armed_status === null || drone.armed_status === undefined
+          ? "—"
+          : drone.armed_status
+            ? "Yes"
+            : "No"}
+      </span>,
+    ],
+  ];
+
+  if (drone.created_at) {
+    rows.push(["Reported", <Mono key="t">{formatTime(drone.created_at)}</Mono>]);
+  }
+
+  return (
+    <div className="flex min-w-[210px] flex-col gap-1.5 text-[12px]">
+      <p className="font-mono text-[13px] font-semibold">{drone.drone_id}</p>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {rows.map(([label, value]) => (
+          <Fragment key={label}>
+            <dt className="text-content-dim">{label}</dt>
+            <dd>{value}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {breachedZones ? (
+        <p className="border-t border-line-subtle pt-1.5 text-[11px] text-critical">
+          Inside restricted {breachedZones.length === 1 ? "zone" : "zones"}:{" "}
+          {breachedZones.join(", ")}
+        </p>
+      ) : null}
+    </div>
   );
 }
