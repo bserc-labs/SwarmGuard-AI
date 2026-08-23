@@ -1,18 +1,28 @@
 import os
+import sys
 import unittest
-import sys
 
-
-# Resolve sys.path to allow running this test file standalone
-import sys
+# Import relative to the backend package root, matching pytest's
+# `pythonpath = ["."]` in pyproject.toml and every other test module.
+#
+# This previously imported `backend.services...` after appending the repo root
+# to sys.path. That resolves when the repo root is a parent directory, but the
+# Docker image copies only backend/ to /app -- there is no `backend` package
+# inside the container, so the module failed to collect entirely. Same imports
+# as the rest of the suite now, so it runs in both places.
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.normpath(os.path.join(TEST_DIR, "..", ".."))
-sys.path.append(PROJECT_ROOT)
+BACKEND_ROOT = os.path.normpath(os.path.join(TEST_DIR, ".."))
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
 
-from backend.services.threat_service import ThreatScoreEngine, PiecewiseLinearStrategy, SigmoidStrategy
-from backend.utils.severity_mapper import map_severity
-from backend.utils.recommendation_engine import RecommendationEngine
-from backend.utils.incident_generator import IncidentGenerator
+from services.threat_service import (
+    PiecewiseLinearStrategy,
+    SigmoidStrategy,
+    ThreatScoreEngine,
+)
+from utils.incident_generator import IncidentGenerator
+from utils.recommendation_engine import RecommendationEngine
+from utils.severity_mapper import map_severity
 
 DATA_DIR = os.path.normpath(os.path.join(TEST_DIR, "..", "data"))
 

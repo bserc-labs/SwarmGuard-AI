@@ -49,9 +49,19 @@ class AlertService:
         """
         cutoff_time = datetime.utcnow() - timedelta(seconds=self.suppression_window_seconds)
 
+        # Deliberately NOT filtered by attack_type. A single ongoing event
+        # changes its own signature as it develops: a jamming attack first
+        # shows a satellite-count collapse plus an altitude drop, and a moment
+        # later -- satellites already low, so no further transition -- only the
+        # altitude drop remains, which classifies as FLIGHT_INSTABILITY. Keyed
+        # on attack_type, suppression let that second reading through and one
+        # attack became two unrelated incidents on the operator's screen.
+        #
+        # Within the window, one drone means one incident. `attack_type` is
+        # escalated on the existing row instead (see
+        # IncidentEngine._update_existing_incident).
         query = db.query(Incident).filter(
             Incident.drone_id == drone_id,
-            Incident.attack_type == attack_type,
             Incident.detection_time >= cutoff_time
         )
         if organization_id is not None:
