@@ -1,6 +1,6 @@
-from typing import Union
 
-def map_severity(threat_score: Union[int, float]) -> str:
+
+def map_severity(threat_score: float) -> str:
     """
     Maps a Threat Score (0-100) into one of four severity levels:
     - LOW: 0 to 25

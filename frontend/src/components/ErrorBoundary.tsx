@@ -1,64 +1,79 @@
-import React, { Component, ErrorInfo, ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Icon } from "@/components/ui/Icon";
 
 interface Props {
   children?: ReactNode;
 }
 
 interface State {
-  hasError: boolean;
   error: Error | null;
 }
 
+/**
+ * Catches render errors below it so one broken panel does not blank the console.
+ * The message is shown plainly — an operator needs to know what failed, not be
+ * told the system has suffered a catastrophe.
+ */
 export class ErrorBoundary extends Component<Props, State> {
-  public state: State = {
-    hasError: false,
-    error: null,
+  state: State = { error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    // Replace with the error reporter once one is configured.
+    console.error("Render error:", error, info.componentStack);
+  }
+
+  private reset = () => {
+    this.setState({ error: null });
   };
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
-  }
-
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo);
-  }
-
-  private handleReboot = () => {
+  private reload = () => {
     window.location.reload();
   };
 
-  public render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-[#0e1417] flex flex-col items-center justify-center text-[#dde4e6] p-4 font-mono">
-          <div className="glass-card p-10 max-w-2xl w-full text-center border-l-4 border-l-[#ffb4ab] relative overflow-hidden bg-[#1a2123]/60 backdrop-blur-md border border-[rgba(255,255,255,0.08)] rounded">
-            {/* Sci-fi overlay effects */}
-            <div className="absolute inset-0 bg-[#ffb4ab]/5 pointer-events-none"></div>
-            
-            <h1 className="text-4xl font-bold text-[#ffb4ab] mb-4 animate-pulse flex items-center justify-center gap-3">
-              <span className="material-symbols-outlined text-5xl">warning</span>
-              SYSTEM FAILURE
-            </h1>
-            
-            <div className="bg-[#080f11] p-4 rounded text-left mb-8 border border-[#ffb4ab]/20 overflow-auto">
-              <p className="text-[#ffb4ab] font-bold mb-2">ERROR_TRACE:</p>
-              <code className="text-[#ffdeaa] text-sm whitespace-pre-wrap">
-                {this.state.error?.toString() || "Unknown critical error occurred in React component tree."}
-              </code>
-            </div>
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
 
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center p-6">
+        <div className="w-full max-w-lg rounded-panel border border-line bg-surface-raised p-5">
+          <div className="flex items-start gap-3">
+            <Icon name="alert" size={18} className="mt-0.5 shrink-0 text-critical" />
+            <div className="min-w-0">
+              <h1 className="text-[15px] font-semibold text-content">This view failed to render</h1>
+              <p className="mt-1 text-[13px] text-content-muted">
+                The rest of the console is unaffected. Retrying re-renders this section; reloading
+                restarts the app.
+              </p>
+            </div>
+          </div>
+
+          <pre className="mt-4 max-h-40 overflow-auto rounded-control border border-line bg-surface-sunken p-3 font-mono text-[12px] leading-relaxed text-content-muted">
+            {error.message || String(error)}
+          </pre>
+
+          <div className="mt-4 flex flex-wrap gap-2">
             <button
-              onClick={this.handleReboot}
-              className="bg-transparent border border-[#ffb4ab] text-[#ffb4ab] hover:bg-[#ffb4ab] hover:text-[#0e1417] px-6 py-3 rounded uppercase font-bold tracking-widest transition-all duration-300 flex items-center justify-center gap-2 mx-auto shadow-[0_0_15px_rgba(255,180,171,0.2)] hover:shadow-[0_0_25px_rgba(255,180,171,0.5)]"
+              type="button"
+              onClick={this.reset}
+              className="rounded-control border border-accent/50 bg-accent-dim px-3 py-1.5 text-[13px] text-content hover:bg-accent/25"
             >
-              <span className="material-symbols-outlined">restart_alt</span>
-              REBOOT SYSTEM
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={this.reload}
+              className="rounded-control border border-line-strong bg-surface-overlay px-3 py-1.5 text-[13px] text-content hover:bg-surface-hover"
+            >
+              Reload console
             </button>
           </div>
         </div>
-      );
-    }
-
-    return this.props.children;
+      </div>
+    );
   }
 }

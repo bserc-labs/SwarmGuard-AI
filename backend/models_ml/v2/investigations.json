@@ -1,0 +1,82 @@
+{
+  "purpose": "Interventions tried against the Tier 2 generalisation failure, and what each measured. Surfaced by GET /ai/detection/status so the console can show why the model is disabled rather than only that it is.",
+  "task": "binary GPS Spoofing vs Normal, leave-one-flight-out, pooled over held-out rows",
+  "evaluation_set": {
+    "rows": 39441,
+    "flights": 9,
+    "positives": 15863,
+    "negatives": 23578,
+    "positive_rate": 0.402
+  },
+  "trivial_baselines": {
+    "note": "Reference points that require no model at all. A detector that does not clear these is not adding information.",
+    "always_say_attack": { "f1_score": 0.574, "precision": 0.402, "recall": 1.0, "false_positive_rate": 1.0 },
+    "always_say_normal": { "f1_score": 0.0 }
+  },
+  "interventions": [
+    {
+      "id": "baseline",
+      "name": "Deployable feature set, unnormalised",
+      "description": "altitude, yaw and seven rate-of-change features. The registered v2 model.",
+      "lofo": { "f1_score": 0.085, "precision": 0.073, "recall": 0.101, "false_positive_rate": 0.862 },
+      "row_level_ceiling_f1": 0.674,
+      "verdict": "rejected",
+      "reason": "Flags 86% of normal rows. Far below the always-say-attack baseline."
+    },
+    {
+      "id": "drop_confounds",
+      "name": "Drop high-ICC flight-identity features",
+      "description": "diagnostics/15 found battery (ICC 0.77), link_data_rate (0.67), pitch (0.65) and speed (0.54) carry flight identity. diagnostics/16 removes them.",
+      "lofo_multiclass_macro_f1_before": 0.028,
+      "lofo_multiclass_macro_f1_after": 0.027,
+      "verdict": "rejected",
+      "reason": "No measurable effect on cross-flight generalisation. The confounds were real but removing them did not recover signal, which indicates the shortcut is not carried by those four features alone."
+    },
+    {
+      "id": "deltas_only",
+      "name": "Rates of change only, dropping absolute altitude and yaw",
+      "description": "SWARMGUARD_FEATURE_SET=deltas. Tests whether two weakly-flight-specific absolute features jointly encode identity.",
+      "lofo": { "f1_score": 0.143, "precision": 0.120, "recall": 0.179, "false_positive_rate": 0.887 },
+      "row_level_ceiling_f1": 0.613,
+      "verdict": "rejected",
+      "reason": "F1 improves 68% but the false-positive rate gets worse, 0.862 to 0.887. The gain is recall bought with more false alarms, not better discrimination. Still below the trivial baseline."
+    },
+    {
+      "id": "per_flight_normalisation",
+      "name": "Per-flight normalisation against an early-window baseline",
+      "description": "Each feature z-scored against the first K rows of its own flight, so the model sees deviation from that aircraft's own behaviour rather than absolute values that encode which flight it is.",
+      "lofo": { "f1_score": 0.282, "precision": 0.292, "recall": 0.272, "false_positive_rate": 0.442 },
+      "baseline_window_sensitivity": [
+        { "baseline_rows": 100, "f1_score": 0.380, "false_positive_rate": 0.339 },
+        { "baseline_rows": 200, "f1_score": 0.199, "false_positive_rate": 0.587 },
+        { "baseline_rows": 300, "f1_score": 0.282, "false_positive_rate": 0.442 },
+        { "baseline_rows": 600, "f1_score": 0.219, "false_positive_rate": 0.355 },
+        { "baseline_rows": 1200, "f1_score": 0.523, "false_positive_rate": 0.276 }
+      ],
+      "verdict": "rejected",
+      "reason": "The largest single improvement measured: F1 0.085 to 0.282 and the false-positive rate roughly halved. It is still rejected for three reasons. It does not clear the always-say-attack baseline of 0.574 at any window size. The result swings non-monotonically from 0.199 to 0.523 on an arbitrary window parameter, a 2.6x spread with no trend, which is the signature of an unstable estimate over 9 folds rather than a real effect. And it cannot be deployed as measured: is_attack is constant across every flight in this dataset, so the baseline window is computed from attacked data, whereas a live aircraft would baseline against a genuinely clean window after arming."
+    },
+    {
+      "id": "per_flight_full_leaky",
+      "name": "Per-flight normalisation over the whole flight (control, not deployable)",
+      "description": "Normalises each flight by statistics taken across all of its rows, including the held-out ones. Included only as an upper bound.",
+      "lofo": { "f1_score": 0.604, "precision": 1.0, "recall": 0.433, "false_positive_rate": 0.0 },
+      "verdict": "invalid",
+      "reason": "Precision exactly 1.000 and a false-positive rate of exactly 0.000 across 23,578 normal rows is the signature of leakage, not accuracy. The whole-flight standard deviation is itself a flight-level quantity, and attack_type is 1:1 with flight_id, so the normalisation constant carries the label. Reported to show where the ceiling comes from, never as a candidate."
+    }
+  ],
+  "root_cause": {
+    "finding": "The failure is structural in the dataset, not a modelling deficiency.",
+    "evidence": [
+      "attack_type is 1:1 with flight_id: every flight is entirely one class, so in training 'predict the attack' and 'predict which flight' are the same task.",
+      "is_attack is constant within all 16 flights. Labels are flight-level, not sample-level, so quiescent moments of a spoofing flight are still labelled attack and recall is measured against rows that may carry no attack signal.",
+      "Nine flights means nine LOFO folds, four positive and five negative. The variance of any estimate over that is large enough to swamp the effects being measured."
+    ],
+    "implication": "No feature engineering can separate attack behaviour from flight identity while the two are the same variable. This needs data with sample-level labels and attacks that begin partway through a flight."
+  },
+  "decision": {
+    "tier_2_enabled": false,
+    "decided_on": "the leave-one-flight-out result against a trivial baseline, not on relative improvement",
+    "statement": "Per-flight normalisation improved the headline metric by more than 3x and is still not a detector. Tier 2 remains disabled and the kinematic guard remains authoritative."
+  }
+}

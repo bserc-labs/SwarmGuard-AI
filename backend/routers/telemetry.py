@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List
 
 from fastapi import (
     APIRouter,
@@ -15,16 +14,16 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+from config import get_settings
 from database import get_db
+from middleware.auth_middleware import TenantContext, require_permission
+from middleware.rbac import Permissions
+from services.audit_service import audit_service
 from services.detection_pipeline import run_detection
+from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.limiter import limiter
 from utils.logger import logger
-from config import get_settings
-from services.telemetry_service import telemetry_service
-from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission, get_current_user
-from middleware.rbac import Permissions
-from services.audit_service import audit_service
 
 settings = get_settings()
 EXPECTED_DRONE_API_KEY = settings.DRONE_API_KEY
@@ -79,10 +78,10 @@ def ingest_telemetry(
 
         return {"status": "success", "data": processed_data}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Failed to process telemetry: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        raise HTTPException(status_code=500, detail="Internal Server Error") from e
 
 @router.get("/latest")
 def get_latest_telemetry(
@@ -131,7 +130,7 @@ def get_telemetry_history(
         
         return logs
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO 8601.")
+        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO 8601.") from None
 
 @router.get("/{drone_id}")
 def get_drone_telemetry(

@@ -1,41 +1,29 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.logger import logger
-import sys
+"""
+Development seeding helper.
+
+Delegates to bootstrap.py so there is exactly one provisioning path. This script
+deliberately does NOT call Base.metadata.create_all(): building the schema
+outside Alembic leaves no version stamp and, more importantly, no TimescaleDB
+hypertable on telemetry_logs. Run migrations first:
+
+    alembic upgrade head
+    ADMIN_USERNAME=admin ADMIN_PASSWORD=<24+ chars> python scripts/seed_users.py
+"""
+
 import os
+import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from database import SessionLocal, engine, Base
-import models
-from services.auth_service import get_password_hash
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-def seed_users():
-    # Create all tables first
-    Base.metadata.create_all(bind=engine)
-    
-    db = SessionLocal()
-    
-    # Check if admin already exists
-    admin = db.query(models.User).filter(models.User.username == "admin").first()
-    if admin:
-        logger.info("✅ Admin user already exists!")
-        return
-        
-    # Create new admin user
-    hashed_password = get_password_hash("admin")
-    new_user = models.User(
-        username="admin",
-        email="admin@swarmguard.ai",
-        password=hashed_password,
-        role="ADMIN"
-    )
-    
-    db.add(new_user)
-    db.commit()
-    logger.info("✅ Admin user created successfully (username: 'admin', password: 'admin')")
-    
-    db.close()
+from bootstrap import main
 
 if __name__ == "__main__":
-    seed_users()
+    if not os.getenv("ADMIN_USERNAME") or not os.getenv("ADMIN_PASSWORD"):
+        print(
+            "ADMIN_USERNAME and ADMIN_PASSWORD must be set.\n"
+            "Hardcoded admin/admin credentials were removed deliberately.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    main()

@@ -1,0 +1,125 @@
+[project]
+name = "swarmguard-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+# The rule set is deliberately one you can pass today, not an aspirational one.
+# A lint job that has never been green is a lint job nobody reads. Rules that
+# require real refactoring are listed under [staged] below with their current
+# violation counts so they can be turned on one at a time.
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [
+    "alembic/versions",  # generated revision scripts
+    "__pycache__",
+    ".venv",
+    "venv",
+]
+
+[tool.ruff.lint]
+select = [
+    "E4",    # imports
+    "E7",    # statement-level errors
+    "E9",    # syntax / IO errors
+    "F",     # pyflakes
+    "I",     # import sorting
+    "B",     # bugbear
+    "UP",    # pyupgrade
+    "RUF",   # ruff-specific
+    "S",     # bandit — security
+    "BLE",   # blind except
+    "DTZ",   # naive datetimes
+]
+
+ignore = [
+    # FastAPI's core idiom is `x = Depends(...)` in a signature. Bugbear flags
+    # every route in the codebase for it.
+    "B008",
+    # Deliberate: sensor_fusion and the dataset generators simulate telemetry.
+    # These are simulations, not key material.
+    "S311",
+    # datetime.utcnow() is used throughout and every column is naive. Migrating
+    # to timezone-aware datetimes is a schema decision, not a lint fix — see
+    # the retention/forensics question in the roadmap. 19 occurrences.
+    "DTZ003",
+    "DTZ005",
+    # Same decision as above: tests and fixtures build naive datetimes to match
+    # the naive columns. Goes when the schema goes timezone-aware.
+    "DTZ001",
+    # Staged (see below): 35 blind excepts in application code, each needing a
+    # decision about which exception is actually expected. Enable per-module.
+    "BLE001",
+    # Import-not-at-top is load-bearing in a few places: main.py defers the
+    # mavlink import, and bootstrap.py must load .env before importing config.
+    "E402",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and they may hold a hardcoded password fixture.
+"tests/**" = ["S101", "S105", "S106", "BLE001", "S113", "F841", "B017", "S608"]
+# Operational scripts: subprocess use and requests without timeouts are fine in
+# a one-shot CLI that a human is watching.
+"scripts/**" = ["S101", "S113", "S603", "S607", "BLE001"]
+# Research and benchmarking code. Held to correctness, not to production rules.
+"models_ml/**" = ["S101", "S113", "BLE001", "F841", "RUF059", "S607", "E731"]
+"test_*.py" = ["S101", "BLE001"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "config", "database", "models", "schemas", "bootstrap",
+    "routers", "services", "middleware", "utils", "models_ml",
+]
+
+# ---------------------------------------------------------------------------
+# Staged rules — not yet enabled, tracked so they do not get forgotten.
+# ---------------------------------------------------------------------------
+# BLE001 (35 in application code): the blind excepts that swallowed the SHAP
+#   failure and the heartbeat broadcast error. Each needs a real decision about
+#   which exception is actually expected. Enable per-module as they are fixed.
+# E501  (358): needs a formatting pass. Run `ruff format` in its own commit,
+#   then drop line-length here and enable E501.
+# S113  (32): add timeouts to every outbound requests call.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+# Scoped to the modules carrying auth, tenancy, and the ingest path. The ML and
+# script trees are excluded until they have annotations; widen this list rather
+# than weakening the settings.
+files = ["middleware", "services", "routers", "config.py", "schemas.py", "bootstrap.py"]
+# The packages have no __init__.py; without these mypy sees services/auth_service.py
+# as both `auth_service` and `services.auth_service` and stops.
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_redundant_casts = true
+warn_unused_ignores = false
+no_implicit_optional = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["models_ml.*", "scripts.*", "tests.*"]
+ignore_errors = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires a live server or external service",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

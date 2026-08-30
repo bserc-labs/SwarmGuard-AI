@@ -43,8 +43,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -130,3 +130,11 @@ model_train/reports/
 # Large generated artifacts
 backend/data/*.csv
 project_dump*.txt
+
+# Stray local artifacts. The app requires PostgreSQL and rejects SQLite at
+# startup, so any *.db here is a leftover experiment -- and may hold test
+# credentials. Lighthouse output is a build report, not source.
+*.db
+*.sqlite
+*.sqlite3
+frontend/lighthouse-report.json

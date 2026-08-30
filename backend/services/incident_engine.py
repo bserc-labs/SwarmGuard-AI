@@ -1,10 +1,15 @@
 import logging
-from typing import Dict, Any
-from sqlalchemy.orm import Session
 from datetime import datetime
+from typing import Any
+
+from sqlalchemy.orm import Session
 
 from models import Incident
-from services.alert_service import alert_service
+from services.alert_service import (
+    SEVERITY_RANK,
+    alert_service,
+    resolve_thresholds,
+)
 from services.priority_service import priority_service
 from services.recommendation_service import recommendation_service
 
@@ -34,10 +39,24 @@ class IncidentEngine:
     Delegates alerting, prioritization, and recommendations to decoupled sub-services.
     """
     
+    @staticmethod
+    def _merge_severity(detector_severity: Any, policy_severity: str) -> str:
+        """The more serious of the detector's judgement and the org's policy.
+
+        An unrecognised detector value is ignored rather than trusted, so a
+        detector cannot invent a band the rest of the system does not rank.
+        """
+        if not isinstance(detector_severity, str):
+            return policy_severity
+        detector = detector_severity.upper()
+        if detector not in SEVERITY_RANK:
+            return policy_severity
+        return detector if SEVERITY_RANK[detector] >= SEVERITY_RANK.get(policy_severity, 0) else policy_severity
+
     def process_ai_detection(
         self,
         db: Session,
-        detection: Dict[str, Any],
+        detection: dict[str, Any],
         mission_id: str | None = None,
         *,
         organization_id: int | None = None,
@@ -52,7 +71,19 @@ class IncidentEngine:
         drone. It is keyword-only so an existing positional caller cannot pass
         a mission_id into it by accident.
         """
-        drone_id = detection.get("drone_id")
+        if organization_id is None:
+            # Previously this wrote an incident with organization_id NULL, which
+            # no tenant-scoped read could ever return -- a detection that fired,
+            # was stored, and reached nobody. The column is NOT NULL as of
+            # migration d4e5f6a7b8c9, so this would now surface as an
+            # IntegrityError from the driver; raising here names the actual
+            # mistake instead.
+            raise ValueError(
+                "organization_id is required to record an incident. A detection "
+                "with no owning organization is invisible to every tenant."
+            )
+
+        drone_id = str(detection.get("drone_id") or "")
         # Extract inference outputs
         prediction = detection.get("prediction", {})
         explanation = detection.get("explanation", {})
@@ -79,19 +110,42 @@ class IncidentEngine:
             "threat_score": threat_score
         }
 
+        # Severity thresholds belong to the organization that owns the drone.
+        # Resolved once and reused, so creation and escalation cannot classify
+        # the same event against two different policies.
+        thresholds = resolve_thresholds(db, organization_id)
+
         # 1. Alerting & Suppression
         alert = alert_service.process_alert(
-            db, incident_data, organization_id=organization_id
+            db, incident_data, organization_id=organization_id, thresholds=thresholds
         )
         if not alert:
             # Suppressed, but we might want to update the existing incident's last detection time.
             self._update_existing_incident(
                 db, drone_id, attack_type, threat_score,
                 organization_id=organization_id,
+                thresholds=thresholds,
+                evidence=explanation,
             )
             return None
 
-        severity = alert["severity"]
+        # Two severities, and the more serious one wins.
+        #
+        # `alert["severity"]` is policy: the organization's configured bands
+        # applied to the threat score. `prediction["severity"]` is the
+        # detector's own judgement, and it knows things the score does not --
+        # the kinematic guard grades on how far past a physical limit a reading
+        # was and how many independent checks failed, and a geofence breach
+        # inherits the severity the operator declared on the zone itself.
+        #
+        # Taking the maximum means physics and operator policy act as a floor
+        # that configuration cannot lower, while an organization that tightens
+        # its thresholds does raise severity for every tier. Raising thresholds
+        # cannot push a detector-declared severity down, which is the intended
+        # asymmetry: configuration should not be able to silence a violated
+        # no-fly zone.
+        detector_severity = prediction.get("severity")
+        severity = self._merge_severity(detector_severity, alert["severity"])
 
         # 2. Priority Calculation
         # Count repeat incidents for this drone
@@ -121,7 +175,12 @@ class IncidentEngine:
             "supporting_indicators": summary.get("Supporting Indicators", "").split(", "),
             "recommended_action": recommendation,
             "model_version": metadata.get("model_version", "v1.0"),
-            "explanation_strength": metadata.get("explanation_confidence_percent", 0.0)
+            "explanation_strength": metadata.get("explanation_confidence_percent", 0.0),
+            # Which policy produced the stored severity, so an analyst can tell
+            # a detector-declared band from a configured one.
+            "severity_source": (
+                "detector" if severity == detector_severity else thresholds.source
+            ),
         }
         
         # 5. Create Incident
@@ -162,11 +221,24 @@ class IncidentEngine:
         threat_score: float,
         *,
         organization_id: int | None = None,
+        thresholds=None,
+        evidence: dict[str, Any] | None = None,
     ):
         """
         Updates the threat score and updated_at timestamp of an ongoing incident
         to prevent duplicate spam while keeping the active incident fresh.
+
+        `evidence` is the suppressed detection's explanation block. When the
+        escalation also changes the incident's label, the attribution is
+        replaced alongside it so the two cannot describe different events.
+
+        Only an incident that is still live gets re-graded, and only when the
+        new reading is worse. Incidents already resolved or closed are never
+        touched, so changing an organization's thresholds does not rewrite
+        history -- it changes how the next detection is classified.
         """
+        if thresholds is None:
+            thresholds = resolve_thresholds(db, organization_id)
         # Matches on drone, not attack_type, to mirror the suppression rule:
         # one ongoing event per drone, whose classification may change as the
         # attack's signature develops.
@@ -187,8 +259,26 @@ class IncidentEngine:
                 # filed as jamming, not be relabelled by its own aftermath.
                 if attack_type and attack_type != incident.attack_type:
                     incident.attack_type = attack_type
-                # Re-evaluate severity
-                incident.severity = alert_service.generate_alert_severity(threat_score)
+                    # Relabelling without re-evidencing leaves a record whose
+                    # attack_type and attribution disagree -- an incident headed
+                    # GPS_SPOOFING while its stored evidence is a geofence
+                    # breach, because the first detector to fire wrote the
+                    # evidence and a later one overwrote only the label. That
+                    # was invisible while one detector could raise incidents and
+                    # became reachable as soon as a second could.
+                    if evidence is not None:
+                        incident.shap_values = evidence.get("ranked_features") or []
+                        summary = evidence.get("summary") or {}
+                        if summary:
+                            incident.explanation = str(summary)
+                # Re-evaluate severity against this organization's bands, and
+                # never downgrade: the incident already reached the higher
+                # severity, and an ongoing event getting quieter on paper while
+                # it is still open would misrepresent it.
+                incident.severity = self._merge_severity(
+                    incident.severity,
+                    alert_service.generate_alert_severity(threat_score, thresholds),
+                )
                 # Re-evaluate priority
                 incident.priority = priority_service.calculate_priority(incident.threat_score, incident.anomaly_score, 1)
 

@@ -12,11 +12,11 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
+from experimental.threat_service import threat_service
 from models_ml.preprocess import FeatureEngineer, angle_difference, haversine_vectorized
 from services.explanation_service import explanation_service
 from services.incident_engine import _threat_level_ordinal
 from services.recommendation_service import recommendation_service
-from services.threat_service import threat_service
 
 V2_FEATURES = [
     "altitude",

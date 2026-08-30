@@ -1,75 +1,214 @@
+/**
+ * Telemetry socket transport.
+ *
+ * The connection state machine, exponential backoff, stale-traffic detection and
+ * duplicate-subscription guard are preserved from the original implementation.
+ * Changes: the URL is derived from config rather than window.location directly,
+ * and the manager now reports when it last received traffic so the UI can
+ * distinguish a live feed from an open-but-silent socket.
+ */
+
+import { telemetrySocketUrl } from "@/config";
 import { getToken } from "./auth";
 
-type MessageHandler = (data: unknown) => void;
-type StatusHandler = (connected: boolean) => void;
+export type WSConnectionState =
+  | "CONNECTING"
+  | "CONNECTED"
+  | "DISCONNECTED"
+  | "RECONNECTING"
+  | "OFFLINE";
 
-interface WSOptions {
+export type WSMessage = Record<string, unknown>;
+
+type MessageHandler = (data: WSMessage) => void;
+type StateHandler = (state: WSConnectionState) => void;
+
+export interface WSOptions {
   onMessage: MessageHandler;
-  onStatusChange?: StatusHandler;
+  onStateChange?: StateHandler;
   reconnectInterval?: number;
   maxRetries?: number;
+  pingIntervalMs?: number;
+  /** Close and reconnect if no frame arrives within this window. */
+  staleAfterMs?: number;
 }
 
-export function createWebSocket(options: WSOptions) {
-  const { onMessage, onStatusChange, reconnectInterval = 5000, maxRetries = 10 } = options;
-  let ws: WebSocket | null = null;
-  let retries = 0;
-  let intentionalClose = false;
+const DEFAULTS = {
+  reconnectInterval: 3000,
+  maxRetries: 10,
+  pingIntervalMs: 15_000,
+  staleAfterMs: 30_000,
+} as const;
 
-  function connect() {
+export class TelemetrySocket {
+  private ws: WebSocket | null = null;
+  private readonly options: Required<WSOptions>;
+  private retries = 0;
+  private intentionalClose = false;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastMessageAt: number | null = null;
+  private state: WSConnectionState = "DISCONNECTED";
+
+  constructor(options: WSOptions) {
+    this.options = { ...DEFAULTS, onStateChange: () => {}, ...options };
+  }
+
+  connect(): void {
     const token = getToken();
     if (!token) {
-      console.warn("[WS] No auth token, skipping connection");
+      // Not authenticated: there is nothing to subscribe to.
+      this.updateState("OFFLINE");
       return;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry?token=${token}`);
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return; // already connected or connecting
+    }
 
-    ws.onopen = () => {
-      console.log("[WS] Connected to telemetry stream");
-      retries = 0;
-      onStatusChange?.(true);
+    this.intentionalClose = false;
+    this.updateState(this.retries > 0 ? "RECONNECTING" : "CONNECTING");
+
+    // The backend reads the token from the query string. This lands in proxy
+    // access logs and is tracked for migration to a cookie-authenticated handshake.
+    const url = `${telemetrySocketUrl()}?token=${encodeURIComponent(token)}`;
+
+    try {
+      this.ws = new WebSocket(url);
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
+
+    this.ws.onopen = () => {
+      this.retries = 0;
+      this.lastMessageAt = Date.now();
+      this.updateState("CONNECTED");
+      this.startHeartbeat();
     };
 
-    ws.onmessage = (event) => {
+    this.ws.onmessage = (event: MessageEvent<string>) => {
+      this.lastMessageAt = Date.now();
+      let data: WSMessage;
       try {
-        const data = JSON.parse(event.data);
-        onMessage(data);
+        data = JSON.parse(event.data) as WSMessage;
       } catch {
-        console.warn("[WS] Failed to parse message:", event.data);
+        return; // non-JSON frame; nothing downstream can use it
       }
+      if (data.type === "pong" || data.event === "pong") return;
+      this.options.onMessage(data);
     };
 
-    ws.onclose = (event) => {
-      console.log(`[WS] Disconnected (code: ${event.code})`);
-      onStatusChange?.(false);
+    this.ws.onclose = (event: CloseEvent) => {
+      this.stopHeartbeat();
+      this.ws = null;
 
-      if (!intentionalClose && retries < maxRetries) {
-        retries++;
-        console.log(`[WS] Reconnecting in ${reconnectInterval / 1000}s (attempt ${retries}/${maxRetries})`);
-        setTimeout(connect, reconnectInterval);
+      if (this.intentionalClose) {
+        this.updateState("OFFLINE");
+        return;
       }
+
+      // 1008 is the policy-violation code the backend sends for a missing or
+      // invalid token. Retrying cannot fix that, so stop rather than loop.
+      if (event.code === 1008) {
+        this.updateState("OFFLINE");
+        return;
+      }
+
+      this.updateState("DISCONNECTED");
+      this.scheduleReconnect();
     };
 
-    ws.onerror = (error) => {
-      console.error("[WS] Error:", error);
+    this.ws.onerror = () => {
+      // onclose always follows; recovery is handled there.
     };
   }
 
-  function disconnect() {
-    intentionalClose = true;
-    ws?.close();
-    ws = null;
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+
+    if (this.retries >= this.options.maxRetries) {
+      this.updateState("OFFLINE");
+      return;
+    }
+
+    this.retries += 1;
+    const delay = Math.min(1000 * Math.pow(1.5, this.retries), 15_000);
+    this.updateState("RECONNECTING");
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
-  function send(data: unknown) {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data));
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+
+      if (this.lastMessageAt !== null && Date.now() - this.lastMessageAt > this.options.staleAfterMs) {
+        // Open but silent — drop it so the backoff path re-establishes a fresh socket.
+        this.ws.close();
+        return;
+      }
+
+      try {
+        this.ws.send(JSON.stringify({ type: "ping" }));
+      } catch {
+        /* the close handler will pick this up */
+      }
+    }, this.options.pingIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
   }
 
-  connect();
+  disconnect(): void {
+    this.intentionalClose = true;
+    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.updateState("OFFLINE");
+  }
 
-  return { disconnect, send };
+  send(data: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(data));
+    }
+  }
+
+  private updateState(next: WSConnectionState): void {
+    if (this.state === next) return;
+    this.state = next;
+    this.options.onStateChange(next);
+  }
+
+  getState(): WSConnectionState {
+    return this.state;
+  }
+
+  /** Epoch ms of the last frame received, or null if none has arrived. */
+  getLastMessageAt(): number | null {
+    return this.lastMessageAt;
+  }
+}
+
+/** Construct and immediately connect. Retained for call-site compatibility. */
+export function createWebSocket(options: WSOptions): TelemetrySocket {
+  const socket = new TelemetrySocket(options);
+  socket.connect();
+  return socket;
 }

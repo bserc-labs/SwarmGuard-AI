@@ -1,13 +1,14 @@
-import os
 import json
-from typing import Dict, Any
+import os
+from typing import Any
+
 
 class ExplanationEngine:
     """
     Generates operator-friendly explanations for cyber/RF attacks on the drone.
     Uses the knowledge base JSON files under backend/data/.
     """
-    def __init__(self, data_dir: str = None):
+    def __init__(self, data_dir: str | None = None):
         if data_dir is None:
             # Resolve 'backend/data/' relative to the utils folder
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,9 +17,9 @@ class ExplanationEngine:
             self.data_dir = data_dir
         
         # Cache for loaded attack data
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.cache: dict[str, dict[str, Any]] = {}
 
-    def load_attack_data(self, attack_type: str) -> Dict[str, Any]:
+    def load_attack_data(self, attack_type: str) -> dict[str, Any]:
         """Loads the JSON data file for a specific attack type."""
         if attack_type in self.cache:
             return self.cache[attack_type]
@@ -29,7 +30,7 @@ class ExplanationEngine:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Knowledge base file for attack '{attack_type}' not found.")
             
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
             self.cache[attack_type] = data
             return data
@@ -61,4 +62,4 @@ class ExplanationEngine:
             )
             return explanation
         except Exception as e:
-            return f"Error generating explanation for attack '{attack_type}': {str(e)}"
+            return f"Error generating explanation for attack '{attack_type}': {e!s}"

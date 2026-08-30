@@ -1,6 +1,7 @@
 import csv
-import random
 import os
+import random
+
 
 def generate_dataset(output_path="backend/data/swarmguard_training_dataset.csv", total_rows=2500):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -58,7 +59,7 @@ def generate_dataset(output_path="backend/data/swarmguard_training_dataset.csv",
         rows.append([d_id, lat, lon, alt, speed, battery, pkt_seq, speed_alt_ratio, battery_drain_rate, "JAMMING", 1])
 
     # 4. DoS Attack (250 rows)
-    for i in range(250):
+    for _ in range(250):
         d_id = f"drone_{random.randint(1, 10)}"
         lat = round(base_lat + random.uniform(-0.02, 0.02), 6)
         lon = round(base_lon + random.uniform(-0.02, 0.02), 6)
@@ -72,7 +73,7 @@ def generate_dataset(output_path="backend/data/swarmguard_training_dataset.csv",
         rows.append([d_id, lat, lon, alt, speed, battery, pkt_seq, speed_alt_ratio, battery_drain_rate, "DOS", 1])
 
     # 5. Replay Attack (250 rows)
-    for i in range(250):
+    for _ in range(250):
         d_id = f"drone_{random.randint(1, 10)}"
         lat = round(base_lat + 0.005, 6)                      # Repeated static position
         lon = round(base_lon + 0.005, 6)

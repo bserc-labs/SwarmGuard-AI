@@ -1,11 +1,13 @@
 import os
-import pandas as pd
-import numpy as np
+
 import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
 
 def train_swarmguard_models(
     csv_path="backend/data/swarmguard_training_dataset.csv",

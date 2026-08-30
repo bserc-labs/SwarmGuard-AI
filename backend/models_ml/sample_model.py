@@ -1,11 +1,13 @@
-import numpy as np
 import random
+
+import numpy as np
+
 
 class DummyIsolationForest:
     def __init__(self):
         self.is_loaded = False
         
-    def load(self, model_path: str = None):
+    def load(self, model_path: str | None = None):
         """Mock method to load a trained model."""
         self.is_loaded = True
         return self
@@ -55,7 +57,7 @@ class DummyClassifier:
         self.is_loaded = False
         self.attack_types = ["GPS_SPOOFING", "JAMMING", "REPLAY_ATTACK", "DOS"]
         
-    def load(self, model_path: str = None):
+    def load(self, model_path: str | None = None):
         self.is_loaded = True
         return self
         

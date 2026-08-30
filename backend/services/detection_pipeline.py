@@ -26,6 +26,7 @@ import models
 from config import get_settings
 from database import SessionLocal
 from services.explanation_service import explanation_service
+from services.geofence_service import geofence_engine
 from services.incident_engine import incident_engine
 from services.kinematic_guard import kinematic_guard
 from services.ws_manager import ws_manager
@@ -89,7 +90,9 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
     ]
 
 
-def _run_detectors(drone_id: str, history: list[dict]) -> dict | None:
+def _run_detectors(
+    drone_id: str, history: list[dict], db: Session, organization_id: int
+) -> dict | None:
     """Two-tier detection. Returns a detection dict, or None if nothing fired.
 
     **Tier 1 — kinematic guard (authoritative).** Deterministic physical
@@ -116,6 +119,31 @@ def _run_detectors(drone_id: str, history: list[dict]) -> dict | None:
                 f"({verdict.severity}, {len(verdict.violations)} violation(s))"
             )
             return verdict.to_detection(drone_id)
+
+    # **Tier 1b -- geofence breach.** Deterministic, like the guard, but it
+    # answers a different question: not "is this telemetry lying" but "is the
+    # aircraft where it is not permitted to be".
+    #
+    # It runs only when the guard stayed silent, and that ordering is the point.
+    # A geofence verdict is only as good as the position it is handed, so when
+    # the guard has just judged the reported position physically impossible,
+    # evaluating a restricted zone against that same position would raise an
+    # incident about a location the aircraft is probably not at. Spoofing is
+    # already the incident in that case.
+    latest = history[-1]
+    lat, lon = latest.get("latitude"), latest.get("longitude")
+    breach = (
+        geofence_engine.evaluate(db, drone_id, lat, lon, organization_id=organization_id)
+        if lat is not None and lon is not None
+        else None
+    )
+    if breach is not None:
+        zones = breach["explanation"]["metadata"]["zones"]
+        logger.info(
+            f"Geofence breach for {drone_id} in org {organization_id}: "
+            f"{', '.join(z['name'] for z in zones)}"
+        )
+        return breach
 
     if not settings.AI_INCIDENTS_ENABLED:
         return None
@@ -144,7 +172,7 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
             # Normal for a drone that just came online, not an error.
             return None
 
-        detection = _run_detectors(drone_id, history)
+        detection = _run_detectors(drone_id, history, db, organization_id)
         if detection is None:
             return None
 

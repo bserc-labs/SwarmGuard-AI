@@ -1,10 +1,12 @@
-import shap
-import pandas as pd
-import numpy as np
 import time
-from utils.logger import logger
+
+import numpy as np
+import shap
+
 from models_ml.dataset_loader import DatasetLoader
 from models_ml.preprocess import FeatureEngineer
+from utils.logger import logger
+
 
 class ExplainabilityEngine:
     def __init__(self, model, scaler, metadata):

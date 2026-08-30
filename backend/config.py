@@ -17,6 +17,26 @@ KNOWN_PUBLIC_SECRETS = {
 
 MIN_SECRET_LENGTH = 32
 
+# Database passwords that are fine for a throwaway CI service container and not
+# fine anywhere else. The CI workflow deliberately uses postgres/password for an
+# ephemeral database that exists only for the length of a run; the risk is a
+# developer .env copying those values and a deployment inheriting them.
+WEAK_DB_PASSWORDS = {
+    "password", "postgres", "root", "admin", "changeme", "secret", "swarmguard",
+    "123456", "test", "dev", "local",
+}
+
+
+def _db_password(database_url: str) -> str | None:
+    """The password embedded in a SQLAlchemy URL, if there is one."""
+    try:
+        from urllib.parse import unquote, urlparse
+
+        parsed = urlparse(database_url)
+        return unquote(parsed.password) if parsed.password else None
+    except Exception:
+        return None
+
 
 def _validate_secret(value: str, field_name: str, *, min_length: int = MIN_SECRET_LENGTH) -> str:
     """Reject secrets that are absent, too short, or publicly known."""
@@ -131,7 +151,37 @@ class Settings(BaseSettings):
     def _check_drone_api_key(cls, v: str) -> str:
         return _validate_secret(v, "DRONE_API_KEY")
 
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _warn_on_weak_database_password(cls, v: str) -> str:
+        """Warn, loudly, on a dictionary-word database password.
+
+        Deliberately a warning and not a hard failure, unlike SECRET_KEY and
+        DRONE_API_KEY. Those two are read directly by the application and a bad
+        value is always wrong. The database password is also what the compose
+        file and the CI service container use, and refusing to start would break
+        a working local stack over a credential that -- because compose exposes
+        Postgres only on the internal network -- is not reachable from outside
+        the host today.
+
+        Escalate this to a failure once deployment sets its own credentials.
+        """
+        password = _db_password(v)
+        if password and password.lower() in WEAK_DB_PASSWORDS:
+            import warnings
+
+            warnings.warn(
+                f"DATABASE_URL uses a weak, guessable password ({len(password)} "
+                "chars, dictionary word). This is acceptable only for a local or "
+                "CI database that is not reachable off-host. Generate one with: "
+                "openssl rand -hex 32",
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # Required fields come from the environment / .env via pydantic-settings.
+    return Settings()  # type: ignore[call-arg]

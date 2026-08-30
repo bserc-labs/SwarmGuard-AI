@@ -214,6 +214,59 @@ class TestDetectionShape:
         factors = [v.exceedance for v in violations]
         assert factors == sorted(factors, reverse=True)
 
+    def test_prediction_carries_its_own_severity(self):
+        # IncidentEngine used to discard the guard's severity and re-derive one
+        # from the score via alert_service, which bands on fixed cut-offs. The
+        # two disagree around 3x exceedance, so the stored incident could sit a
+        # level below what the detector that raised it concluded.
+        verdict = self._verdict()
+        d = verdict.to_detection("D1")
+        assert d["prediction"]["severity"] == verdict.severity
+
+    def test_ranked_features_carry_the_keys_the_console_reads(self):
+        # frontend/src/lib/format.ts attributionMagnitude() reads `magnitude`
+        # (falling back to `shap_value`), and AttributionChart shows observed
+        # against threshold. When none of those keys were present the incident
+        # detail page rendered "No attribution recorded" for every incident.
+        for f in self._verdict().to_detection("D1")["explanation"]["ranked_features"]:
+            assert f["feature"]
+            assert isinstance(f["magnitude"], (int, float))
+            assert isinstance(f["shap_value"], (int, float))
+            assert isinstance(f["observed"], (int, float))
+            assert isinstance(f["threshold"], (int, float))
+            assert f["unit"]
+
+
+class TestDetectionStatusEndpoint:
+    """The /ai/detection/status payload must describe the guard that is running."""
+
+    def test_declared_checks_match_the_guard_configuration(self):
+        from routers.ai import _GUARD_CHECKS
+
+        declared = {c["check"]: c["threshold"] for c in _GUARD_CHECKS}
+        assert declared == {
+            "gps_implied_speed": kinematic_guard.max_speed_mps,
+            "gps_airframe_speed_mismatch": kinematic_guard.gps_speed_error_mps,
+            "vertical_speed": kinematic_guard.max_climb_mps,
+            "satellite_loss": float(kinematic_guard.min_satellites),
+        }
+
+    def test_declared_checks_cover_every_check_the_guard_can_emit(self):
+        from routers.ai import _GUARD_CHECKS
+
+        # Every check name the guard produces across the spoof, jamming and
+        # vertical cases must be described by the status endpoint, or the
+        # console shows an incomplete picture of what is detecting.
+        emitted = set()
+        for rows in (
+            [packet(0, 34.0522, -118.2437), packet(1, 34.10, -118.2437)],
+            [packet(0, 34.0522, -118.2437, sats=12), packet(1, 34.052443, -118.2437, sats=1)],
+            [packet(0, 34.0522, -118.2437, alt=200.0), packet(1, 34.052243, -118.2437, alt=0.0)],
+        ):
+            emitted |= {v.check for v in kinematic_guard.evaluate(rows).violations}
+
+        assert emitted <= {c["check"] for c in _GUARD_CHECKS}
+
 
 class TestThresholdsAreConfigurable:
     def test_raising_limit_suppresses_detection(self):

@@ -1,152 +1,328 @@
-import React, { useMemo } from "react";
+/**
+ * Fleet roster and positions.
+ *
+ * Combines GET /drones (registry and status) with GET /telemetry/latest
+ * (positions). A drone that is registered but has never reported telemetry
+ * appears in the table with no position rather than being omitted.
+ */
+
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type TelemetryPacket } from "@/services/api";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-
-function StatusPill({ battery, speed }: { battery: number; speed: number }) {
-  let status = "Nominal";
-  let color = "bg-[#00d9ff]/20 text-[#00d9ff] border-[#00d9ff]/30"; // primary cyan
-
-  if (battery < 20 || speed > 25) {
-    status = "Critical";
-    color = "bg-[#ffb4ab]/20 text-[#ffb4ab] border-[#ffb4ab]/30"; // error red
-  } else if (battery < 40 || speed > 20) {
-    status = "Warning";
-    color = "bg-[#ffdeaa]/20 text-[#ffdeaa] border-[#ffdeaa]/30"; // amber
-  }
-
-  return (
-    <span
-      className={`px-3 py-1 rounded-full text-xs font-semibold border ${color} uppercase tracking-wider`}
-    >
-      {status}
-    </span>
-  );
-}
-
-function BatteryBar({ battery }: { battery: number }) {
-  let barColor = "bg-[#00d9ff]"; // green/cyan
-  if (battery < 30) {
-    barColor = "bg-[#ffb4ab]"; // red
-  } else if (battery <= 60) {
-    barColor = "bg-[#ffdeaa]"; // amber
-  }
-
-  return (
-    <div className="w-full mt-2">
-      <div className="flex justify-between text-xs text-[#bbc9ce] mb-1 font-['Courier_Prime']">
-        <span>BATTERY</span>
-        <span>{battery.toFixed(1)}%</span>
-      </div>
-      <div className="w-full h-2 bg-[#080f11] rounded overflow-hidden border border-[#ffffff14]">
-        <div
-          className={`h-full ${barColor} shadow-[0_0_8px_currentColor]`}
-          style={{ width: `${Math.max(0, Math.min(100, battery))}%` }}
-        ></div>
-      </div>
-    </div>
-  );
-}
+import { api, type Drone, type TelemetryRecord } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { useWebSocketContext } from "@/contexts/WebSocketContext";
+import { DroneMap } from "@/components/shared/DroneMap";
+import { mergePositions, toMappedDrone, type MappedDrone } from "@/lib/telemetry";
+import { DvrPlayback } from "@/components/shared/DvrPlayback";
+import { GeofenceControlPanel } from "@/components/shared/GeofenceControlPanel";
+import {
+  DataState,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  PermissionDeniedState,
+} from "@/components/ui/DataState";
+import { FeedStatus } from "@/components/ui/FeedStatus";
+import {
+  Chip,
+  Input,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelHeader,
+  Table,
+  Td,
+  Th,
+} from "@/components/ui/primitives";
+import { droneStatusTone } from "@/lib/constants";
+import { humanizeEnum, latLon, num, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function FleetPage() {
-  const { data: telemetryData, isLoading, isError } = useQuery({
-    queryKey: ["telemetry-live"],
-    queryFn: () => api.getTelemetryLive(),
-    refetchInterval: 10000,
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
+  const { feedState, latestTelemetry } = useWebSocketContext();
+
+  const canReadDrones = hasPermission(effectiveRole, Permissions.DRONE_READ);
+  const canReadTelemetry = hasPermission(effectiveRole, Permissions.TELEMETRY_READ);
+
+  const [filter, setFilter] = useState("");
+  const [replayFrame, setReplayFrame] = useState<TelemetryRecord[] | null>(null);
+
+  const dronesQuery = useQuery({
+    queryKey: ["drones"],
+    queryFn: () => api.getDrones(),
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canReadDrones,
   });
 
-  const latestDrones = useMemo(() => {
-    if (!telemetryData) return [];
-    const map = new Map<string, TelemetryPacket>();
-    // Assume telemetryData is an array of TelemetryPackets or we just take the last reading per drone_id
-    // If it's an array:
-    const dataArray = Array.isArray(telemetryData) ? telemetryData : [];
-    for (const packet of dataArray) {
-      map.set(packet.drone_id, packet);
-    }
-    return Array.from(map.values());
-  }, [telemetryData]);
+  const telemetryQuery = useQuery({
+    queryKey: ["telemetry", "latest"],
+    queryFn: () => api.getLatestTelemetry(),
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canReadTelemetry,
+  });
+
+  const handleFrameChange = useCallback((records: TelemetryRecord[] | null) => {
+    setReplayFrame(records);
+  }, []);
+
+  /** Live positions: polled snapshot overlaid with socket frames, keyed by drone. */
+  const livePositions = useMemo(
+    () =>
+      new Map<string, MappedDrone>(
+        mergePositions(telemetryQuery.data ?? [], latestTelemetry).map((d) => [d.drone_id, d]),
+      ),
+    [telemetryQuery.data, latestTelemetry],
+  );
+
+  const replaying = replayFrame !== null;
+
+  const mapDrones = useMemo<MappedDrone[]>(
+    () => (replaying ? replayFrame.map(toMappedDrone) : [...livePositions.values()]),
+    [replaying, replayFrame, livePositions],
+  );
+
+  const rows = useMemo(() => {
+    const term = filter.trim().toLowerCase();
+    return (dronesQuery.data ?? [])
+      .filter(
+        (d) =>
+          !term ||
+          d.drone_id.toLowerCase().includes(term) ||
+          d.status.toLowerCase().includes(term),
+      )
+      .map((drone) => ({ drone, position: livePositions.get(drone.drone_id) ?? null }))
+      .sort((a, b) => a.drone.drone_id.localeCompare(b.drone.drone_id));
+  }, [dronesQuery.data, filter, livePositions]);
+
+  if (!canReadDrones) {
+    return (
+      <>
+        <PageHeader title="Fleet" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
+    );
+  }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto text-[#dde4e6] font-['Inter'] min-h-screen bg-[#0e1417]">
-      <div className="mb-8 flex items-center justify-between border-b border-[#ffffff14] pb-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[#00d9ff] to-[#afecff]">
-            Drone Fleet Overview
-          </h1>
-          <p className="text-[#859398] mt-1 text-sm font-['Courier_Prime']">
-            LIVE TELEMETRY STREAM
-          </p>
+    <>
+      <PageHeader
+        title="Fleet"
+        description="Registered drones, their reported status, and current positions."
+        actions={<FeedStatus state={feedState} />}
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+        <div className="flex flex-col gap-4">
+          <Panel className="overflow-hidden">
+            <PanelHeader
+              title="Positions"
+              description={
+                replaying
+                  ? "Showing recorded telemetry. Return the slider to Now for the live feed."
+                  : "Latest reported position per drone."
+              }
+            />
+            {!canReadTelemetry ? (
+              <PermissionDeniedState compact />
+            ) : telemetryQuery.isLoading ? (
+              <LoadingState rows={6} />
+            ) : telemetryQuery.isError ? (
+              <ErrorState error={telemetryQuery.error} onRetry={() => telemetryQuery.refetch()} />
+            ) : (
+              <DroneMap
+                drones={mapDrones}
+                replayMode={replaying}
+                className="h-[380px] w-full sm:h-[440px]"
+              />
+            )}
+          </Panel>
+
+          {canReadTelemetry ? <DvrPlayback onFrameChange={handleFrameChange} /> : null}
+
+          <Panel>
+            <PanelHeader
+              title="Roster"
+              description={`${rows.length} ${rows.length === 1 ? "drone" : "drones"}`}
+              actions={
+                <div className="w-full max-w-[200px]">
+                  <label htmlFor="fleet-filter" className="sr-only">
+                    Filter drones
+                  </label>
+                  <Input
+                    id="fleet-filter"
+                    type="search"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    placeholder="Filter"
+                    className="h-7 py-1 text-[12px]"
+                  />
+                </div>
+              }
+            />
+
+            <DataState
+              isLoading={dronesQuery.isLoading}
+              isError={dronesQuery.isError}
+              error={dronesQuery.error}
+              data={rows}
+              onRetry={() => dronesQuery.refetch()}
+              compact
+              empty={
+                <EmptyState
+                  compact
+                  icon="drone"
+                  title={filter ? "No drones match that filter" : "No drones registered"}
+                  detail={
+                    filter
+                      ? undefined
+                      : "A drone is registered the first time it successfully sends telemetry."
+                  }
+                />
+              }
+            >
+              {(list) => (
+                <>
+                  {/* Table on wide viewports */}
+                  <div className="hidden md:block">
+                    <Table>
+                      <thead>
+                        <tr>
+                          <Th>Drone</Th>
+                          <Th>Status</Th>
+                          <Th>Position</Th>
+                          <Th className="text-right">Battery</Th>
+                          <Th className="text-right">Altitude</Th>
+                          <Th>Last seen</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {list.map(({ drone, position }) => (
+                          <tr key={drone.id} className="transition-colors hover:bg-surface-overlay">
+                            <Td>
+                              <Mono className="text-content">{drone.drone_id}</Mono>
+                            </Td>
+                            <Td>
+                              <Chip tone={droneStatusTone(drone.status)}>
+                                {humanizeEnum(drone.status)}
+                              </Chip>
+                            </Td>
+                            <Td>
+                              <Mono className="text-content-muted">
+                                {position ? latLon(position.latitude, position.longitude) : "—"}
+                              </Mono>
+                            </Td>
+                            <Td className="text-right">
+                              <Mono
+                                className={
+                                  typeof position?.battery === "number" && position.battery < 25
+                                    ? "text-warning"
+                                    : "text-content-muted"
+                                }
+                              >
+                                {position?.battery === null || position?.battery === undefined
+                                  ? "—"
+                                  : `${num(position.battery, 0)}%`}
+                              </Mono>
+                            </Td>
+                            <Td className="text-right">
+                              <Mono className="text-content-muted">
+                                {position?.altitude === null || position?.altitude === undefined
+                                  ? "—"
+                                  : `${num(position.altitude)} m`}
+                              </Mono>
+                            </Td>
+                            <Td>
+                              <span className="text-[12px] text-content-muted">
+                                {relativeTime(drone.last_seen)}
+                              </span>
+                            </Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </div>
+
+                  {/* Cards on narrow viewports */}
+                  <ul className="divide-y divide-line-subtle md:hidden">
+                    {list.map(({ drone, position }) => (
+                      <li key={drone.id} className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <Mono className="text-[13px] text-content">{drone.drone_id}</Mono>
+                          <Chip tone={droneStatusTone(drone.status)}>
+                            {humanizeEnum(drone.status)}
+                          </Chip>
+                        </div>
+                        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[12px]">
+                          <div className="col-span-2">
+                            <dt className="text-content-dim">Position</dt>
+                            <dd>
+                              <Mono className="text-content-muted">
+                                {position ? latLon(position.latitude, position.longitude) : "—"}
+                              </Mono>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-content-dim">Battery</dt>
+                            <dd>
+                              <Mono className="text-content-muted">
+                                {position?.battery === null || position?.battery === undefined
+                                  ? "—"
+                                  : `${num(position.battery, 0)}%`}
+                              </Mono>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-content-dim">Last seen</dt>
+                            <dd className="text-content-muted">{relativeTime(drone.last_seen)}</dd>
+                          </div>
+                        </dl>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </DataState>
+          </Panel>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-[#00d9ff] animate-pulse shadow-[0_0_10px_#00d9ff]"></div>
-          <span className="text-[#00d9ff] text-sm font-semibold tracking-wider font-['Courier_Prime']">
-            SYSTEM ONLINE
-          </span>
+
+        <div className="flex flex-col gap-4">
+          <GeofenceControlPanel />
+          <FleetStatusSummary drones={dronesQuery.data ?? []} />
         </div>
       </div>
+    </>
+  );
+}
 
-      {isLoading && (
-        <div className="flex justify-center items-center h-64">
-          <LoadingSpinner />
-        </div>
+function FleetStatusSummary({ drones }: { drones: Drone[] }) {
+  const counts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const drone of drones) {
+      map.set(drone.status, (map.get(drone.status) ?? 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [drones]);
+
+  return (
+    <Panel>
+      <PanelHeader title="Status breakdown" />
+      {counts.length === 0 ? (
+        <EmptyState compact title="Nothing to summarise" />
+      ) : (
+        <ul className="divide-y divide-line-subtle">
+          {counts.map(([status, count]) => (
+            <li key={status} className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <Chip tone={droneStatusTone(status)}>{humanizeEnum(status)}</Chip>
+              <Mono className="text-[13px] text-content">{count}</Mono>
+            </li>
+          ))}
+        </ul>
       )}
-
-      {isError && (
-        <div className="p-6 bg-[#ffb4ab]/10 border border-[#ffb4ab]/20 rounded-lg text-[#ffb4ab]">
-          <h3 className="font-semibold text-lg flex items-center gap-2">
-            <span className="material-symbols-outlined">error</span>
-            Connection Lost
-          </h3>
-          <p className="text-sm mt-1">Unable to fetch live telemetry data. Retrying...</p>
-        </div>
-      )}
-
-      {!isLoading && !isError && latestDrones.length === 0 && (
-        <div className="flex flex-col items-center justify-center h-64 border border-dashed border-[#ffffff14] rounded-xl text-[#859398]">
-          <span className="material-symbols-outlined text-4xl mb-2 opacity-50">flight_takeoff</span>
-          <p>No drones currently active.</p>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {latestDrones.map((drone) => (
-          <GlassCard key={drone.drone_id} className="relative overflow-hidden group">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#00d9ff] to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            
-            <div className="flex justify-between items-start mb-6">
-              <div className="flex items-center gap-3">
-                <span className="material-symbols-outlined text-[#afecff] text-2xl">rocket</span>
-                <div>
-                  <h3 className="font-bold text-lg text-[#dde4e6]">{drone.drone_id}</h3>
-                  <p className="text-xs text-[#859398] font-['Courier_Prime']">UNIT ACTIVE</p>
-                </div>
-              </div>
-              <StatusPill battery={drone.battery} speed={drone.speed} />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="bg-[#080f11] p-3 rounded border border-[#ffffff0a]">
-                <p className="text-[10px] text-[#bbc9ce] mb-1 font-['Courier_Prime']">SPEED</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-xl font-semibold text-[#dde4e6]">{drone.speed.toFixed(1)}</span>
-                  <span className="text-xs text-[#859398]">m/s</span>
-                </div>
-              </div>
-              <div className="bg-[#080f11] p-3 rounded border border-[#ffffff0a]">
-                <p className="text-[10px] text-[#bbc9ce] mb-1 font-['Courier_Prime']">ALTITUDE</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-xl font-semibold text-[#dde4e6]">{drone.altitude.toFixed(1)}</span>
-                  <span className="text-xs text-[#859398]">m</span>
-                </div>
-              </div>
-            </div>
-
-            <BatteryBar battery={drone.battery} />
-          </GlassCard>
-        ))}
-      </div>
-    </div>
+    </Panel>
   );
 }

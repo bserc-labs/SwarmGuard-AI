@@ -128,6 +128,17 @@ class GuardVerdict:
                 "anomaly_score": self.threat_score,
                 "threat_score": self.threat_score,
                 "threat_level": self.severity,
+                # Stated explicitly so the incident engine can use the band this
+                # detector computed rather than re-deriving one from the score.
+                #
+                # The two disagree. `_severity` reads the exceedance ratio and
+                # the number of independent failing checks; alert_service reads
+                # only the log-scaled score against fixed cut-offs. Around 3x
+                # past a limit the guard says HIGH and the score lands at 59.6,
+                # which alert_service bands as MEDIUM -- so an incident was
+                # filed one level below what the detector that raised it
+                # concluded.
+                "severity": self.severity,
             },
             "explanation": {
                 "ranked_features": ranked,

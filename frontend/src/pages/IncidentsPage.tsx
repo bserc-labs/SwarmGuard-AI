@@ -1,210 +1,424 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Incident } from "@/services/api";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { SeverityBadge } from "@/components/shared/SeverityBadge";
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
+/**
+ * Incident queue.
+ *
+ * Lifecycle actions map to the four transition routes the backend exposes:
+ * acknowledge, assign, resolve, close. Each is gated on the matching permission,
+ * so an operator (incident.read only) sees the queue without action buttons
+ * rather than buttons that 403.
+ */
+
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { toast } from 'sonner';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api, type Incident } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { DataState, EmptyState, PermissionDeniedState } from "@/components/ui/DataState";
+import {
+  Button,
+  Chip,
+  Input,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelHeader,
+  Select,
+  Table,
+  Td,
+  Th,
+} from "@/components/ui/primitives";
+import {
+  canAdvanceTo,
+  CLOSED_STATUSES,
+  incidentStatusTone,
+  severityTone,
+  SEVERITY_FILTERS,
+  SEVERITY_RANK,
+} from "@/lib/constants";
+import { humanizeEnum, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
+
+type SeverityFilter = (typeof SEVERITY_FILTERS)[number];
+type StatusFilter = "all" | "open" | "closed";
 
 export default function IncidentsPage() {
-  const [activeSeverity, setActiveSeverity] = useState<string>("All");
-  const [incidentStatuses, setIncidentStatuses] = useState<Record<number, string>>({});
-  const [actionLoading, setActionLoading] = useState<Record<number, boolean>>({});
-  const [actionError, setActionError] = useState<Record<number, string>>({});
   const queryClient = useQueryClient();
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
 
-  const { data: incidents = [], isLoading } = useQuery({
-    queryKey: ['incidents', activeSeverity],
-    queryFn: () => api.getIncidents(activeSeverity !== "All" ? activeSeverity : undefined),
-    refetchInterval: 30000,
+  const canRead = hasPermission(effectiveRole, Permissions.INCIDENT_READ);
+  const canAcknowledge = hasPermission(effectiveRole, Permissions.INCIDENT_ACKNOWLEDGE);
+  const canResolve = hasPermission(effectiveRole, Permissions.INCIDENT_RESOLVE);
+  const canClose = hasPermission(effectiveRole, Permissions.INCIDENT_CLOSE);
+  const hasAnyAction = canAcknowledge || canResolve || canClose;
+
+  const [severity, setSeverity] = useState<SeverityFilter>("All");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [search, setSearch] = useState("");
+
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents", "list", severity],
+    queryFn: () => api.getIncidents(severity === "All" ? undefined : severity, 200),
+    refetchInterval: POLL_INTERVALS.incidents,
+    enabled: canRead,
   });
 
-  const severities = ["All", "CRITICAL", "HIGH", "MEDIUM", "LOW"];
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["incidents"] });
 
-  if (isLoading) {
+  const transition = useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: number;
+      action: "acknowledge" | "resolve" | "close";
+    }) => {
+      if (action === "acknowledge") return api.acknowledgeIncident(id);
+      if (action === "resolve") return api.resolveIncident(id);
+      return api.closeIncident(id);
+    },
+    onSuccess: (incident, { action }) => {
+      toast.success(`Incident #${incident.id} ${action}d`);
+      invalidate();
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "The transition failed.");
+    },
+  });
+
+  const rows = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return (incidentsQuery.data ?? [])
+      .filter((incident) => {
+        const closed = CLOSED_STATUSES.has(incident.status);
+        if (statusFilter === "open" && closed) return false;
+        if (statusFilter === "closed" && !closed) return false;
+        if (!term) return true;
+        return (
+          incident.drone_id.toLowerCase().includes(term) ||
+          incident.attack_type.toLowerCase().includes(term) ||
+          String(incident.id) === term
+        );
+      })
+      .sort((a, b) => {
+        const rank = (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0);
+        if (rank !== 0) return rank;
+        return (
+          new Date(b.detection_time ?? b.created_at).getTime() -
+          new Date(a.detection_time ?? a.created_at).getTime()
+        );
+      });
+  }, [incidentsQuery.data, statusFilter, search]);
+
+  if (!canRead) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <LoadingSpinner />
-      </div>
+      <>
+        <PageHeader title="Incidents" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
     );
   }
 
-  const criticalCount = incidents.filter(i => i.severity === "CRITICAL").length;
-  const avgThreat = incidents.length > 0 
-    ? (incidents.reduce((sum, i) => sum + i.threat_level, 0) / incidents.length).toFixed(1)
-    : "0";
+  return (
+    <>
+      <PageHeader
+        title="Incidents"
+        description="Records stored for your organization, highest severity first."
+      />
 
-  const handleIncidentAction = async (incident: Incident, status: string) => {
-    setActionLoading((prev) => ({ ...prev, [incident.id]: true }));
-    setActionError((prev) => ({ ...prev, [incident.id]: "" }));
+      {/* Filters */}
+      <div className="mb-4 flex flex-wrap items-end gap-2.5">
+        <div className="min-w-[9rem]">
+          <label htmlFor="severity-filter" className="mb-1.5 block text-[12px] font-medium text-content-muted">
+            Severity
+          </label>
+          <Select
+            id="severity-filter"
+            value={severity}
+            onChange={(e) => setSeverity(e.target.value as SeverityFilter)}
+            className="h-8 py-1"
+          >
+            {SEVERITY_FILTERS.map((option) => (
+              <option key={option} value={option}>
+                {option === "All" ? "All severities" : humanizeEnum(option)}
+              </option>
+            ))}
+          </Select>
+        </div>
 
-    try {
-      await api.updateIncidentStatus(incident.id, status);
-      setIncidentStatuses((prev) => ({ ...prev, [incident.id]: status }));
-      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
-      toast.success('Incident #SG-' + incident.id.toString().padStart(4,'0') + ' → ' + status);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unable to update incident status.";
-      setActionError((prev) => ({
-        ...prev,
-        [incident.id]: msg,
-      }));
-      toast.error('Failed: ' + msg);
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [incident.id]: false }));
-    }
-  };
+        <div className="min-w-[9rem]">
+          <label htmlFor="status-filter" className="mb-1.5 block text-[12px] font-medium text-content-muted">
+            State
+          </label>
+          <Select
+            id="status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="h-8 py-1"
+          >
+            <option value="open">Open</option>
+            <option value="closed">Resolved or closed</option>
+            <option value="all">All</option>
+          </Select>
+        </div>
 
-  const handleExportReport = () => {
-    const rows = [
-      ["ID", "Drone", "Attack Type", "Severity", "Threat Level", "Time", "Status"],
-      ...incidents.map((incident) => [
-        `#SG-${incident.id.toString().padStart(4, "0")}`,
-        incident.drone_id,
-        incident.attack_type,
-        incident.severity,
-        String(incident.threat_level),
-        new Date(incident.created_at).toISOString(),
-        incidentStatuses[incident.id] || "Pending",
-      ]),
-    ];
+        <div className="min-w-[12rem] flex-1">
+          <label htmlFor="incident-search" className="mb-1.5 block text-[12px] font-medium text-content-muted">
+            Search
+          </label>
+          <Input
+            id="incident-search"
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Drone, attack type, or incident number"
+            className="h-8 py-1"
+          />
+        </div>
+      </div>
 
-    const csv = rows
-      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
+      <Panel>
+        <PanelHeader
+          title={`${rows.length} ${rows.length === 1 ? "incident" : "incidents"}`}
+          actions={
+            <Button
+              size="sm"
+              icon="refresh"
+              onClick={() => incidentsQuery.refetch()}
+              loading={incidentsQuery.isFetching}
+            >
+              Refresh
+            </Button>
+          }
+        />
 
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `swarmguard-incidents-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+        <DataState
+          isLoading={incidentsQuery.isLoading}
+          isError={incidentsQuery.isError}
+          error={incidentsQuery.error}
+          data={rows}
+          onRetry={() => incidentsQuery.refetch()}
+          empty={
+            <EmptyState
+              icon={statusFilter === "open" ? "check" : "info"}
+              title={
+                search || severity !== "All"
+                  ? "No incidents match these filters"
+                  : statusFilter === "open"
+                    ? "No open incidents"
+                    : "No incidents recorded"
+              }
+              detail={
+                search || severity !== "All"
+                  ? "Adjust the filters to widen the search."
+                  : undefined
+              }
+            />
+          }
+        >
+          {(incidents) => (
+            <>
+              {/* Table on wide viewports */}
+              <div className="hidden lg:block">
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th className="w-16">ID</Th>
+                      <Th>Attack type</Th>
+                      <Th>Drone</Th>
+                      <Th>Severity</Th>
+                      <Th>Status</Th>
+                      <Th className="text-right">Threat</Th>
+                      <Th>Detected</Th>
+                      <Th>Assignee</Th>
+                      {hasAnyAction ? <Th className="text-right">Actions</Th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {incidents.map((incident) => (
+                      <tr key={incident.id} className="transition-colors hover:bg-surface-overlay">
+                        <Td>
+                          <Link
+                            to="/incidents/$id"
+                            params={{ id: String(incident.id) }}
+                            className="font-mono text-[12px] text-accent-bright hover:underline"
+                          >
+                            #{incident.id}
+                          </Link>
+                        </Td>
+                        <Td>
+                          <Link
+                            to="/incidents/$id"
+                            params={{ id: String(incident.id) }}
+                            className="text-content hover:underline"
+                          >
+                            {humanizeEnum(incident.attack_type)}
+                          </Link>
+                        </Td>
+                        <Td>
+                          <Mono className="text-content-muted">{incident.drone_id}</Mono>
+                        </Td>
+                        <Td>
+                          <Chip tone={severityTone(incident.severity)}>
+                            {humanizeEnum(incident.severity)}
+                          </Chip>
+                        </Td>
+                        <Td>
+                          <Chip tone={incidentStatusTone(incident.status)}>
+                            {humanizeEnum(incident.status)}
+                          </Chip>
+                        </Td>
+                        <Td className="text-right">
+                          <Mono className="text-content-muted">
+                            {incident.threat_score.toFixed(0)}
+                          </Mono>
+                        </Td>
+                        <Td>
+                          <span className="text-[12px] text-content-muted">
+                            {relativeTime(incident.detection_time ?? incident.created_at)}
+                          </span>
+                        </Td>
+                        <Td>
+                          {incident.assigned_analyst ? (
+                            <Mono className="text-content-muted">{incident.assigned_analyst}</Mono>
+                          ) : (
+                            <span className="text-[12px] text-content-dim">Unassigned</span>
+                          )}
+                        </Td>
+                        {hasAnyAction ? (
+                          <Td className="text-right">
+                            <IncidentActions
+                              incident={incident}
+                              canAcknowledge={canAcknowledge}
+                              canResolve={canResolve}
+                              canClose={canClose}
+                              pending={transition.isPending}
+                              onAction={(action) =>
+                                transition.mutate({ id: incident.id, action })
+                              }
+                            />
+                          </Td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+
+              {/* Cards on narrow viewports */}
+              <ul className="divide-y divide-line-subtle lg:hidden">
+                {incidents.map((incident) => (
+                  <li key={incident.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <Link
+                        to="/incidents/$id"
+                        params={{ id: String(incident.id) }}
+                        className="min-w-0 flex-1"
+                      >
+                        <p className="truncate text-[13px] font-medium text-content">
+                          {humanizeEnum(incident.attack_type)}
+                        </p>
+                        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-content-dim">
+                          <Mono>#{incident.id}</Mono>
+                          <Mono>{incident.drone_id}</Mono>
+                          <span>{relativeTime(incident.detection_time ?? incident.created_at)}</span>
+                        </p>
+                      </Link>
+                      <Chip tone={severityTone(incident.severity)}>
+                        {humanizeEnum(incident.severity)}
+                      </Chip>
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Chip tone={incidentStatusTone(incident.status)}>
+                        {humanizeEnum(incident.status)}
+                      </Chip>
+                      <span className="text-[11px] text-content-dim">
+                        Threat <Mono className="text-content-muted">{incident.threat_score.toFixed(0)}</Mono>
+                      </span>
+                      {incident.assigned_analyst ? (
+                        <span className="text-[11px] text-content-dim">
+                          <Mono className="text-content-muted">{incident.assigned_analyst}</Mono>
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {hasAnyAction ? (
+                      <div className="mt-2.5">
+                        <IncidentActions
+                          incident={incident}
+                          canAcknowledge={canAcknowledge}
+                          canResolve={canResolve}
+                          canClose={canClose}
+                          pending={transition.isPending}
+                          onAction={(action) => transition.mutate({ id: incident.id, action })}
+                        />
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </DataState>
+      </Panel>
+    </>
+  );
+}
+
+/**
+ * Row actions.
+ *
+ * Each button is shown only when its destination state is still ahead of the
+ * incident. Previously Resolve appeared whenever the incident was not already
+ * resolved — including NEW and ACKNOWLEDGED — and the backend refused every one
+ * of those, so the button failed from every state it was reachable in.
+ *
+ * The queue offers the two ends of the workflow; the intermediate states
+ * (Investigate, Contain) live on the detail page, where an analyst working a
+ * single incident has room for them.
+ */
+function IncidentActions({
+  incident,
+  canAcknowledge,
+  canResolve,
+  canClose,
+  pending,
+  onAction,
+}: {
+  incident: Incident;
+  canAcknowledge: boolean;
+  canResolve: boolean;
+  canClose: boolean;
+  pending: boolean;
+  onAction: (action: "acknowledge" | "resolve" | "close") => void;
+}) {
+  const status = incident.status.toUpperCase();
+
+  if (status === "CLOSED") {
+    return <span className="text-[12px] text-content-dim">Closed</span>;
+  }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-sg-text font-inter">Incident Command Center</h1>
-        <button
-          onClick={handleExportReport}
-          disabled={incidents.length === 0}
-          className="flex items-center gap-2 px-4 py-2 rounded bg-sg-surface border border-white/10 hover:bg-white/10 transition-colors text-sg-text-muted text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span className="material-symbols-outlined text-[18px]">download</span>
-          Export Report
-        </button>
-      </div>
-
-      {/* Filter Bar */}
-      <div className="flex gap-2">
-        {severities.map(sev => (
-          <button
-            key={sev}
-            onClick={() => setActiveSeverity(sev)}
-            className={`px-4 py-1.5 rounded-full text-xs font-medium tracking-wide transition-colors border ${
-              activeSeverity === sev
-                ? 'bg-sg-primary/20 text-sg-primary border-sg-primary/30'
-                : 'bg-white/5 text-sg-text-muted border-transparent hover:bg-white/10'
-            }`}
-          >
-            {sev}
-          </button>
-        ))}
-      </div>
-
-      {/* Incident Table */}
-      <GlassCard className="p-0 overflow-hidden">
-        {incidents.length === 0 ? (
-          <div className="p-16 flex flex-col items-center justify-center gap-4 text-sg-text-muted">
-            <span className="material-symbols-outlined text-4xl opacity-50">shield</span>
-            <p className="font-mono text-sm">No incidents match the selected criteria.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-white/5 bg-white/[0.02]">
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">ID</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Drone</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Attack Type</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Severity</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Threat Level</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Status</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Time</th>
-                  <th className="p-4 text-[10px] font-medium text-sg-text-dim uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {incidents.map((incident) => (
-                  <tr key={incident.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                    <td className="p-4 font-mono text-xs text-sg-text-muted">#SG-{incident.id.toString().padStart(4, '0')}</td>
-                    <td className="p-4 font-mono text-sm text-sg-primary">{incident.drone_id}</td>
-                    <td className="p-4 text-sm text-sg-text">{incident.attack_type}</td>
-                    <td className="p-4"><SeverityBadge severity={incident.severity} /></td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-sg-text-muted w-6">{incident.threat_level}</span>
-                        <div className="h-1.5 w-16 bg-white/10 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-sg-error"
-                            style={{ width: `${Math.min(100, incident.threat_level)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4 font-mono text-xs text-sg-text-dim">
-                      {incidentStatuses[incident.id] || "Pending"}
-                    </td>
-                    <td className="p-4 font-mono text-xs text-sg-text-dim">
-                      {new Date(incident.created_at).toLocaleString()}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex flex-col gap-2">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleIncidentAction(incident, "ACKNOWLEDGED")}
-                            disabled={Boolean(actionLoading[incident.id])}
-                            className="rounded border border-sg-primary/30 bg-sg-primary/10 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-sg-primary transition-colors hover:bg-sg-primary/20 disabled:opacity-50"
-                          >
-                            {actionLoading[incident.id] ? "Working..." : "Acknowledge"}
-                          </button>
-                          <button
-                            onClick={() => handleIncidentAction(incident, "RESOLVED")}
-                            disabled={Boolean(actionLoading[incident.id])}
-                            className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
-                          >
-                            {actionLoading[incident.id] ? "Working..." : "Resolve"}
-                          </button>
-                        </div>
-                        <Link
-                          to="/incidents/$id"
-                          params={{ id: incident.id.toString() }}
-                          className="text-xs font-medium text-sg-primary hover:text-sg-primary-soft transition-colors hover:underline"
-                        >
-                          View
-                        </Link>
-                        {actionError[incident.id] ? (
-                          <p className="text-[10px] text-sg-error">{actionError[incident.id]}</p>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div className="border-t border-white/5 p-4 flex items-center justify-between bg-white/[0.01]">
-          <div className="flex gap-6 text-sm">
-            <span className="text-sg-text-muted">Total: <span className="text-sg-text font-mono ml-1">{incidents.length}</span></span>
-            <span className="text-sg-text-muted">Critical: <span className="text-sg-error font-mono ml-1">{criticalCount}</span></span>
-            <span className="text-sg-text-muted">Avg Threat: <span className="text-sg-text font-mono ml-1">{avgThreat}</span></span>
-          </div>
-        </div>
-      </GlassCard>
+    <div className="flex flex-wrap justify-end gap-1.5">
+      {canAcknowledge && canAdvanceTo(status, "ACKNOWLEDGED") ? (
+        <Button size="sm" disabled={pending} onClick={() => onAction("acknowledge")}>
+          Acknowledge
+        </Button>
+      ) : null}
+      {canResolve && canAdvanceTo(status, "RESOLVED") ? (
+        <Button size="sm" disabled={pending} onClick={() => onAction("resolve")}>
+          Resolve
+        </Button>
+      ) : null}
+      {canClose && canAdvanceTo(status, "CLOSED") ? (
+        <Button size="sm" disabled={pending} onClick={() => onAction("close")}>
+          Close
+        </Button>
+      ) : null}
     </div>
   );
 }

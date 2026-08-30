@@ -1,13 +1,14 @@
-import os
 import json
-from typing import List, Dict, Any
+import os
+from typing import Any
+
 
 class RecommendationEngine:
     """
     Generates tailored safety recommendations and mitigation steps based on
     the specific attack type, threat score, and severity level.
     """
-    def __init__(self, data_dir: str = None):
+    def __init__(self, data_dir: str | None = None):
         if data_dir is None:
             # Resolve 'backend/data/' relative to the utils folder
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,7 +16,7 @@ class RecommendationEngine:
         else:
             self.data_dir = data_dir
 
-    def load_attack_data(self, attack_type: str) -> Dict[str, Any]:
+    def load_attack_data(self, attack_type: str) -> dict[str, Any]:
         """Loads the JSON data file for a specific attack type."""
         sanitized_name = os.path.basename(f"{attack_type}.json")
         file_path = os.path.join(self.data_dir, sanitized_name)
@@ -23,10 +24,10 @@ class RecommendationEngine:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Knowledge base file for attack '{attack_type}' not found.")
             
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
 
-    def generate_recommendations(self, attack_type: str, threat_score: int, severity: str) -> List[str]:
+    def generate_recommendations(self, attack_type: str, threat_score: int, severity: str) -> list[str]:
         """
         Generates mitigation steps combining standard attack playbook instructions
         with dynamic severity-level overrides.

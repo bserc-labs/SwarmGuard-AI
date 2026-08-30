@@ -1,84 +1,138 @@
+/**
+ * Live alert banner.
+ *
+ * Surfaces high and critical alerts arriving over the socket. Two truth rules
+ * apply here specifically, because this is the component most likely to
+ * overstate what the backend knows:
+ *
+ *  - Feature attribution is shown only when the payload carries a usable
+ *    magnitude. The previous version read `.value` while the producer writes
+ *    `.importance`, so it rendered "NaN%" as a confident finding.
+ *  - The score is labelled "threat level" — the field the backend actually
+ *    sends — not "AI confidence" or "verified score".
+ */
+
 import { useEffect, useState } from "react";
-import { useWebSocketContext } from "@/contexts/WebSocketContext";
 import { Link } from "@tanstack/react-router";
+import { useWebSocketContext } from "@/contexts/WebSocketContext";
+import { Icon } from "@/components/ui/Icon";
+import { Chip, Mono } from "@/components/ui/primitives";
+import { attributionMagnitude, humanizeEnum } from "@/lib/format";
+import { severityTone } from "@/lib/constants";
+import type { DetectionResult } from "@/services/api";
+
+const DISMISS_AFTER_MS = 12_000;
+
+function topAttribution(alert: DetectionResult): { feature: string; magnitude: number } | null {
+  const entries = alert.shap_top3;
+  if (!entries?.length) return null;
+
+  const first = entries[0];
+  const magnitude = attributionMagnitude(first);
+  if (first.feature === undefined || magnitude === null) return null;
+
+  // Magnitudes are expected as a 0-1 fraction. Anything else is not
+  // interpretable as a contribution share, so it is withheld.
+  if (magnitude < 0 || magnitude > 1) return null;
+
+  return { feature: first.feature, magnitude };
+}
+
+function isEscalated(alert: DetectionResult | null): boolean {
+  const severity = alert?.severity?.toUpperCase();
+  return severity === "CRITICAL" || severity === "HIGH";
+}
 
 export function AlertBanner() {
-  const { lastAlert } = useWebSocketContext();
-  const [isVisible, setIsVisible] = useState(false);
-  const [currentAlert, setCurrentAlert] = useState<typeof lastAlert | null>(null);
+  const { lastAlert, dismissAlert } = useWebSocketContext();
+  // Which alert the operator has already seen. Derived visibility rather than
+  // mirrored state, so a new alert cannot be missed by a stale effect.
+  const [dismissed, setDismissed] = useState<DetectionResult | null>(null);
 
+  const alert = isEscalated(lastAlert) ? lastAlert : null;
+  const visible = alert !== null && alert !== dismissed;
+
+  // Auto-dismiss. The state write happens in the timer callback, not the body.
   useEffect(() => {
-    if (lastAlert && (lastAlert.severity === "CRITICAL" || lastAlert.severity === "HIGH")) {
-      setCurrentAlert(lastAlert);
-      setIsVisible(true);
+    if (!visible || !alert) return;
+    const timer = setTimeout(() => setDismissed(alert), DISMISS_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [visible, alert]);
 
-      const timer = setTimeout(() => {
-        setIsVisible(false);
-      }, 10000); // dismiss after 10 seconds
+  if (!visible || !alert) return null;
 
-      return () => clearTimeout(timer);
-    }
-  }, [lastAlert]);
+  const isCritical = alert.severity?.toUpperCase() === "CRITICAL";
+  const attribution = topAttribution(alert);
 
-  if (!isVisible || !currentAlert) return null;
-
-  const topFeature = currentAlert.shap_top3 && currentAlert.shap_top3.length > 0 
-    ? currentAlert.shap_top3[0] 
-    : null;
+  const close = () => {
+    setDismissed(alert);
+    dismissAlert();
+  };
 
   return (
-    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-2xl animate-fade-in pointer-events-auto">
-      <div className={`relative overflow-hidden rounded-xl border p-4 shadow-2xl backdrop-blur-xl flex items-center justify-between gap-4
-        ${currentAlert.severity === 'CRITICAL' ? 'bg-red-500/20 border-red-500/50 shadow-red-500/20' : 'bg-amber-500/20 border-amber-500/50 shadow-amber-500/20'}
-      `}>
-        {/* Animated Background Pulse */}
-        <div className={`absolute inset-0 opacity-20 ${currentAlert.severity === 'CRITICAL' ? 'animate-pulse-red' : 'animate-pulse'}`} />
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="sg-enter border-b border-line bg-surface-overlay px-3 py-2.5 sm:px-5"
+    >
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+        <Icon
+          name="alert"
+          size={16}
+          className={`mt-0.5 shrink-0 ${isCritical ? "text-critical" : "text-warning"}`}
+        />
 
-        <div className="flex items-center gap-4 relative z-10">
-          <div className={`w-12 h-12 rounded-full flex items-center justify-center border
-            ${currentAlert.severity === 'CRITICAL' ? 'bg-red-500/20 border-red-500/50 text-red-500' : 'bg-amber-500/20 border-amber-500/50 text-amber-500'}
-          `}>
-            <span className="material-symbols-outlined filled text-3xl">warning</span>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <h3 className="text-lg font-bold text-white tracking-widest uppercase">
-                {currentAlert.attack_type || "UNKNOWN ANOMALY"} DETECTED
-              </h3>
-              <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded
-                ${currentAlert.severity === 'CRITICAL' ? 'bg-red-500 text-white' : 'bg-amber-500 text-black'}
-              `}>
-                {currentAlert.severity}
-              </span>
-            </div>
-            
-            <p className="text-sm text-sg-text-muted font-mono mb-1">
-              Threat Score: <span className="text-white font-bold">{currentAlert.threat_level || 0}/100</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[13px] font-semibold text-content">
+              {humanizeEnum(alert.attack_type) || "Anomaly"}
+              {alert.drone_id ? (
+                <>
+                  {" on "}
+                  <Mono className="text-content-muted">{alert.drone_id}</Mono>
+                </>
+              ) : null}
             </p>
-            
-            {topFeature && (
-              <p className="text-xs text-sg-text-dim max-w-lg truncate">
-                <span className="text-sg-primary font-mono">{topFeature.feature}</span> contributed {Math.round(topFeature.value * 100)}%
-              </p>
-            )}
+            {alert.severity ? (
+              <Chip tone={severityTone(alert.severity)}>{humanizeEnum(alert.severity)}</Chip>
+            ) : null}
+            {alert.threat_level !== null && alert.threat_level !== undefined ? (
+              <span className="text-[12px] text-content-muted">
+                Threat level <span className="tabular text-content">{alert.threat_level}</span>/100
+              </span>
+            ) : null}
           </div>
+
+          {alert.explanation ? (
+            <p className="mt-1 max-w-[80ch] text-[12px] leading-relaxed text-content-muted">
+              {alert.explanation}
+            </p>
+          ) : null}
+
+          {attribution ? (
+            <p className="mt-1 text-[12px] text-content-dim">
+              Largest contributor:{" "}
+              <Mono className="text-content-muted">{attribution.feature}</Mono>{" "}
+              <span className="tabular">({Math.round(attribution.magnitude * 100)}%)</span>
+            </p>
+          ) : null}
         </div>
 
-        <div className="flex flex-col gap-2 relative z-10">
-          <button 
-            onClick={() => setIsVisible(false)}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-sg-text-dim hover:text-white transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">close</span>
-          </button>
-          <Link 
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
             to="/incidents"
-            onClick={() => setIsVisible(false)}
-            className="text-[10px] uppercase tracking-wider text-sg-primary hover:text-white font-bold transition-colors whitespace-nowrap"
+            onClick={close}
+            className="rounded-control border border-line-strong bg-surface-raised px-2.5 py-1 text-[12px] text-content hover:bg-surface-hover"
           >
-            View Details
+            View incidents
           </Link>
+          <button
+            type="button"
+            onClick={close}
+            className="flex h-7 w-7 items-center justify-center rounded-control text-content-dim hover:bg-surface-hover hover:text-content"
+          >
+            <Icon name="close" size={15} title="Dismiss alert" />
+          </button>
         </div>
       </div>
     </div>

@@ -1,35 +1,127 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Any
 
 from sqlalchemy.orm import Session
-from models import Incident
+
 from config import get_settings
+from models import Incident, SystemSettings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Severity bands, ordered. Used to compare two severities without a lookup at
+# every call site.
+SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+# Defaults, as fractions of a 0-100 threat score. These are the values the
+# severity mapping used to hardcode; they are now only the fallback for an
+# organization that has not set its own.
+DEFAULT_CRITICAL_THRESHOLD = 0.85
+DEFAULT_HIGH_THRESHOLD = 0.60
+
+# The MEDIUM floor is not operator-configurable: SystemSettings carries only the
+# critical and high thresholds, and the Settings screen exposes only those two.
+# Inventing a third control here that no one can see or change would be worse
+# than a documented constant.
+MEDIUM_FLOOR_SCORE = 40.0
+
+
+@dataclass(frozen=True)
+class SeverityThresholds:
+    """Score floors, on the same 0-100 scale as `threat_score`.
+
+    SystemSettings stores fractions in [0, 1] -- which is what the Settings
+    screen's number inputs enforce, min 0 / max 1 / step 0.01 -- while every
+    threat score in the system is 0-100. Converting once, here, keeps that
+    mismatch from being re-derived (and eventually mis-derived) at each caller.
+    """
+
+    critical: float
+    high: float
+    source: str  # "organization" or "default", recorded on the incident
+
+    @classmethod
+    def defaults(cls) -> "SeverityThresholds":
+        return cls(
+            critical=DEFAULT_CRITICAL_THRESHOLD * 100.0,
+            high=DEFAULT_HIGH_THRESHOLD * 100.0,
+            source="default",
+        )
+
+
+def resolve_thresholds(db: Session, organization_id: int | None) -> SeverityThresholds:
+    """Read one organization's severity thresholds, or the defaults.
+
+    Read-only on purpose. `settings_router.get_or_create_settings` INSERTs a row
+    on a miss, which is right for a request an operator made and wrong for a
+    detection running in a background thread: several packets for a new
+    organization would race to create the same row.
+
+    An organization that has never opened the Settings screen therefore gets the
+    defaults without a write, and its first save creates the row through the
+    normal route.
+    """
+    if organization_id is None:
+        return SeverityThresholds.defaults()
+
+    row = (
+        db.query(SystemSettings)
+        .filter(SystemSettings.organization_id == organization_id)
+        .first()
+    )
+    if row is None:
+        return SeverityThresholds.defaults()
+
+    critical = row.critical_threshold
+    high = row.high_threshold
+
+    # A row written before validation existed, or edited directly in the
+    # database, can hold values that make the bands meaningless. Fall back
+    # rather than classify against a nonsensical ordering.
+    if (
+        critical is None
+        or high is None
+        or not (0.0 < high < critical <= 1.0)
+    ):
+        logger.warning(
+            f"Organization {organization_id} has unusable severity thresholds "
+            f"(high={high}, critical={critical}); using defaults."
+        )
+        return SeverityThresholds.defaults()
+
+    return SeverityThresholds(
+        critical=critical * 100.0, high=high * 100.0, source="organization"
+    )
+
 
 class AlertService:
     def __init__(self):
         # Time window to suppress duplicate alerts for the same drone
         self.suppression_window_seconds = 60
 
-    def generate_alert_severity(self, threat_score: float) -> str:
+    def generate_alert_severity(
+        self,
+        threat_score: float,
+        thresholds: SeverityThresholds | None = None,
+    ) -> str:
+        """Classify a 0-100 threat score into a severity band.
+
+        `thresholds` comes from the incident's own organization. It is optional
+        so that callers with no session -- and the existing tests -- still get
+        the documented defaults rather than a required argument they cannot
+        supply.
         """
-        Applies configurable severity thresholds to classify an alert.
-        Expected threat_score is out of 100.
-        """
-        # We assume settings.critical_threshold is typically 0.85 (85%)
-        # Let's map it from the DB settings ideally, but config.py is faster
-        # Here we'll just use a standard mapping.
-        if threat_score >= 85.0:
+        bands = thresholds or SeverityThresholds.defaults()
+
+        if threat_score >= bands.critical:
             return "CRITICAL"
-        elif threat_score >= 60.0:
+        if threat_score >= bands.high:
             return "HIGH"
-        elif threat_score >= 40.0:
+        if threat_score >= MEDIUM_FLOOR_SCORE:
             return "MEDIUM"
-        else:
-            return "LOW"
+        return "LOW"
 
     def is_alert_suppressed(
         self,
@@ -72,19 +164,23 @@ class AlertService:
     def process_alert(
         self,
         db: Session,
-        incident_data: Dict[str, Any],
+        incident_data: dict[str, Any],
         *,
         organization_id: int | None = None,
-    ) -> Dict[str, Any] | None:
+        thresholds: SeverityThresholds | None = None,
+    ) -> dict[str, Any] | None:
         """
         Processes a raw detection, determines severity, checks suppression,
         and returns a structured alert object if it should be propagated.
+
+        `thresholds` is resolved by the caller so a single detection does not
+        read the settings row twice -- once here and once when escalating.
         """
-        drone_id = incident_data.get("drone_id")
+        drone_id = str(incident_data.get("drone_id") or "")
         attack_type = incident_data.get("attack_type", "Unknown")
         threat_score = incident_data.get("threat_score", 0.0)
 
-        severity = self.generate_alert_severity(threat_score)
+        severity = self.generate_alert_severity(threat_score, thresholds)
 
         if self.is_alert_suppressed(
             db, drone_id, attack_type, organization_id=organization_id

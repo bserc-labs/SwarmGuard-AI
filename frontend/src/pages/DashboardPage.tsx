@@ -1,258 +1,258 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+/**
+ * Operations overview.
+ *
+ * Counts come from GET /system/health, which is a server-side query, rather than
+ * being derived in the browser from a partial telemetry page. When that request
+ * fails the tiles show "not reported" instead of zeros.
+ */
+
+import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
-import { api, type TelemetryPacket } from "@/services/api";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { MetricCard } from "@/components/shared/MetricCard";
-import { SHAPBarChart } from "@/components/shared/SHAPBarChart";
-import { TelemetryChart, type TelemetryChartPoint } from "@/components/shared/TelemetryChart";
-import { IncidentTimeline } from "@/components/shared/IncidentTimeline";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { useWebSocketContext } from "@/contexts/WebSocketContext";
+import {
+  DataState,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  PermissionDeniedState,
+} from "@/components/ui/DataState";
+import { FeedStatus } from "@/components/ui/FeedStatus";
+import { feedStateDescription } from "@/lib/feedState";
+import { StatTile } from "@/components/shared/StatTile";
 import { DroneMap } from "@/components/shared/DroneMap";
+import { mergePositions } from "@/lib/telemetry";
+import { Chip, Mono, Panel, PanelBody, PanelHeader, PageHeader } from "@/components/ui/primitives";
+import { humanizeEnum, relativeTime } from "@/lib/format";
+import { severityTone, SEVERITY_RANK } from "@/lib/constants";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function DashboardPage() {
-  const [lastUpdated, setLastUpdated] = useState(0);
-  const [telemetrySeries, setTelemetrySeries] = useState<Record<"speed" | "altitude" | "battery", TelemetryChartPoint[]>>({
-    speed: [],
-    altitude: [],
-    battery: [],
+  const { user, role } = useAuth();
+  const effectiveRole = user?.role ?? role;
+  const { feedState, latestTelemetry } = useWebSocketContext();
+
+  const canReadTelemetry = hasPermission(effectiveRole, Permissions.TELEMETRY_READ);
+  const canReadIncidents = hasPermission(effectiveRole, Permissions.INCIDENT_READ);
+
+  const healthQuery = useQuery({
+    queryKey: ["system-health"],
+    queryFn: () => api.getSystemHealth(),
+    refetchInterval: POLL_INTERVALS.health,
   });
 
-  const { data: telemetry, isLoading: telLoading } = useQuery({
-    queryKey: ['telemetry-live'],
-    queryFn: () => api.getTelemetryLive(),
-    refetchInterval: 5000,
-  });
-  
-  const { data: incidents, isLoading: incLoading } = useQuery({
-    queryKey: ['incidents'],
-    queryFn: () => api.getIncidents(),
-    refetchInterval: 5000,
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents", "dashboard"],
+    queryFn: () => api.getIncidents(undefined, 50),
+    refetchInterval: POLL_INTERVALS.incidents,
+    enabled: canReadIncidents,
   });
 
-  const { data: systemHealth } = useQuery({
-    queryKey: ['system-health'],
-    queryFn: () => api.getHealth().catch(() => ({ status: 'OPERATIONAL', service: 'SwarmGuard Core' })),
-    refetchInterval: 15000,
+  const telemetryQuery = useQuery({
+    queryKey: ["telemetry", "latest"],
+    queryFn: () => api.getLatestTelemetry(),
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canReadTelemetry,
   });
 
-  useEffect(() => {
-    setLastUpdated(0);
-    const interval = setInterval(() => {
-      setLastUpdated(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [telemetry, incidents]);
+  const health = healthQuery.data;
+  const healthUnavailable = healthQuery.isError || health?.db_connected === false;
 
-  useEffect(() => {
-    if (!telemetry || telemetry.length === 0) {
-      setTelemetrySeries({ speed: [], altitude: [], battery: [] });
-      return;
-    }
+  // Socket frames supersede the polled snapshot per drone.
+  const mapDrones = useMemo(
+    () => mergePositions(telemetryQuery.data ?? [], latestTelemetry),
+    [telemetryQuery.data, latestTelemetry],
+  );
 
-    const avgSpeed = telemetry.reduce((acc, item) => acc + item.speed, 0) / telemetry.length;
-    const avgAltitude = telemetry.reduce((acc, item) => acc + item.altitude, 0) / telemetry.length;
-    const avgBattery = telemetry.reduce((acc, item) => acc + item.battery, 0) / telemetry.length;
-    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-    setTelemetrySeries((prev) => ({
-      speed: [...prev.speed, { label: timestamp, value: avgSpeed }].slice(-12),
-      altitude: [...prev.altitude, { label: timestamp, value: avgAltitude }].slice(-12),
-      battery: [...prev.battery, { label: timestamp, value: avgBattery }].slice(-12),
-    }));
-  }, [telemetry, lastUpdated]);
-
-  const uniqueDrones = useMemo(() => {
-    if (!telemetry) return [];
-    const map = new Map<string, TelemetryPacket>();
-    telemetry.forEach(t => map.set(t.drone_id, t));
-    return Array.from(map.values());
-  }, [telemetry]);
-
-  const mapDrones = useMemo(() => {
-    return uniqueDrones.map(d => ({
-      drone_id: d.drone_id,
-      latitude: d.latitude,
-      longitude: d.longitude,
-      speed: d.speed,
-      altitude: d.altitude,
-      battery: d.battery,
-      threat_status: (d.battery < 30 ? "Critical" : d.battery < 60 ? "Warning" : "Normal") as "Normal" | "Warning" | "Critical",
-    }));
-  }, [uniqueDrones]);
-
-  const activeDronesCount = uniqueDrones.length;
-  const criticalIncidentsCount = incidents ? incidents.filter(i => i.severity === 'CRITICAL' || i.severity === 'HIGH').length : 0;
-
-  const latestIncident = useMemo(() => {
-    if (!incidents || incidents.length === 0) return null;
-    return [...incidents].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-  }, [incidents]);
-
-  const getBatteryColor = (level: number) => {
-    if (level > 60) return "bg-emerald-400";
-    if (level > 30) return "bg-amber-400";
-    return "bg-sg-error";
-  };
-
-  const getStatusInfo = (level: number) => {
-    if (level > 50) return { label: "NOMINAL", color: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10" };
-    if (level > 20) return { label: "WARNING", color: "text-amber-400 border-amber-500/30 bg-amber-500/10" };
-    return { label: "CRITICAL", color: "text-red-400 border-red-500/30 bg-red-500/10" };
-  };
-
-  const isLoading = telLoading || incLoading;
+  const recentIncidents = useMemo(() => {
+    return [...(incidentsQuery.data ?? [])]
+      .sort((a, b) => {
+        const rank = (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0);
+        if (rank !== 0) return rank;
+        return (
+          new Date(b.detection_time ?? b.created_at).getTime() -
+          new Date(a.detection_time ?? a.created_at).getTime()
+        );
+      })
+      .slice(0, 6);
+  }, [incidentsQuery.data]);
 
   return (
-    <div className="flex flex-col gap-6 p-6 animate-fade-in text-sg-text min-h-screen">
-      {/* Row 1: Page Header */}
-      <div className="flex justify-between items-center mb-1">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-[#00d9ff] to-[#afecff] shimmer-text">
-            Command & Control Dashboard
-          </h1>
-          <p className="text-sg-text-muted mt-1 font-mono text-sm">TACTICAL C2 REAL-TIME OPERATIONAL CENTER</p>
-        </div>
-        <div className="text-sg-text-dim text-sm font-mono flex items-center gap-2">
-          <span className="material-symbols-outlined text-[16px] animate-pulse text-[#00d9ff]">sensors</span>
-          Last updated: {lastUpdated} seconds ago
-        </div>
+    <>
+      <PageHeader
+        title="Operations overview"
+        description="Fleet status, active incidents, and current positions for your organization."
+        actions={<FeedStatus state={feedState} />}
+      />
+
+      {/* Counters */}
+      <section aria-label="Fleet summary" className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        <StatTile
+          label="Active drones"
+          icon="drone"
+          value={healthUnavailable ? null : health?.active_drones}
+          tone="accent"
+          detail={
+            healthUnavailable
+              ? undefined
+              : health?.total_drones !== undefined
+                ? `of ${health.total_drones} registered`
+                : undefined
+          }
+        />
+        <StatTile
+          label="Silent drones"
+          icon="signal"
+          value={healthUnavailable ? null : health?.silent_drones}
+          tone={health?.silent_drones ? "critical" : "neutral"}
+          detail={
+            healthUnavailable
+              ? undefined
+              : health?.silent_drones
+                ? "No heartbeat within the timeout"
+                : "All drones reporting"
+          }
+        />
+        <StatTile
+          label="Critical incidents"
+          icon="alert"
+          value={healthUnavailable ? null : health?.critical_incidents}
+          tone={health?.critical_incidents ? "critical" : "nominal"}
+          detail={
+            healthUnavailable
+              ? undefined
+              : health?.total_incidents !== undefined
+                ? `of ${health.total_incidents} total`
+                : undefined
+          }
+        />
+        <StatTile
+          label="Telemetry feed"
+          icon="activity"
+          value={
+            feedState === "live"
+              ? "Live"
+              : feedState === "stale"
+                ? "Stale"
+                : feedState === "connecting"
+                  ? "Connecting"
+                  : "Offline"
+          }
+          tone={feedState === "live" ? "nominal" : feedState === "stale" ? "warning" : "critical"}
+          detail={feedStateDescription(feedState)}
+        />
+      </section>
+
+      {healthUnavailable ? (
+        <p className="mt-2.5 rounded-control border border-warning/35 bg-warning-wash px-3 py-2 text-[12px] text-warning">
+          System health could not be read, so fleet counters are unavailable. Values shown elsewhere
+          on this page come from separate requests and may still be current.
+        </p>
+      ) : null}
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]">
+        {/* Map */}
+        <Panel className="overflow-hidden">
+          <PanelHeader
+            title="Fleet positions"
+            description={
+              canReadTelemetry
+                ? "Latest reported position per drone. Restricted zones are evaluated in the browser."
+                : undefined
+            }
+          />
+          {!canReadTelemetry ? (
+            <PermissionDeniedState compact />
+          ) : telemetryQuery.isLoading ? (
+            <LoadingState rows={6} />
+          ) : telemetryQuery.isError ? (
+            <ErrorState error={telemetryQuery.error} onRetry={() => telemetryQuery.refetch()} />
+          ) : (
+            <DroneMap drones={mapDrones} className="h-[420px] w-full" />
+          )}
+        </Panel>
+
+        {/* Incidents */}
+        <Panel className="flex flex-col">
+          <PanelHeader
+            title="Recent incidents"
+            description="Highest severity first."
+            actions={
+              <Link
+                to="/incidents"
+                className="text-[12px] text-accent-bright hover:underline"
+              >
+                All
+              </Link>
+            }
+          />
+          {!canReadIncidents ? (
+            <PermissionDeniedState compact />
+          ) : (
+            <DataState
+              isLoading={incidentsQuery.isLoading}
+              isError={incidentsQuery.isError}
+              error={incidentsQuery.error}
+              data={recentIncidents}
+              onRetry={() => incidentsQuery.refetch()}
+              compact
+              empty={
+                <EmptyState
+                  compact
+                  icon="check"
+                  title="No incidents recorded"
+                  detail="Nothing has been flagged for this organization."
+                />
+              }
+            >
+              {(incidents) => (
+                <ul className="divide-y divide-line-subtle">
+                  {incidents.map((incident) => (
+                    <li key={incident.id}>
+                      <Link
+                        to="/incidents/$id"
+                        params={{ id: String(incident.id) }}
+                        className="block px-4 py-2.5 transition-colors hover:bg-surface-overlay"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-content">
+                            {humanizeEnum(incident.attack_type)}
+                          </p>
+                          <Chip tone={severityTone(incident.severity)}>
+                            {humanizeEnum(incident.severity)}
+                          </Chip>
+                        </div>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-content-dim">
+                          <Mono>{incident.drone_id}</Mono>
+                          <span>{relativeTime(incident.detection_time ?? incident.created_at)}</span>
+                          <span>{humanizeEnum(incident.status)}</span>
+                        </p>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DataState>
+          )}
+        </Panel>
       </div>
 
-      {/* Row 2: 4 Metric Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard
-          title="Active Drones"
-          value={activeDronesCount.toString()}
-          icon="flight"
-          loading={isLoading}
-          glowColor="#00d9ff"
-        />
-        <MetricCard
-          title="Threats Detected"
-          value={incidents?.length.toString() || "0"}
-          icon="warning"
-          loading={isLoading}
-          glowColor="#ffb4ab"
-        />
-        <MetricCard
-          title="System Health"
-          value={`${systemHealth?.status === 'OPERATIONAL' ? 100 : 75}%`}
-          icon="monitor_heart"
-          loading={isLoading}
-          glowColor={systemHealth?.status === 'OPERATIONAL' ? '#4ade80' : '#ef4444'}
-          trend={systemHealth?.status === 'OPERATIONAL' ? 'Stable' : 'Degraded'}
-          trendUp={systemHealth?.status === 'OPERATIONAL'}
-        />
-        <MetricCard
-          title="Critical Incidents"
-          value={criticalIncidentsCount.toString()}
-          icon="crisis_alert"
-          loading={isLoading}
-          glowColor="#f59e0b"
-        />
-      </div>
-
-      {/* Row 3: 3-Column Tactical C2 Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (3 cols): Fleet Operational Status */}
-        <GlassCard className="lg:col-span-3 flex flex-col h-[480px] p-4">
-          <div className="flex items-center gap-2 mb-4 border-b border-white/10 pb-3">
-            <span className="h-2 w-2 rounded-full bg-[#00d9ff] animate-pulse" />
-            <h2 className="text-xs uppercase tracking-[0.2em] text-[#00d9ff] font-semibold font-mono">
-              Fleet Status ({uniqueDrones.length})
-            </h2>
+      {/* Detection pipeline transparency */}
+      <Panel className="mt-4">
+        <PanelBody className="flex flex-wrap items-start gap-x-3 gap-y-2">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[13px] font-semibold text-content">About these incidents</h2>
+            <p className="mt-1 max-w-[80ch] text-[12px] leading-relaxed text-content-muted">
+              Incidents shown here are records the backend has stored. This console reports what the
+              API returns and does not label a finding as model-detected, verified, or explained
+              unless the incident payload carries that provenance.
+            </p>
           </div>
-          
-          <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-1">
-            {uniqueDrones.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center text-sg-text-dim text-sm italic font-mono">
-                No active units
-              </div>
-            ) : (
-              uniqueDrones.map((drone) => {
-                const status = getStatusInfo(drone.battery);
-                return (
-                  <div key={drone.drone_id} className="flex flex-col bg-black/30 p-3 rounded-md border border-white/5 hover:border-[#00d9ff]/30 transition-all font-mono">
-                    <div className="flex justify-between items-center mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-base text-[#00d9ff]">flight</span>
-                        <span className="text-xs font-bold text-sg-text">{drone.drone_id}</span>
-                      </div>
-                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${status.color}`}>
-                        {status.label}
-                      </span>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-2 text-[11px] text-sg-text-dim">
-                      <div>
-                        <div className="text-[9px] uppercase tracking-wider text-sg-text-muted mb-0.5">SPD</div>
-                        <div className="font-bold text-sg-text">{drone.speed.toFixed(1)} m/s</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] uppercase tracking-wider text-sg-text-muted mb-0.5">ALT</div>
-                        <div className="font-bold text-sg-text">{drone.altitude.toFixed(1)} m</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-2">
-                      <div className="flex justify-between text-[10px] text-sg-text-muted mb-1">
-                        <span>BATT</span>
-                        <span>{drone.battery.toFixed(1)}%</span>
-                      </div>
-                      <div className="h-1.5 w-full bg-black/50 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full ${getBatteryColor(drone.battery)}`}
-                          style={{ width: `${Math.min(100, Math.max(0, drone.battery))}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          
-          <div className="mt-3 pt-3 border-t border-white/5 text-center">
-            <Link to="/fleet" className="text-xs font-mono text-[#00d9ff] hover:text-[#afecff] transition-colors flex items-center justify-center gap-1">
-              View all fleet <span className="material-symbols-outlined text-sm">arrow_forward</span>
-            </Link>
-          </div>
-        </GlassCard>
-
-        {/* Center Column (6 cols): Live Tactical Radar Map */}
-        <div className="lg:col-span-6 h-[480px]">
-          <DroneMap drones={mapDrones} className="h-full w-full" />
-        </div>
-
-        {/* Right Column (3 cols): Incident Timeline & AI SHAP */}
-        <div className="lg:col-span-3 flex flex-col gap-4 h-[480px] overflow-y-auto pr-1">
-          {/* Incident Timeline */}
-          <div className="flex-1">
-            <IncidentTimeline incidents={incidents} />
-          </div>
-
-          {/* AI SHAP Explainability */}
-          <GlassCard className="p-4">
-            <div className="flex items-center gap-2 mb-3 border-b border-white/10 pb-2">
-              <span className="h-2 w-2 rounded-full bg-[#00d9ff]" />
-              <h2 className="text-xs uppercase tracking-[0.2em] text-[#00d9ff] font-semibold font-mono">
-                AI Explainability (SHAP)
-              </h2>
-            </div>
-            
-            <div className="min-h-[120px] flex flex-col justify-center">
-              <SHAPBarChart values={latestIncident?.shap_values} />
-            </div>
-          </GlassCard>
-        </div>
-      </div>
-
-      {/* Row 4: Live Telemetry Sparkline Graphs */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <TelemetryChart title="Drone Speed" data={telemetrySeries.speed} dataKey="value" lineColor="#00d9ff" unit="m/s" />
-        <TelemetryChart title="Drone Altitude" data={telemetrySeries.altitude} dataKey="value" lineColor="#4ade80" unit="m" />
-        <TelemetryChart title="Drone Battery" data={telemetrySeries.battery} dataKey="value" lineColor="#f59e0b" unit="%" />
-      </div>
-    </div>
+        </PanelBody>
+      </Panel>
+    </>
   );
 }

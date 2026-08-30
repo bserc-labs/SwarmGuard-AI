@@ -1,14 +1,16 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.logger import logger
-import time
-import random
-import requests
-import json
-from datetime import datetime
 import os
+import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import argparse
+import os
+import random
+import time
+from datetime import datetime
+
+import requests
+
+from utils.logger import logger
 
 # Allow overriding via env var, default to 8000
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/telemetry/ingest")
@@ -70,6 +72,7 @@ def generate_telemetry(drone_id: str, is_anomaly: bool = False, attack_mode: str
     }
 
 import math
+
 
 def run_replayer(attack_mode: str = "normal"):
     logger.info(f"🚀 Starting Dataset Replayer... Streaming to {API_URL} [Mode: {attack_mode.upper()}]")

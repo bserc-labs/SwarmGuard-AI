@@ -1,104 +1,301 @@
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+/**
+ * Primary navigation.
+ *
+ * One component serves three layouts:
+ *   desktop (>=1280px)  full 232px sidebar with labels
+ *   tablet  (768-1279)  56px icon rail, labels via tooltip and screen readers
+ *   mobile  (<768px)    off-canvas drawer with a focus trap and Escape to close
+ *
+ * Destinations the current role cannot use are omitted rather than shown
+ * disabled — an operator should not be offered a page that will refuse them.
+ */
+
+import { useEffect, useRef } from "react";
+import { Link, useLocation } from "@tanstack/react-router";
+import { NAV_PRIMARY, NAV_SECONDARY, visibleNavItems, type NavItem } from "@/lib/constants";
 import { useAuth } from "@/hooks/useAuth";
-import { NAV_ITEMS, NAV_BOTTOM } from "@/lib/constants";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/services/api";
+import { Icon } from "@/components/ui/Icon";
+import { cn } from "@/lib/utils";
 
-export function Sidebar() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
-  const { data: incidents } = useQuery({
-    queryKey: ["incidents-count"],
-    queryFn: () => api.getIncidents(undefined, 100),
-    refetchInterval: 30_000,
-  });
+interface SidebarProps {
+  /** Rail mode collapses to icons only (tablet). */
+  collapsed: boolean;
+  /** Drawer open state (mobile only). */
+  mobileOpen: boolean;
+  onMobileClose: () => void;
+  criticalCount: number;
+}
 
-  const incidentCount = incidents?.filter((i) => i.severity === "CRITICAL" || i.severity === "HIGH").length ?? 0;
+function NavLink({
+  item,
+  isActive,
+  collapsed,
+  badgeCount,
+  onNavigate,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  collapsed: boolean;
+  badgeCount: number;
+  onNavigate?: () => void;
+}) {
+  const showBadge = item.badge && badgeCount > 0;
 
   return (
-    <aside className="fixed top-0 left-0 h-screen w-[280px] bg-sg-surface-dim/80 backdrop-blur-xl border-r border-white/10 flex flex-col z-50">
-      {/* Logo */}
-      <div className="p-6 border-b border-white/5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl overflow-hidden border border-sg-primary/40 flex items-center justify-center bg-black/40 primary-glow">
-            <img src="/logo.png" alt="SwarmGuard Logo" className="w-full h-full object-cover" />
-          </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight text-sg-text">SwarmGuard</h1>
-            <span className="text-[10px] uppercase tracking-[0.2em] text-sg-primary font-semibold">AI SENTINEL</span>
-          </div>
-        </div>
-      </div>
+    <Link
+      to={item.path}
+      onClick={onNavigate}
+      aria-current={isActive ? "page" : undefined}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        "group relative flex items-center rounded-[5px] text-[13px] font-medium transition-colors",
+        collapsed ? "h-9 w-9 justify-center" : "h-9 gap-2.5 px-2.5",
+        isActive
+          ? "bg-accent-wash text-accent-bright"
+          : "text-content-muted hover:bg-surface-overlay hover:text-content",
+      )}
+    >
+      {/* Active marker: a rail, not a glow. */}
+      {isActive ? (
+        <span
+          aria-hidden="true"
+          className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-accent"
+        />
+      ) : null}
 
-      {/* Navigation */}
-      <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-        <span className="text-[10px] uppercase tracking-[0.15em] text-sg-text-dim font-semibold px-3 mb-2 block">Operations</span>
-        {NAV_ITEMS.map((item) => {
-          const isActive = location.pathname === item.path;
-          return (
-            <Link
-              key={item.path}
-              to={item.disabled ? "#" : item.path}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group
-                ${isActive
-                  ? "bg-sg-primary/10 text-sg-primary border-l-2 border-sg-primary"
-                  : item.disabled
-                    ? "text-sg-text-dim/50 cursor-not-allowed"
-                    : "text-sg-text-muted hover:bg-white/5 hover:text-sg-text"
-                }`}
-            >
-              <span className={`material-symbols-outlined text-xl ${isActive ? "filled text-sg-primary" : ""}`}>
-                {item.icon}
-              </span>
-              <span className="flex-1">{item.label}</span>
-              {item.badge && incidentCount > 0 && (
-                <span className="bg-red-500/80 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center animate-pulse-red">
-                  {incidentCount}
-                </span>
-              )}
-              {item.disabled && (
-                <span className="text-[9px] uppercase tracking-wider text-sg-text-dim/40">Soon</span>
-              )}
-            </Link>
-          );
-        })}
-      </nav>
+      <Icon name={item.icon} size={16} className="shrink-0" />
 
-      {/* Bottom */}
-      <div className="border-t border-white/5 p-3 space-y-1">
-        {NAV_BOTTOM.map((item) => (
-          <Link
-            key={item.path}
-            to={item.disabled ? "#" : item.path}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-sg-text-muted hover:bg-white/5 hover:text-sg-text transition-all"
-          >
-            <span className="material-symbols-outlined text-xl">{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        ))}
+      {collapsed ? (
+        <span className="sr-only">{item.label}</span>
+      ) : (
+        <span className="flex-1 truncate">{item.label}</span>
+      )}
 
-        <button
-          onClick={() => { logout(); navigate({ to: '/login' }); }}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-red-400/80 hover:bg-red-500/10 hover:text-red-400 transition-all w-full"
+      {showBadge ? (
+        <span
+          className={cn(
+            "rounded-[3px] bg-critical-wash px-1 text-[11px] font-semibold tabular text-critical",
+            collapsed && "absolute -right-0.5 -top-0.5 px-1 py-0 leading-tight",
+          )}
         >
-          <span className="material-symbols-outlined text-xl">logout</span>
-          <span>Sign Out</span>
-        </button>
+          {badgeCount > 99 ? "99+" : badgeCount}
+          <span className="sr-only"> unresolved high or critical incidents</span>
+        </span>
+      ) : null}
+    </Link>
+  );
+}
 
-        {/* User */}
-        {user && (
-          <div className="flex items-center gap-3 mt-3 px-3 py-2 rounded-lg bg-white/3">
-            <div className="w-8 h-8 rounded-full bg-sg-primary/20 border border-sg-primary/30 flex items-center justify-center">
-              <span className="text-xs font-bold text-sg-primary">{(user.username || "U")[0].toUpperCase()}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-sg-text truncate">{user.username}</p>
-              <p className="text-[10px] uppercase tracking-wider text-sg-primary">{user.role}</p>
-            </div>
+function SidebarContent({
+  collapsed,
+  criticalCount,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  criticalCount: number;
+  onNavigate?: () => void;
+}) {
+  const location = useLocation();
+  const { user, role, logout } = useAuth();
+  const effectiveRole = user?.role ?? role;
+
+  const primary = visibleNavItems(NAV_PRIMARY, effectiveRole);
+  const secondary = visibleNavItems(NAV_SECONDARY, effectiveRole);
+
+  const isActivePath = (path: string) =>
+    location.pathname === path || location.pathname.startsWith(`${path}/`);
+
+  return (
+    <div className="flex h-full flex-col bg-surface-raised">
+      {/* Identity */}
+      <div
+        className={cn(
+          "flex h-14 shrink-0 items-center border-b border-line",
+          collapsed ? "justify-center px-2" : "gap-2.5 px-3",
+        )}
+      >
+        <img
+          src="/logo.png"
+          alt=""
+          className="h-7 w-7 shrink-0 rounded-[5px] border border-line-strong object-cover"
+        />
+        {!collapsed && (
+          <div className="min-w-0">
+            <p className="truncate text-[13px] font-semibold leading-tight text-content">SwarmGuard</p>
+            <p className="truncate text-[11px] leading-tight text-content-dim">
+              UAV telemetry security
+            </p>
           </div>
         )}
       </div>
-    </aside>
+
+      <nav
+        aria-label="Primary"
+        className={cn("flex-1 overflow-y-auto py-3", collapsed ? "px-2" : "px-2.5")}
+      >
+        <ul className="flex flex-col gap-0.5">
+          {primary.map((item) => (
+            <li key={item.path}>
+              <NavLink
+                item={item}
+                isActive={isActivePath(item.path)}
+                collapsed={collapsed}
+                badgeCount={criticalCount}
+                onNavigate={onNavigate}
+              />
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <div className={cn("shrink-0 border-t border-line py-3", collapsed ? "px-2" : "px-2.5")}>
+        <ul className="flex flex-col gap-0.5">
+          {secondary.map((item) => (
+            <li key={item.path}>
+              <NavLink
+                item={item}
+                isActive={isActivePath(item.path)}
+                collapsed={collapsed}
+                badgeCount={0}
+                onNavigate={onNavigate}
+              />
+            </li>
+          ))}
+        </ul>
+
+        {user ? (
+          <div
+            className={cn(
+              "mt-3 flex items-center border-t border-line-subtle pt-3",
+              collapsed ? "justify-center" : "gap-2.5",
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line-strong bg-surface-overlay text-[12px] font-semibold text-content-muted"
+            >
+              {user.username.charAt(0).toUpperCase()}
+            </span>
+            {!collapsed && (
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-medium leading-tight text-content">
+                  {user.username}
+                </p>
+                <p className="truncate text-[11px] leading-tight text-content-dim">
+                  {user.role.toLowerCase()}
+                </p>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={logout}
+              title="Sign out"
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] text-content-dim transition-colors hover:bg-surface-overlay hover:text-critical",
+                collapsed && "hidden",
+              )}
+            >
+              <Icon name="logout" size={15} title="Sign out" />
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function Sidebar({ collapsed, mobileOpen, onMobileClose, criticalCount }: SidebarProps) {
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Escape closes the drawer, and focus moves into it on open.
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    closeButtonRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onMobileClose();
+        return;
+      }
+      if (event.key !== "Tab" || !drawerRef.current) return;
+
+      const focusables = drawerRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileOpen, onMobileClose]);
+
+  // Prevent the page behind the drawer from scrolling.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mobileOpen]);
+
+  return (
+    <>
+      {/* Tablet rail and desktop sidebar */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 hidden border-r border-line md:block",
+          collapsed ? "w-14" : "w-[232px]",
+        )}
+      >
+        <SidebarContent collapsed={collapsed} criticalCount={criticalCount} />
+      </aside>
+
+      {/* Mobile drawer */}
+      {mobileOpen ? (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={onMobileClose}
+            className="absolute inset-0 bg-surface-sunken/75"
+          />
+          <div
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            className="sg-enter absolute inset-y-0 left-0 w-[264px] border-r border-line shadow-xl"
+          >
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onMobileClose}
+              className="absolute right-2 top-3.5 z-10 flex h-7 w-7 items-center justify-center rounded-[5px] text-content-muted hover:bg-surface-overlay hover:text-content"
+            >
+              <Icon name="close" size={16} title="Close navigation" />
+            </button>
+            <SidebarContent
+              collapsed={false}
+              criticalCount={criticalCount}
+              onNavigate={onMobileClose}
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

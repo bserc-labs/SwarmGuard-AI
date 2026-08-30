@@ -1,188 +1,355 @@
-import { useQuery } from "@tanstack/react-query";
-import { api, type TelemetryPacket } from "@/services/api";
-import { useWebSocketContext } from "@/contexts/WebSocketContext";
-import { GlassCard } from "@/components/shared/GlassCard";
-import { MetricCard } from "@/components/shared/MetricCard";
-import { SeverityBadge } from "@/components/shared/SeverityBadge";
-import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { SEVERITY_COLORS } from "@/lib/constants";
-import { DroneMap } from "@/components/shared/DroneMap";
-import { demoDroneLocations } from "@/lib/demoDroneLocations";
+/**
+ * Per-drone telemetry inspection.
+ *
+ * Charts are drawn from GET /telemetry/{drone_id}, which is stored history. The
+ * live socket updates the current-reading panel only, so the distinction between
+ * "what the database holds" and "what just arrived" stays visible.
+ */
 
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/services/api";
+import { POLL_INTERVALS } from "@/config";
+import { useWebSocketContext } from "@/contexts/WebSocketContext";
+import { TelemetryChart, TELEMETRY_METRICS, type MetricKey } from "@/components/shared/TelemetryChart";
+import { StatTile } from "@/components/shared/StatTile";
+import {
+  DataState,
+  EmptyState,
+  LoadingState,
+  PermissionDeniedState,
+  UnavailableState,
+} from "@/components/ui/DataState";
+import { FeedStatus } from "@/components/ui/FeedStatus";
+import {
+  Button,
+  Mono,
+  PageHeader,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  Select,
+} from "@/components/ui/primitives";
+import { formatTime, latLon, num, relativeTime } from "@/lib/format";
+import { hasPermission, Permissions } from "@/lib/rbac";
+import { useAuth } from "@/hooks/useAuth";
+
+const METRIC_ORDER: MetricKey[] = ["altitude", "speed", "battery", "satellites"];
 
 export default function TelemetryPage() {
-  const { isConnected, alerts } = useWebSocketContext();
-  const { data: telemetry = [], isLoading } = useQuery({
-    queryKey: ['telemetry-live'],
-    queryFn: api.getTelemetryLive,
-    refetchInterval: 10000,
+  const { user, role } = useAuth();
+  const canRead = hasPermission(user?.role ?? role, Permissions.TELEMETRY_READ);
+  const { feedState, latestTelemetry } = useWebSocketContext();
+
+  // The operator's explicit choice. Null means "follow the first available",
+  // which is derived below rather than written back by an effect.
+  const [chosenDrone, setChosenDrone] = useState<string | null>(null);
+  const [historyLimit, setHistoryLimit] = useState(200);
+
+  const latestQuery = useQuery({
+    queryKey: ["telemetry", "latest"],
+    queryFn: () => api.getLatestTelemetry(),
+    refetchInterval: POLL_INTERVALS.fleet,
+    enabled: canRead,
   });
 
-  if (isLoading) {
+  const droneIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const record of latestQuery.data ?? []) ids.add(record.drone_id);
+    for (const id of Object.keys(latestTelemetry)) ids.add(id);
+    return [...ids].sort();
+  }, [latestQuery.data, latestTelemetry]);
+
+  /**
+   * Effective selection: the operator's choice while it is still present in the
+   * fleet, otherwise the first available drone. Deriving this means a drone that
+   * disappears from the roster falls back cleanly without a render cascade.
+   */
+  const selectedDrone =
+    chosenDrone !== null && droneIds.includes(chosenDrone)
+      ? chosenDrone
+      : (droneIds[0] ?? null);
+
+  const historyQuery = useQuery({
+    queryKey: ["telemetry", "history", selectedDrone, historyLimit],
+    queryFn: () => api.getDroneTelemetry(selectedDrone as string, historyLimit),
+    enabled: canRead && selectedDrone !== null,
+    refetchInterval: POLL_INTERVALS.fleet,
+  });
+
+  /** Newest reading: prefer the socket frame, fall back to the stored row. */
+  const current = useMemo(() => {
+    if (!selectedDrone) return null;
+    const live = latestTelemetry[selectedDrone];
+    if (live) return { ...live, created_at: undefined, source: "live" as const };
+    const stored = (latestQuery.data ?? []).find((r) => r.drone_id === selectedDrone);
+    return stored ? { ...stored, source: "stored" as const } : null;
+  }, [selectedDrone, latestTelemetry, latestQuery.data]);
+
+  // History is returned newest-first; charts need oldest-first.
+  const chronological = useMemo(
+    () => [...(historyQuery.data ?? [])].reverse(),
+    [historyQuery.data],
+  );
+
+  if (!canRead) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <LoadingSpinner />
-      </div>
+      <>
+        <PageHeader title="Telemetry" />
+        <Panel>
+          <PermissionDeniedState />
+        </Panel>
+      </>
     );
   }
 
-  // Calculate summary metrics
-  const avgAltitude = telemetry.length > 0
-    ? (telemetry.reduce((sum, t) => sum + t.altitude, 0) / telemetry.length).toFixed(1)
-    : "0";
-  const avgSpeed = telemetry.length > 0
-    ? (telemetry.reduce((sum, t) => sum + t.speed, 0) / telemetry.length).toFixed(1)
-    : "0";
-
-  // Group by drone_id to get latest packet
-  const latestByDrone: Record<string, TelemetryPacket> = {};
-  telemetry.forEach(t => {
-    latestByDrone[t.drone_id] = t;
-  });
-  const activeDrones = Object.values(latestByDrone);
-
-  const liveMapDrones = activeDrones.map(d => ({
-    drone_id: d.drone_id,
-    latitude: d.latitude,
-    longitude: d.longitude,
-    speed: d.speed,
-    altitude: d.altitude,
-    battery: d.battery ?? 100,
-    threat_status: (d.battery ?? 100) < 20 ? "Critical" : (d.battery ?? 100) < 50 ? "Warning" : "Nominal",
-    last_updated: new Date().toISOString()
-  }));
-
   return (
-    <div className="flex flex-col gap-6 p-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-sg-text font-inter">Live Telemetry Monitoring</h1>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sg-surface border border-white/5">
-          {isConnected ? (
-            <>
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse-cyan shadow-[0_0_8px_#4ade80]"></div>
-              <span className="text-xs font-medium text-green-400 tracking-wider">LIVE DATA STREAM</span>
-            </>
-          ) : (
-            <>
-              <div className="w-2 h-2 rounded-full bg-sg-error shadow-[0_0_8px_#ffb4ab]"></div>
-              <span className="text-xs font-medium text-sg-error tracking-wider">DISCONNECTED</span>
-            </>
-          )}
-        </div>
-      </div>
+    <>
+      <PageHeader
+        title="Telemetry"
+        description="Stored readings per drone, with the most recent values from the live feed."
+        actions={<FeedStatus state={feedState} />}
+      />
 
-      {/* Row 1: Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard 
-          title="Avg Altitude" 
-          value={avgAltitude} 
-          suffix="m" 
-          icon="altitude" 
-        />
-        <MetricCard 
-          title="Avg Speed" 
-          value={avgSpeed} 
-          suffix="m/s" 
-          icon="speed" 
-        />
-        <MetricCard 
-          title="Total Packets" 
-          value={telemetry.length.toString()} 
-          icon="inventory_2" 
-        />
-      </div>
-
-      {/* Row 2: Active Swarm Data Table */}
-      <GlassCard className="overflow-hidden">
-        <div className="mb-4">
-          <h2 className="text-sm uppercase tracking-widest text-sg-text-muted font-semibold">Active Swarm · Real-Time Feed</h2>
-        </div>
-        {activeDrones.length === 0 ? (
-          <div className="p-8 text-center text-sg-text-muted font-mono text-sm">
-            Awaiting telemetry stream... Ensure Dataset Replayer is running.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-white/5 bg-white/[0.02]">
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Drone ID</th>
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Altitude (m)</th>
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Speed (m/s)</th>
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Lat / Lng</th>
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Battery (%)</th>
-                  <th className="p-3 text-xs font-medium text-sg-text-dim uppercase tracking-wider">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeDrones.map((drone, idx) => (
-                  <tr key={drone.drone_id} className={`border-b border-white/5 hover:bg-white/5 transition-colors ${idx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.01]'}`}>
-                    <td className="p-3 font-mono text-sm text-sg-primary">{drone.drone_id}</td>
-                    <td className="p-3 font-mono text-sm text-sg-text">{drone.altitude.toFixed(1)}</td>
-                    <td className="p-3 font-mono text-sm text-sg-text">{drone.speed.toFixed(1)}</td>
-                    <td className="p-3 font-mono text-sm text-sg-text-muted">{drone.latitude.toFixed(4)}, {drone.longitude.toFixed(4)}</td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm text-sg-text w-8">{(drone.battery ?? 100).toFixed(0)}%</span>
-                        <div className="h-1.5 w-16 bg-white/10 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full ${(drone.battery ?? 100) > 60 ? 'bg-green-500' : (drone.battery ?? 100) > 30 ? 'bg-sg-amber' : 'bg-sg-error'}`}
-                            style={{ width: `${Math.min(100, Math.max(0, drone.battery ?? 100))}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${(drone.battery ?? 100) > 50 ? 'bg-green-500/20 text-green-400' : (drone.battery ?? 100) > 20 ? 'bg-sg-amber/20 text-sg-amber' : 'bg-sg-error/20 text-sg-error'}`}>
-                        {(drone.battery ?? 100) > 50 ? 'NOMINAL' : (drone.battery ?? 100) > 20 ? 'WARNING' : 'CRITICAL'}
-                      </span>
-                    </td>
-                  </tr>
+      {latestQuery.isLoading ? (
+        <Panel>
+          <LoadingState rows={5} />
+        </Panel>
+      ) : droneIds.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon="activity"
+            title="No telemetry available"
+            detail="No drone in this organization has reported readings yet."
+          />
+        </Panel>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-end gap-3">
+            <div className="w-full max-w-xs">
+              <label htmlFor="drone-select" className="mb-1.5 block text-[12px] font-medium text-content-muted">
+                Drone
+              </label>
+              <Select
+                id="drone-select"
+                value={selectedDrone ?? ""}
+                onChange={(e) => setChosenDrone(e.target.value)}
+              >
+                {droneIds.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </GlassCard>
-
-      {/* Row 3: Tactical Drone Map */}
-      <DroneMap drones={liveMapDrones.length > 0 ? liveMapDrones : demoDroneLocations} />
-
-      {/* Row 4: WebSocket Alert Feed */}
-      <GlassCard>
-        <div className="mb-4">
-          <h2 className="text-sm uppercase tracking-widest text-sg-text-muted font-semibold">Anomaly Alert Feed</h2>
-        </div>
-        <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
-          {alerts.length === 0 ? (
-            <div className="p-4 text-center text-sg-text-muted text-sm font-mono flex items-center justify-center gap-2">
-              <span className="material-symbols-outlined text-green-400">check_circle</span>
-              No anomalies detected. System operating normally.
+              </Select>
             </div>
-          ) : (
-            alerts.slice(-10).reverse().map((alert, i) => {
-              const timestampValue = (alert as { timestamp?: string | number; created_at?: string }).timestamp || (alert as { created_at?: string }).created_at;
-              const timestampLabel = timestampValue
-                ? new Date(timestampValue).toLocaleTimeString()
-                : new Date().toLocaleTimeString();
 
-              return (
-                <div key={i} className="flex items-center gap-4 p-3 rounded bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
-                  <SeverityBadge severity={alert.severity || "HIGH"} />
-                  <div className="flex-1 font-inter text-sm text-sg-text">
-                    <span className="text-sg-primary font-medium">{alert.attack_type}</span> detected
-                    <span className="text-sg-text-muted ml-2 font-mono text-xs">Score: {(alert.anomaly_score * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="text-xs text-sg-text-dim font-mono">
-                    {timestampLabel}
-                  </div>
+            <div className="w-full max-w-[150px]">
+              <label htmlFor="history-limit" className="mb-1.5 block text-[12px] font-medium text-content-muted">
+                History depth
+              </label>
+              <Select
+                id="history-limit"
+                value={historyLimit}
+                onChange={(e) => setHistoryLimit(Number(e.target.value))}
+              >
+                <option value={50}>50 packets</option>
+                <option value={200}>200 packets</option>
+                <option value={500}>500 packets</option>
+              </Select>
+            </div>
+
+            <Button
+              icon="refresh"
+              size="sm"
+              onClick={() => historyQuery.refetch()}
+              loading={historyQuery.isFetching}
+            >
+              Refresh
+            </Button>
+          </div>
+
+          {/* Current reading */}
+          <section aria-label="Current reading" className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+            <StatTile
+              label="Altitude"
+              icon="gauge"
+              value={current ? num(current.altitude) : null}
+              unit="m"
+            />
+            <StatTile
+              label="Speed"
+              icon="activity"
+              value={current ? num(current.speed) : null}
+              unit="m/s"
+            />
+            <StatTile
+              label="Battery"
+              icon="battery"
+              value={current ? num(current.battery, 0) : null}
+              unit="%"
+              tone={
+                typeof current?.battery === "number" && current.battery < 25 ? "warning" : "neutral"
+              }
+            />
+            <StatTile
+              label="Satellites"
+              icon="satellite"
+              value={
+                current?.satellites === null || current?.satellites === undefined
+                  ? null
+                  : current.satellites
+              }
+              tone={
+                typeof current?.satellites === "number" && current.satellites < 6
+                  ? "warning"
+                  : "neutral"
+              }
+            />
+          </section>
+
+          {current ? (
+            <Panel className="mt-2.5">
+              <PanelBody className="flex flex-wrap items-center gap-x-5 gap-y-2 py-2.5 text-[12px]">
+                <span className="text-content-dim">
+                  Position <Mono className="ml-1 text-content-muted">{latLon(current.latitude, current.longitude)}</Mono>
+                </span>
+                <span className="text-content-dim">
+                  Heading{" "}
+                  <Mono className="ml-1 text-content-muted">
+                    {current.heading === null || current.heading === undefined
+                      ? "—"
+                      : `${num(current.heading, 0)}°`}
+                  </Mono>
+                </span>
+                <span className="text-content-dim">
+                  Mode{" "}
+                  <Mono className="ml-1 text-content-muted">{current.flight_mode ?? "—"}</Mono>
+                </span>
+                <span className="text-content-dim">
+                  Armed{" "}
+                  <span className="ml-1 text-content-muted">
+                    {current.armed_status === null || current.armed_status === undefined
+                      ? "—"
+                      : current.armed_status
+                        ? "Yes"
+                        : "No"}
+                  </span>
+                </span>
+                <span className="text-content-dim">
+                  Sequence <Mono className="ml-1 text-content-muted">{current.packet_sequence}</Mono>
+                </span>
+                <span className="ml-auto text-content-dim">
+                  {current.source === "live"
+                    ? "From the live feed"
+                    : `Stored ${relativeTime(current.created_at)}`}
+                </span>
+              </PanelBody>
+            </Panel>
+          ) : null}
+
+          {/* Charts */}
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            {METRIC_ORDER.map((metric) => (
+              <Panel key={metric}>
+                <PanelHeader
+                  title={TELEMETRY_METRICS[metric].label}
+                  description={
+                    TELEMETRY_METRICS[metric].unit
+                      ? `Measured in ${TELEMETRY_METRICS[metric].unit}`
+                      : undefined
+                  }
+                />
+                <PanelBody className="px-2 pb-2 pt-3">
+                  {historyQuery.isLoading ? (
+                    <LoadingState rows={4} compact />
+                  ) : historyQuery.isError ? (
+                    <UnavailableState
+                      compact
+                      title="History unavailable"
+                      detail="Stored telemetry for this drone could not be read."
+                    />
+                  ) : (
+                    <TelemetryChart records={chronological} metric={metric} />
+                  )}
+                </PanelBody>
+              </Panel>
+            ))}
+          </div>
+
+          {/* Raw packets */}
+          <Panel className="mt-4">
+            <PanelHeader
+              title="Recent packets"
+              description={`Newest first, up to ${historyLimit}.`}
+            />
+            <DataState
+              isLoading={historyQuery.isLoading}
+              isError={historyQuery.isError}
+              error={historyQuery.error}
+              data={historyQuery.data}
+              onRetry={() => historyQuery.refetch()}
+              compact
+              empty={<EmptyState compact title="No stored packets for this drone" />}
+            >
+              {(records) => (
+                <div className="max-h-80 overflow-auto">
+                  <table className="w-full border-collapse text-[12px]">
+                    <thead className="sticky top-0 bg-surface-raised">
+                      <tr>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-left text-[11px] font-semibold text-content-dim">
+                          Time
+                        </th>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-left text-[11px] font-semibold text-content-dim">
+                          Position
+                        </th>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-right text-[11px] font-semibold text-content-dim">
+                          Alt
+                        </th>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-right text-[11px] font-semibold text-content-dim">
+                          Speed
+                        </th>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-right text-[11px] font-semibold text-content-dim">
+                          Battery
+                        </th>
+                        <th scope="col" className="border-b border-line px-3 py-2 text-right text-[11px] font-semibold text-content-dim">
+                          Seq
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono tabular">
+                      {records.slice(0, 100).map((record, index) => (
+                        <tr
+                          key={`${record.drone_id}-${record.packet_sequence}-${index}`}
+                          className="hover:bg-surface-overlay"
+                        >
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-content-muted">
+                            {formatTime(record.created_at)}
+                          </td>
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-content-muted">
+                            {latLon(record.latitude, record.longitude)}
+                          </td>
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-right text-content-muted">
+                            {num(record.altitude)}
+                          </td>
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-right text-content-muted">
+                            {num(record.speed)}
+                          </td>
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-right text-content-muted">
+                            {num(record.battery, 0)}
+                          </td>
+                          <td className="border-b border-line-subtle px-3 py-1.5 text-right text-content-dim">
+                            {record.packet_sequence}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              );
-            })
-          )}
-        </div>
-      </GlassCard>
-    </div>
+              )}
+            </DataState>
+          </Panel>
+        </>
+      )}
+    </>
   );
 }

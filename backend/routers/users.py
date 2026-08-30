@@ -1,10 +1,14 @@
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from typing import List
-from database import get_db
+
 import models
 import schemas
-from middleware.auth_middleware import get_admin_user, get_current_user
+from database import get_db
+from middleware.auth_middleware import TenantContext, get_current_user, require_permission
+from middleware.rbac import Permissions
+from services.audit_service import audit_service
 from services.auth_service import get_password_hash
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -13,24 +17,53 @@ router = APIRouter(prefix="/users", tags=["users"])
 def create_user(
     user: schemas.UserCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_admin_user)
+    tenant: TenantContext = Depends(require_permission(Permissions.USER_MANAGE))
 ):
-    db_user = db.query(models.User).filter(models.User.username == user.username).first()
-    if db_user:
+    """Create a new user within the current tenant's organization."""
+    if db.query(models.User).filter(models.User.username == user.username).first():
         raise HTTPException(status_code=400, detail="Username already registered")
-        
-    hashed_password = get_password_hash(user.password)
+
+    # username and email are both globally unique columns. Pre-checking only the
+    # username meant a duplicate email surfaced as an IntegrityError and a 500.
+    if user.email and db.query(models.User).filter(models.User.email == user.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
     new_user = models.User(
         username=user.username,
         email=user.email,
-        password=hashed_password,
-        role="operator"
+        password=get_password_hash(user.password),
+        role=user.role,
+        organization_id=tenant.organization_id,
     )
     db.add(new_user)
-    db.commit()
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
+        action="USER_CREATED",
+        resource="user", resource_id=user.username,
+        new_state=new_user.role,
+    )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # Still possible under a concurrent create; report it as a conflict
+        # rather than an unhandled server error.
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That username or email is already taken") from None
+
     db.refresh(new_user)
-    
     return new_user
+
+@router.get("/", response_model=list[schemas.UserOut])
+def list_users(
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.USER_MANAGE))
+):
+    """List all users within the current tenant's organization."""
+    return db.query(models.User).filter(
+        models.User.organization_id == tenant.organization_id
+    ).all()
 
 @router.get("/me", response_model=schemas.UserOut)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
@@ -55,11 +88,23 @@ def change_password(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Securely change current user's password."""
-    from services.auth_service import verify_password, get_password_hash
+    """Change the current user's password and revoke existing sessions."""
+    from services.auth_service import get_password_hash, verify_password
     if not verify_password(pwd_data.current_password, current_user.password):
-        raise HTTPException(status_code=400, detail="Current authorization key is incorrect")
-    
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if pwd_data.new_password == pwd_data.current_password:
+        raise HTTPException(
+            status_code=400, detail="The new password must differ from the current one"
+        )
+
     current_user.password = get_password_hash(pwd_data.new_password)
+    # Invalidates every token issued before this moment, including the one used
+    # to make this request. Changing a password must end other sessions.
+    current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
-    return {"message": "Authorization key updated successfully"}
+
+    return {
+        "message": "Password updated. All sessions have been signed out.",
+        "sessions_revoked": True,
+    }
