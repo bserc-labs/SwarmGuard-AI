@@ -1,12 +1,16 @@
 import sys
+
 sys.path.append("/Users/aryannegi/Desktop/SwarmGuard-AI-Bserc/backend")
 
-import time
-import psutil
 import os
+import time
+
 import numpy as np
-from services.ai_service import ai_service
+import psutil
+
 from models_ml.data_generator import generate_synthetic_telemetry
+from services.ai_service import ai_service
+
 
 def run_benchmark():
     print("--- Starting AI Benchmark ---")

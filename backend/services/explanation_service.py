@@ -1,13 +1,13 @@
-from typing import Any, List, Dict
-import pandas as pd
+import json
 from datetime import datetime
+from typing import Any, ClassVar
+
+import pandas as pd
+
 from config import get_settings
-from utils.logger import logger
-from models_ml.registry import model_registry
-from models_ml.preprocess import FeatureEngineer
 from models_ml.explainability import ExplainabilityEngine
 from services.ai_service import ai_service
-import json
+from utils.logger import logger
 
 settings = get_settings()
 
@@ -30,7 +30,7 @@ class AIExplanationService:
             self.engine = ExplainabilityEngine(ai_service.model, ai_service.scaler, ai_service.metadata)
             self.last_model_version = current_version
             
-    def _generate_analyst_summary(self, ranked_features: List[Dict]) -> Dict[str, str]:
+    def _generate_analyst_summary(self, ranked_features: list[dict]) -> dict[str, str]:
         """Converts raw SHAP feature rankings into a structured SOC analyst summary template."""
         if not ranked_features:
             return {
@@ -105,7 +105,7 @@ class AIExplanationService:
     # Feature -> attack family. Used to give an incident a short, filterable
     # label instead of storing a full sentence in `attack_type`, which is what
     # the dashboard groups and the operator scans.
-    _ATTACK_FAMILIES = {
+    _ATTACK_FAMILIES: ClassVar[dict[str, str]] = {
         "gps_speed_error_abs": "GPS_SPOOFING",
         "gps_speed_error_ratio": "GPS_SPOOFING",
         "gps_acceleration": "GPS_SPOOFING",
@@ -123,7 +123,7 @@ class AIExplanationService:
         "flight_mode_transitions": "CONTROL_ANOMALY",
     }
 
-    def _classify_attack_type(self, significant_features: List[Dict]) -> str:
+    def _classify_attack_type(self, significant_features: list[dict]) -> str:
         """Derive a short attack label from the top-weighted SHAP features.
 
         Votes across the top three rather than trusting the single highest

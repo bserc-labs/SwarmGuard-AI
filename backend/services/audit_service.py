@@ -1,9 +1,10 @@
 import logging
 import uuid
+
 from sqlalchemy.orm import Session
-from models import AuditLog
-from typing import Optional
+
 from middleware.auth_middleware import TenantContext
+from models import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +14,16 @@ class AuditService:
         db: Session,
         actor: str,
         action: str,
-        organization_id: Optional[int] = None,
-        resource: Optional[str] = None,
-        resource_id: Optional[str] = None,
-        target: Optional[str] = None,
-        previous_state: Optional[str] = None,
-        new_state: Optional[str] = None,
-        reason: Optional[str] = None,
-        details: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        correlation_id: Optional[str] = None
+        organization_id: int | None = None,
+        resource: str | None = None,
+        resource_id: str | None = None,
+        target: str | None = None,
+        previous_state: str | None = None,
+        new_state: str | None = None,
+        reason: str | None = None,
+        details: str | None = None,
+        ip_address: str | None = None,
+        correlation_id: str | None = None
     ) -> AuditLog:
         """
         Record an immutable, append-only audit trail entry for defense-grade traceability.
@@ -57,15 +58,15 @@ class AuditService:
         db: Session,
         tenant: TenantContext,
         action: str,
-        resource: Optional[str] = None,
-        resource_id: Optional[str] = None,
-        target: Optional[str] = None,
-        previous_state: Optional[str] = None,
-        new_state: Optional[str] = None,
-        reason: Optional[str] = None,
-        details: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        correlation_id: Optional[str] = None,
+        resource: str | None = None,
+        resource_id: str | None = None,
+        target: str | None = None,
+        previous_state: str | None = None,
+        new_state: str | None = None,
+        reason: str | None = None,
+        details: str | None = None,
+        ip_address: str | None = None,
+        correlation_id: str | None = None,
     ) -> AuditLog:
         """Convenience method that extracts actor and org_id from TenantContext."""
         return self.log(

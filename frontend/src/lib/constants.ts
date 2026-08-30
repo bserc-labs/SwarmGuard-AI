@@ -23,10 +23,16 @@ export const NAV_PRIMARY: readonly NavItem[] = [
   { label: "Fleet", icon: "drone", path: "/fleet", permission: Permissions.DRONE_READ },
   { label: "Incidents", icon: "alert", path: "/incidents", permission: Permissions.INCIDENT_READ, badge: true },
   { label: "Threat intelligence", icon: "shield", path: "/threats", permission: Permissions.INCIDENT_READ },
+  // Gated on ai.explain: the guard thresholds this page shows are effectively
+  // the evasion envelope, so observers do not get them.
+  { label: "Detection", icon: "gauge", path: "/detection", permission: Permissions.AI_EXPLAIN },
   { label: "Fleet control", icon: "zap", path: "/admin", permission: Permissions.DRONE_COMMAND_REQUEST, elevatedOnly: true },
 ] as const;
 
 export const NAV_SECONDARY: readonly NavItem[] = [
+  // user.manage is admin-only, so the permission filter alone gates this; the
+  // route carries its own admin guard rather than the broader elevated check.
+  { label: "Team", icon: "user", path: "/users", permission: Permissions.USER_MANAGE },
   { label: "Settings", icon: "settings", path: "/settings", permission: Permissions.SETTINGS_READ, elevatedOnly: true },
   { label: "Profile", icon: "user", path: "/profile", permission: Permissions.TELEMETRY_READ },
 ] as const;
@@ -97,6 +103,45 @@ export function droneStatusTone(status: string | null | undefined): SeverityTone
 }
 
 /* ------------------------------------------------------ incident status */
+
+/**
+ * The incident lifecycle, in order. Mirrors LIFECYCLE in
+ * backend/routers/incidents.py.
+ *
+ * The backend walks intermediate states on the caller's behalf, so a transition
+ * request names a destination rather than the next hop. What this ordering is
+ * for on the client is deciding which destinations are still *ahead* of the
+ * incident — offering "Resolve" on an already-resolved incident produces a 400,
+ * and offering "Acknowledge" on a resolved one produces a different 400.
+ */
+export const INCIDENT_LIFECYCLE = [
+  "NEW",
+  "OPEN",
+  "ACKNOWLEDGED",
+  "INVESTIGATING",
+  "CONTAINED",
+  "RESOLVED",
+  "CLOSED",
+] as const;
+
+export type IncidentStatus = (typeof INCIDENT_LIFECYCLE)[number];
+
+/** Position in the lifecycle, or -1 for a status the client does not know. */
+export function lifecycleIndex(status: string | null | undefined): number {
+  if (!status) return -1;
+  return (INCIDENT_LIFECYCLE as readonly string[]).indexOf(status.toUpperCase());
+}
+
+/**
+ * True when `target` is still reachable from `status` — strictly ahead of it.
+ * An unknown current status returns false rather than guessing, so the UI
+ * withholds the action instead of offering one that will fail.
+ */
+export function canAdvanceTo(status: string | null | undefined, target: IncidentStatus): boolean {
+  const from = lifecycleIndex(status);
+  if (from < 0) return false;
+  return lifecycleIndex(target) > from;
+}
 
 /** Terminal statuses — no further transitions are offered. */
 export const CLOSED_STATUSES = new Set(["RESOLVED", "CLOSED"]);

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 import models
 import schemas
 from database import get_db
-from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission
+from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
 from services.audit_service import audit_service
 from utils.logger import logger

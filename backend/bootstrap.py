@@ -21,10 +21,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
-import models  # noqa: E402
-from database import SessionLocal  # noqa: E402
-from services.auth_service import get_password_hash  # noqa: E402
-from utils.logger import logger  # noqa: E402
+import models
+from database import SessionLocal
+from services.auth_service import get_password_hash
+from utils.logger import logger
 
 DEFAULT_ORG_NAME = os.getenv("DEFAULT_ORG_NAME", "SwarmGuard Default")
 DEFAULT_ORG_SLUG = os.getenv("DEFAULT_ORG_SLUG", "swarmguard-default")

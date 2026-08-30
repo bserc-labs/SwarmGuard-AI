@@ -1,7 +1,7 @@
-import pandas as pd
 import json
 import os
 from datetime import datetime
+
 from config import get_settings
 from models_ml.dataset_loader import DatasetLoader
 from utils.logger import logger

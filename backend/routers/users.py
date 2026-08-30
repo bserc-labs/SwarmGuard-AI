@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 import models
 import schemas
 from database import get_db
-from middleware.auth_middleware import get_current_user, get_tenant_context, TenantContext, require_permission
+from middleware.auth_middleware import TenantContext, get_current_user, require_permission
 from middleware.rbac import Permissions
-from services.auth_service import get_password_hash
 from services.audit_service import audit_service
+from services.auth_service import get_password_hash
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -50,7 +50,7 @@ def create_user(
         # Still possible under a concurrent create; report it as a conflict
         # rather than an unhandled server error.
         db.rollback()
-        raise HTTPException(status_code=409, detail="That username or email is already taken")
+        raise HTTPException(status_code=409, detail="That username or email is already taken") from None
 
     db.refresh(new_user)
     return new_user

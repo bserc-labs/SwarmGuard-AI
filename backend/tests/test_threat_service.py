@@ -15,7 +15,7 @@ BACKEND_ROOT = os.path.normpath(os.path.join(TEST_DIR, ".."))
 if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
-from services.threat_service import (
+from experimental.threat_service import (
     PiecewiseLinearStrategy,
     SigmoidStrategy,
     ThreatScoreEngine,

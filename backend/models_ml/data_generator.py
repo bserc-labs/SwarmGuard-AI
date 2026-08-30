@@ -1,7 +1,9 @@
-import pandas as pd
-import numpy as np
-import random
 import os
+import random
+
+import numpy as np
+import pandas as pd
+
 
 def generate_synthetic_telemetry(num_drones=5, records_per_drone=1000):
     """

@@ -11,6 +11,19 @@ load_dotenv()
 
 from database import DATABASE_URL, get_db
 from main import app
+from utils.limiter import limiter
+
+# Rate limiting is off for the unit suite.
+#
+# /auth/login allows 5 requests per minute, keyed by client address -- which is
+# the literal string "testclient" for every test in the process. Any suite with
+# more than five logins therefore fails on ordering rather than behaviour, and
+# because the limiter is Redis-backed the exhaustion survives the run: a second
+# `pytest` within the minute failed tests that had just passed.
+#
+# The limit itself is still exercised, against a real server over real sockets,
+# by test_sprint7_security.test_rate_limiting.
+limiter.enabled = False
 
 # Use testing DB or default to the existing DATABASE_URL
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", DATABASE_URL)

@@ -1,10 +1,10 @@
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 try:
-    from services.threat_service import ThreatScoreEngine
+    from experimental.threat_service import ThreatScoreEngine
     from utils.explanation_engine import ExplanationEngine
     from utils.recommendation_engine import RecommendationEngine
     from utils.severity_mapper import map_severity
@@ -13,7 +13,7 @@ except ImportError:
     import sys
     # Parent of backend/utils is backend/ (one level up)
     sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
-    from services.threat_service import ThreatScoreEngine
+    from experimental.threat_service import ThreatScoreEngine
     from utils.explanation_engine import ExplanationEngine
     from utils.recommendation_engine import RecommendationEngine
     from utils.severity_mapper import map_severity
@@ -24,7 +24,7 @@ class IncidentGenerator:
     Orchestrates the entire Threat Intelligence pipeline to generate complete,
     database-ready and UI-ready incident objects, and aggregates histories.
     """
-    def __init__(self, data_dir: str = None):
+    def __init__(self, data_dir: str | None = None):
         self.threat_engine = ThreatScoreEngine()
         self.explanation_engine = ExplanationEngine(data_dir=data_dir)
         self.recommendation_engine = RecommendationEngine(data_dir=data_dir)
@@ -69,8 +69,8 @@ class IncidentGenerator:
         )
 
         # 5. Timestamp and Unique ID
-        incident_id = f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        incident_id = f"INC-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
         incident = {
             "incident_id": incident_id,

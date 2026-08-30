@@ -1,12 +1,14 @@
 import os
+
 import pandas as pd
-from utils.logger import logger
+
 from config import get_settings
+from utils.logger import logger
 
 settings = get_settings()
 
 class DatasetLoader:
-    def __init__(self, filepath: str = None):
+    def __init__(self, filepath: str | None = None):
         # We allow overriding filepath, otherwise fall back to config
         self.filepath = filepath or os.path.normpath(os.path.join(
             os.path.dirname(__file__), "..", settings.DATASET_PATH

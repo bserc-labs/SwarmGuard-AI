@@ -1,16 +1,19 @@
 import asyncio
-import time
-from pymavlink import mavutil
-from sqlalchemy.orm import Session
 
+from pymavlink import mavutil
+
+import schemas
 from config import get_settings
 from database import SessionLocal
-from utils.logger import logger
 from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
-import schemas
+from utils.logger import logger
 
 settings = get_settings()
+
+# Broadcasts are fire-and-forget; the set keeps each task alive until it finishes.
+_broadcast_tasks: set[asyncio.Task] = set()
+
 
 class MavlinkReceiver:
     # Exponential backoff bounds, and how often a sustained outage is logged.
@@ -79,8 +82,8 @@ class MavlinkReceiver:
             if self.mav_connection is not None:
                 try:
                     self.mav_connection.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Ignoring error while closing MAVLink connection: {exc}")
             self.mav_connection = None
             return False
 
@@ -222,7 +225,9 @@ class MavlinkReceiver:
             processed_data = telemetry_service.process_telemetry(
                 packet, db, organization_id=organization_id
             )
-            asyncio.create_task(ws_manager.broadcast(processed_data, organization_id))
+            task = asyncio.create_task(ws_manager.broadcast(processed_data, organization_id))
+            _broadcast_tasks.add(task)
+            task.add_done_callback(_broadcast_tasks.discard)
         except Exception as e:
             logger.error(f"Failed to ingest MAVLink packet: {e}")
         finally:

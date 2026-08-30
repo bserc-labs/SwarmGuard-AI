@@ -1,9 +1,12 @@
 import asyncio
+import contextlib
 import json
 import os
 from collections import defaultdict
+from collections.abc import AsyncIterator
+from typing import cast
 
-from broadcaster import Broadcast
+from broadcaster import Broadcast, Event
 from fastapi import WebSocket
 
 from utils.logger import logger
@@ -89,8 +92,14 @@ class ConnectionManager:
     async def _subscribe(self, organization_id: int) -> None:
         """Relay messages published by other workers to this worker's sockets."""
         try:
-            async with broadcast_client.subscribe(channel_for(organization_id)) as subscriber:
+            async with broadcast_client.subscribe(channel_for(organization_id)) as subscription:
+                # broadcaster types the subscription and its events as optional.
+                if subscription is None:
+                    return
+                subscriber = cast("AsyncIterator[Event | None]", subscription)
                 async for event in subscriber:
+                    if event is None:
+                        continue
                     try:
                         payload = json.loads(event.message)
                     except json.JSONDecodeError:
@@ -150,10 +159,8 @@ class ConnectionManager:
         self._listeners.clear()
         self._connections.clear()
         if self._connected:
-            try:
+            with contextlib.suppress(Exception):
                 await broadcast_client.disconnect()
-            except Exception:
-                pass
             self._connected = False
 
 

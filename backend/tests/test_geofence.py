@@ -23,8 +23,8 @@ def test_point_in_circle_geofence():
     dist_inside = GeofenceEngine.haversine_distance(inside_point[0], inside_point[1], center[0], center[1])
     dist_outside = GeofenceEngine.haversine_distance(outside_point[0], outside_point[1], center[0], center[1])
 
-    assert (dist_inside <= radius) == True
-    assert (dist_outside <= radius) == False
+    assert (dist_inside <= radius)
+    assert not (dist_outside <= radius)
 
 def test_point_in_polygon_geofence():
     polygon = [
@@ -36,6 +36,6 @@ def test_point_in_polygon_geofence():
     inside_point = [34.05, -118.25]
     outside_point = [34.15, -118.25]
 
-    assert GeofenceEngine.is_point_in_polygon(inside_point[0], inside_point[1], polygon) == True
-    assert GeofenceEngine.is_point_in_polygon(outside_point[0], outside_point[1], polygon) == False
+    assert GeofenceEngine.is_point_in_polygon(inside_point[0], inside_point[1], polygon)
+    assert not GeofenceEngine.is_point_in_polygon(outside_point[0], outside_point[1], polygon)
 

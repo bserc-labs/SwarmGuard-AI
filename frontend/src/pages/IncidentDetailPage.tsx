@@ -31,7 +31,12 @@ import {
   PanelBody,
   PanelHeader,
 } from "@/components/ui/primitives";
-import { incidentStatusTone, severityTone } from "@/lib/constants";
+import {
+  canAdvanceTo,
+  incidentStatusTone,
+  severityTone,
+  type IncidentStatus,
+} from "@/lib/constants";
 import {
   buildForensicReport,
   downloadReport,
@@ -41,6 +46,53 @@ import {
 import { formatDateTime, humanizeEnum, relativeTime } from "@/lib/format";
 import { hasPermission, Permissions } from "@/lib/rbac";
 import { useAuth } from "@/hooks/useAuth";
+
+/**
+ * The lifecycle actions this page offers, each mapped to the state it lands on.
+ *
+ * Availability is decided by `canAdvanceTo` against that target rather than by
+ * ad-hoc status flags. The previous version showed Resolve whenever the
+ * incident was not already resolved, which included NEW and ACKNOWLEDGED —
+ * states the backend refused, so the button returned 400 from every state a
+ * user could actually reach it in.
+ */
+const TRANSITION_ACTIONS = {
+  acknowledge: {
+    label: "Acknowledge",
+    past: "acknowledged",
+    target: "ACKNOWLEDGED",
+    run: (id: number, note?: string) => api.acknowledgeIncident(id, note),
+  },
+  investigate: {
+    label: "Investigate",
+    past: "moved to investigating",
+    target: "INVESTIGATING",
+    run: (id: number, note?: string) => api.investigateIncident(id, note),
+  },
+  contain: {
+    label: "Contain",
+    past: "marked contained",
+    target: "CONTAINED",
+    run: (id: number, note?: string) => api.containIncident(id, note),
+  },
+  resolve: {
+    label: "Resolve",
+    past: "resolved",
+    target: "RESOLVED",
+    run: (id: number, note?: string) => api.resolveIncident(id, note),
+  },
+  close: {
+    label: "Close",
+    past: "closed",
+    target: "CLOSED",
+    run: (id: number, note?: string) => api.closeIncident(id, note),
+  },
+} as const satisfies Record<
+  string,
+  { label: string; past: string; target: IncidentStatus; run: (id: number, note?: string) => Promise<unknown> }
+>;
+
+type TransitionAction = keyof typeof TRANSITION_ACTIONS;
 
 export default function IncidentDetailPage() {
   const { id } = useParams({ from: "/layout/incidents/$id" });
@@ -78,14 +130,12 @@ export default function IncidentDetailPage() {
   };
 
   const transition = useMutation({
-    mutationFn: ({ action }: { action: "acknowledge" | "resolve" | "close" }) => {
+    mutationFn: ({ action }: { action: TransitionAction }) => {
       const note = reason.trim() || undefined;
-      if (action === "acknowledge") return api.acknowledgeIncident(incidentId, note);
-      if (action === "resolve") return api.resolveIncident(incidentId, note);
-      return api.closeIncident(incidentId, note);
+      return TRANSITION_ACTIONS[action].run(incidentId, note);
     },
     onSuccess: (_data, { action }) => {
-      toast.success(`Incident ${action}d`);
+      toast.success(`Incident ${TRANSITION_ACTIONS[action].past}`);
       setReason("");
       refresh();
     },
@@ -182,9 +232,28 @@ export default function IncidentDetailPage() {
 
   const status = incident.status.toUpperCase();
   const isClosed = status === "CLOSED";
-  const isResolved = status === "RESOLVED";
-  const isNew = status === "NEW" || status === "OPEN";
-  const hasActions = !isClosed && (canAcknowledge || canResolve || canClose || canAssign);
+
+  /**
+   * An action is offered only when its destination is still ahead of the
+   * incident and the role may perform it. Investigate and Contain are gated on
+   * the acknowledge permission, matching the backend, which treats them as the
+   * same tier of analyst work rather than introducing a permission that would
+   * have to be mirrored here to stay in sync.
+   */
+  const permitted: Record<TransitionAction, boolean> = {
+    acknowledge: canAcknowledge,
+    investigate: canAcknowledge,
+    contain: canAcknowledge,
+    resolve: canResolve,
+    close: canClose,
+  };
+
+  const available = (Object.keys(TRANSITION_ACTIONS) as TransitionAction[]).filter(
+    (action) =>
+      permitted[action] && canAdvanceTo(status, TRANSITION_ACTIONS[action].target),
+  );
+
+  const hasActions = !isClosed && (available.length > 0 || canAssign);
 
   return (
     <>
@@ -326,35 +395,26 @@ export default function IncidentDetailPage() {
                 </Field>
 
                 <div className="flex flex-wrap gap-2">
-                  {canAcknowledge && isNew ? (
+                  {available.map((action, index) => (
                     <Button
-                      variant="primary"
+                      key={action}
+                      // The nearest state ahead is the expected next move.
+                      variant={index === 0 ? "primary" : "secondary"}
                       size="sm"
                       disabled={transition.isPending}
-                      onClick={() => transition.mutate({ action: "acknowledge" })}
+                      onClick={() => transition.mutate({ action })}
                     >
-                      Acknowledge
+                      {TRANSITION_ACTIONS[action].label}
                     </Button>
-                  ) : null}
-                  {canResolve && !isResolved ? (
-                    <Button
-                      size="sm"
-                      disabled={transition.isPending}
-                      onClick={() => transition.mutate({ action: "resolve" })}
-                    >
-                      Resolve
-                    </Button>
-                  ) : null}
-                  {canClose && isResolved ? (
-                    <Button
-                      size="sm"
-                      disabled={transition.isPending}
-                      onClick={() => transition.mutate({ action: "close" })}
-                    >
-                      Close
-                    </Button>
-                  ) : null}
+                  ))}
                 </div>
+
+                {available.length > 1 ? (
+                  <p className="text-[11px] leading-relaxed text-content-dim">
+                    Choosing a later state records every state in between. The activity log below
+                    shows the full path, not just the state you selected.
+                  </p>
+                ) : null}
 
                 {canAssign ? (
                   <div className="border-t border-line-subtle pt-3">

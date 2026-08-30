@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 import models
 from database import get_db
-from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission
+from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
 from services.audit_service import audit_service
 from utils.logger import logger
@@ -40,7 +40,7 @@ def get_zones(
     """Fetch all active geofence zones for the current tenant."""
     return db.query(models.GeofenceZone).filter(
         models.GeofenceZone.organization_id == tenant.organization_id,
-        models.GeofenceZone.is_active == True
+        models.GeofenceZone.is_active
     ).all()
 
 @router.post("/zones", response_model=GeofenceResponse)
@@ -71,7 +71,9 @@ def create_zone(
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating geofence zone: {e}")
-        raise HTTPException(status_code=400, detail="Failed to create geofence zone. Name may already exist.")
+        raise HTTPException(
+            status_code=400, detail="Failed to create geofence zone. Name may already exist."
+        ) from e
 
 @router.delete("/zones/{zone_id}")
 def delete_zone(

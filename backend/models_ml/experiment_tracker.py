@@ -1,7 +1,8 @@
-import os
 import json
+import os
 import subprocess
 from datetime import datetime
+
 from config import get_settings
 from utils.logger import logger
 
@@ -53,7 +54,7 @@ class ExperimentTracker:
             }
         }
         
-        with open(self.experiments_file, "r") as f:
+        with open(self.experiments_file) as f:
             try:
                 history = json.load(f)
             except json.JSONDecodeError:

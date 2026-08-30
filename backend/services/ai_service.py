@@ -1,11 +1,13 @@
-from typing import Any
-import time
-import pandas as pd
-from config import get_settings
-from utils.logger import logger
-from models_ml.registry import model_registry
-from models_ml.preprocess import FeatureEngineer
 import json
+import time
+from typing import Any
+
+import pandas as pd
+
+from config import get_settings
+from models_ml.preprocess import FeatureEngineer
+from models_ml.registry import model_registry
+from utils.logger import logger
 
 settings = get_settings()
 

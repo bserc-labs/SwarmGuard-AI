@@ -68,6 +68,12 @@ const threatsRoute = createRoute({
   component: lazyRouteComponent(() => import("./pages/ThreatsPage")),
 });
 
+const detectionRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/detection",
+  component: lazyRouteComponent(() => import("./pages/DetectionPage")),
+});
+
 const fleetRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/fleet",
@@ -84,6 +90,19 @@ const adminRoute = createRoute({
     }
   },
   component: lazyRouteComponent(() => import("./pages/AdminPage")),
+});
+
+// user.manage is held by admin alone, so unlike /admin and /settings this guard
+// is not the broader "elevated" check.
+const usersRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/users",
+  beforeLoad: () => {
+    if (getRole() !== "admin") {
+      throw redirect({ to: "/dashboard" });
+    }
+  },
+  component: lazyRouteComponent(() => import("./pages/UsersPage")),
 });
 
 const profileRoute = createRoute({
@@ -108,7 +127,7 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
-  layoutRoute.addChildren([dashboardRoute, telemetryRoute, incidentsRoute, incidentDetailRoute, threatsRoute, fleetRoute, adminRoute, profileRoute, settingsRoute]),
+  layoutRoute.addChildren([dashboardRoute, telemetryRoute, incidentsRoute, incidentDetailRoute, threatsRoute, detectionRoute, fleetRoute, adminRoute, usersRoute, profileRoute, settingsRoute]),
 ]);
 
 export const router = createRouter({ routeTree });

@@ -8,7 +8,7 @@ class ExplanationEngine:
     Generates operator-friendly explanations for cyber/RF attacks on the drone.
     Uses the knowledge base JSON files under backend/data/.
     """
-    def __init__(self, data_dir: str = None):
+    def __init__(self, data_dir: str | None = None):
         if data_dir is None:
             # Resolve 'backend/data/' relative to the utils folder
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,7 @@ class ExplanationEngine:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Knowledge base file for attack '{attack_type}' not found.")
             
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
             self.cache[attack_type] = data
             return data

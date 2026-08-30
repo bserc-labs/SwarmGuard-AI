@@ -1,10 +1,10 @@
 /**
  * Organization settings.
  *
- * These values are stored per organization by the backend. Two of them —
- * critical_threshold and high_threshold — are persisted but are not currently
- * read by any severity calculation server-side, so the page says that rather
- * than implying the sliders change detection behaviour.
+ * These values are stored per organization by the backend. The two severity
+ * thresholds are now read by the detection path — they were previously
+ * persisted and ignored — so the copy below describes what they actually do,
+ * including the one case where they do not apply.
  */
 
 import { useState } from "react";
@@ -134,6 +134,16 @@ export default function SettingsPage() {
     settingsQuery.data !== undefined &&
     JSON.stringify(edits) !== JSON.stringify(settingsQuery.data);
 
+  /**
+   * The same rule the backend enforces, checked here so the operator is not
+   * offered a Save that will come back 422. The server remains the authority —
+   * this only avoids a pointless round trip.
+   */
+  const bandsValid =
+    draft.high_threshold > 0 &&
+    draft.critical_threshold <= 1 &&
+    draft.high_threshold < draft.critical_threshold;
+
   const update = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) =>
     setEdits({ ...draft, [key]: value });
 
@@ -156,7 +166,7 @@ export default function SettingsPage() {
               <Button
                 size="sm"
                 variant="primary"
-                disabled={!dirty || save.isPending}
+                disabled={!dirty || !bandsValid || save.isPending}
                 loading={save.isPending}
                 onClick={() => save.mutate(draft)}
               >
@@ -216,18 +226,20 @@ export default function SettingsPage() {
             </Field>
 
             {draft.high_threshold >= draft.critical_threshold ? (
-              <p className="text-[12px] text-warning">
-                The high threshold is not below the critical threshold, so no incident can fall into
-                the high band.
+              <p role="alert" className="text-[12px] text-warning">
+                The high threshold must be below the critical threshold, otherwise no incident can
+                fall into the high band. The server will reject this.
               </p>
             ) : null}
 
             <p className="flex items-start gap-2 rounded-control border border-line bg-surface-overlay px-2.5 py-2 text-[11px] leading-relaxed text-content-muted">
               <Icon name="info" size={13} className="mt-0.5 shrink-0 text-content-dim" />
               <span>
-                These values are saved, but the backend currently derives severity from fixed
-                thresholds in code rather than reading them. Changing them will not alter how
-                incidents are classified until that is wired up.
+                These bands apply to <strong>new</strong> detections for this organization.
+                Incidents already recorded keep the severity they were given, so changing a
+                threshold never rewrites history. A detector that determines its own severity — a
+                physical-plausibility violation, or a breach of a zone you marked critical — sets a
+                floor these thresholds can raise but not lower.
               </span>
             </p>
           </PanelBody>

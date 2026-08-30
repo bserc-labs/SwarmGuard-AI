@@ -88,7 +88,7 @@ async def periodic_heartbeat_check():
             # Broadcast on the main event loop, which owns the sockets. The
             # detection itself runs in a worker thread; the delivery must not.
             for organization_id, payload in alerts:
-                await ws_manager.broadcast(payload, organization_id)
+                await ws_manager.broadcast_secure(payload, organization_id)
         except Exception as e:
             logger.error(f"Error in periodic heartbeat loop: {e}")
 
@@ -116,8 +116,12 @@ async def periodic_database_cleanup():
 async def startup_event():
     logger.info("Initializing SwarmGuard AI Backend...")
     # Alembic handles migrations and hypertable initialization in production.
-    asyncio.create_task(periodic_heartbeat_check())
-    asyncio.create_task(periodic_database_cleanup())
+    # Hold references: a bare create_task() result can be garbage-collected
+    # while the coroutine is still running.
+    app.state.background_tasks = [
+        asyncio.create_task(periodic_heartbeat_check()),
+        asyncio.create_task(periodic_database_cleanup()),
+    ]
     
     # Start MAVLink receiver
     from services.mavlink_receiver import mavlink_receiver
@@ -150,18 +154,37 @@ def health_check():
     return {"status": "ok", "service": "SentinelAI"}
 
 from database import get_db
-from middleware.auth_middleware import get_operator_user
+from middleware.auth_middleware import TenantContext, get_tenant_context
 
 
 @app.get("/system/health")
-def system_health_details(db: Session = Depends(get_db), current_user: models.User = Depends(get_operator_user)):
-    """Return real system health, active node counts, and telemetry statistics for defense dashboard gauges."""
+def system_health_details(
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
+):
+    """Fleet and incident counters for the dashboard gauges, scoped to one tenant.
+
+    Every count here was previously unfiltered -- `db.query(Drone).count()` over
+    the whole table -- while the route was gated only on role. An operator saw
+    every other organization's fleet size, incident total and critical count on
+    the first screen after signing in, and the derived health percentage was
+    dragged down by incidents belonging to tenants they cannot see.
+
+    The dependency is `get_tenant_context` rather than the previous
+    `get_operator_user`: it admits the same five roles, since every role that
+    could reach this route already holds an organization, but it yields the
+    organization to scope by instead of just a role check.
+    """
     try:
-        total_drones = db.query(models.Drone).count()
-        active_drones = db.query(models.Drone).filter(models.Drone.status == "ACTIVE").count()
-        silent_drones = db.query(models.Drone).filter(models.Drone.status == "SILENT_POSSIBLE_JAMMING").count()
-        total_incidents = db.query(models.Incident).count()
-        critical_incidents = db.query(models.Incident).filter(models.Incident.severity == "CRITICAL").count()
+        org = tenant.organization_id
+        drones = db.query(models.Drone).filter(models.Drone.organization_id == org)
+        incidents = db.query(models.Incident).filter(models.Incident.organization_id == org)
+
+        total_drones = drones.count()
+        active_drones = drones.filter(models.Drone.status == "ACTIVE").count()
+        silent_drones = drones.filter(models.Drone.status == "SILENT_POSSIBLE_JAMMING").count()
+        total_incidents = incidents.count()
+        critical_incidents = incidents.filter(models.Incident.severity == "CRITICAL").count()
         
         # Calculate dynamic system health score
         system_health_pct = 100

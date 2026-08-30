@@ -28,6 +28,7 @@ import {
   Th,
 } from "@/components/ui/primitives";
 import {
+  canAdvanceTo,
   CLOSED_STATUSES,
   incidentStatusTone,
   severityTone,
@@ -368,6 +369,18 @@ export default function IncidentsPage() {
   );
 }
 
+/**
+ * Row actions.
+ *
+ * Each button is shown only when its destination state is still ahead of the
+ * incident. Previously Resolve appeared whenever the incident was not already
+ * resolved — including NEW and ACKNOWLEDGED — and the backend refused every one
+ * of those, so the button failed from every state it was reachable in.
+ *
+ * The queue offers the two ends of the workflow; the intermediate states
+ * (Investigate, Contain) live on the detail page, where an analyst working a
+ * single incident has room for them.
+ */
 function IncidentActions({
   incident,
   canAcknowledge,
@@ -384,27 +397,24 @@ function IncidentActions({
   onAction: (action: "acknowledge" | "resolve" | "close") => void;
 }) {
   const status = incident.status.toUpperCase();
-  const isNew = status === "NEW" || status === "OPEN";
-  const isClosed = status === "CLOSED";
-  const isResolved = status === "RESOLVED";
 
-  if (isClosed) {
+  if (status === "CLOSED") {
     return <span className="text-[12px] text-content-dim">Closed</span>;
   }
 
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
-      {canAcknowledge && isNew ? (
+      {canAcknowledge && canAdvanceTo(status, "ACKNOWLEDGED") ? (
         <Button size="sm" disabled={pending} onClick={() => onAction("acknowledge")}>
           Acknowledge
         </Button>
       ) : null}
-      {canResolve && !isResolved ? (
+      {canResolve && canAdvanceTo(status, "RESOLVED") ? (
         <Button size="sm" disabled={pending} onClick={() => onAction("resolve")}>
           Resolve
         </Button>
       ) : null}
-      {canClose && isResolved ? (
+      {canClose && canAdvanceTo(status, "CLOSED") ? (
         <Button size="sm" disabled={pending} onClick={() => onAction("close")}>
           Close
         </Button>

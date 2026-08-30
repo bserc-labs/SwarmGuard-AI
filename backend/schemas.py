@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Mirrors the keys of middleware.rbac.ROLE_PERMISSIONS. A free-form string here
 # meant a typo produced a user with an empty permission set and no error at all.
@@ -43,7 +43,7 @@ class PasswordUpdate(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 — OAuth2 token type, not a credential
     role: str
 
 
@@ -204,9 +204,40 @@ class SystemSettingsOut(BaseModel):
 
 
 class SystemSettingsUpdate(BaseModel):
-    critical_threshold: float | None = None
-    high_threshold: float | None = None
-    refresh_rate: str | None = None
+    """Partial update. Every field is optional; only what is sent is applied.
+
+    The two thresholds are fractions of a 0-100 threat score, matching what the
+    Settings screen's inputs accept (min 0, max 1, step 0.01). They are bounded
+    here as well: the console is a convenience, not the authority, and a value
+    outside this range would silently disable a severity band for the whole
+    organization.
+    """
+
+    critical_threshold: float | None = Field(None, gt=0.0, le=1.0)
+    high_threshold: float | None = Field(None, gt=0.0, le=1.0)
+    refresh_rate: str | None = Field(None, pattern=r"^(1s|5s|10s|30s)$")
     ui_sound: bool | None = None
     push_notif: bool | None = None
     webhooks: bool | None = None
+
+
+class SystemSettingsOrdering(BaseModel):
+    """The band ordering, checked against the values a partial update produces.
+
+    Validating the two thresholds independently is not enough: sending only
+    `high_threshold=0.9` against a stored critical of 0.85 leaves the bands
+    inverted, and nothing could then be classified HIGH. The router merges the
+    update onto the stored row and validates the result through this model.
+    """
+
+    critical_threshold: float = Field(..., gt=0.0, le=1.0)
+    high_threshold: float = Field(..., gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _high_below_critical(self) -> "SystemSettingsOrdering":
+        if self.high_threshold >= self.critical_threshold:
+            raise ValueError(
+                "high_threshold must be below critical_threshold, otherwise no "
+                "incident can fall into the high band."
+            )
+        return self

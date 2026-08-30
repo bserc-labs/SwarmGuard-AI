@@ -116,13 +116,29 @@ export interface TelemetryRecord extends TelemetryPacket {
 
 /**
  * Feature attribution entry. The backend types shap_values as list[dict] and
- * two producers disagree on the magnitude key, so both are optional and the
- * reader picks whichever is present.
+ * three producers disagree on the magnitude key, so all are optional and
+ * `attributionMagnitude()` picks whichever is present.
+ *
+ *   kinematic_guard   feature, shap_value, magnitude, observed, threshold, unit
+ *   explainability    feature, shap_value, magnitude
+ *   heartbeat / ws    feature, importance
+ *
+ * The trailing three fields are unique to Tier 1: because the guard is
+ * deterministic, it can report the number it measured and the limit it crossed,
+ * which SHAP over a learned model cannot.
  */
 export interface FeatureAttribution {
   feature?: string;
   importance?: number;
+  magnitude?: number;
+  shap_value?: number;
   value?: number;
+  /** Measured value that tripped the check. Tier 1 only. */
+  observed?: number;
+  /** Limit it was measured against. Tier 1 only. */
+  threshold?: number;
+  /** Unit for observed and threshold, e.g. "m/s". Tier 1 only. */
+  unit?: string;
 }
 
 export interface ExplanationSummary {
@@ -274,6 +290,77 @@ export interface GeofenceZone {
   organization_id?: number | null;
 }
 
+/** One physical check the kinematic guard performs. GET /ai/detection/status. */
+export interface GuardCheck {
+  check: string;
+  unit: string;
+  threshold: number;
+  description: string;
+  lower_is_worse?: boolean;
+}
+
+/**
+ * Measured performance of the ML tier. Every field is nullable because the
+ * evaluation record is read from the model artifact directory and may be absent
+ * — in which case the console must say so rather than show a zero.
+ */
+export interface TierValidation {
+  protocol: string;
+  precision?: number | null;
+  recall?: number | null;
+  f1_score?: number | null;
+  false_positive_rate?: number | null;
+  n_folds?: number | null;
+  mean_flight_accuracy?: number | null;
+}
+
+/** One attempt at fixing the ML tier, and what it measured. */
+export interface Intervention {
+  id: string;
+  name: string;
+  description?: string;
+  lofo?: {
+    f1_score?: number | null;
+    precision?: number | null;
+    recall?: number | null;
+    false_positive_rate?: number | null;
+  };
+  verdict: string;
+  reason: string;
+}
+
+export interface Investigations {
+  task?: string;
+  trivial_baselines?: {
+    note?: string;
+    always_say_attack?: { f1_score?: number | null };
+  };
+  interventions?: Intervention[];
+  root_cause?: { finding?: string; evidence?: string[]; implication?: string };
+  decision?: { tier_2_enabled?: boolean; statement?: string };
+}
+
+export interface DetectionTier {
+  tier: number;
+  name: string;
+  detector: string;
+  method: string;
+  enabled: boolean;
+  raises_incidents: boolean;
+  deterministic: boolean;
+  requires_training_data: boolean;
+  /** Tier 1 only. */
+  checks?: GuardCheck[];
+  /** Tier 2 only. */
+  model_version?: string;
+  artifact_status?: string;
+  feature_list?: string[];
+  validation?: TierValidation;
+  contrast?: { protocol: string; f1_score?: number | null; caveat?: string | null };
+  investigations?: Investigations;
+  disabled_reason?: string | null;
+}
+
 export interface GeofenceCreate {
   name: string;
   zone_type: string;
@@ -319,6 +406,14 @@ export const api = {
     packets_processed: number;
   }> => request("/telemetry/health/status"),
 
+  /**
+   * GET /ai/detection/status — which tiers are live, their thresholds, and the
+   * ML tier's measured performance. Requires ai.explain, so observers cannot
+   * read the guard thresholds.
+   */
+  getDetectionStatus: (): Promise<{ tiers: DetectionTier[] }> =>
+    request("/ai/detection/status"),
+
   /* --- telemetry ------------------------------------------------------- */
 
   /** GET /telemetry/latest — newest packet per drone for this organization. */
@@ -359,8 +454,19 @@ export const api = {
 
   getIncident: (id: number): Promise<Incident> => request(`/incidents/${id}`),
 
+  /**
+   * Lifecycle transitions. Each names a destination; the backend walks any
+   * intermediate states and writes an audit row per hop, so the stored history
+   * is a complete path even when the operator clicked one button.
+   */
   acknowledgeIncident: (id: number, reason?: string): Promise<Incident> =>
     request(`/incidents/${id}/acknowledge`, jsonBody("POST", { reason })),
+
+  investigateIncident: (id: number, reason?: string): Promise<Incident> =>
+    request(`/incidents/${id}/investigate`, jsonBody("POST", { reason })),
+
+  containIncident: (id: number, reason?: string): Promise<Incident> =>
+    request(`/incidents/${id}/contain`, jsonBody("POST", { reason })),
 
   assignIncident: (id: number, username: string): Promise<Incident> =>
     request(`/incidents/${id}/assign`, jsonBody("POST", { username })),

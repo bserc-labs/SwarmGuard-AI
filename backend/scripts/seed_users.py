@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bootstrap import main  # noqa: E402
+from bootstrap import main
 
 if __name__ == "__main__":
     if not os.getenv("ADMIN_USERNAME") or not os.getenv("ADMIN_PASSWORD"):

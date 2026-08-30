@@ -1,13 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends
-from typing import List
-from pydantic import BaseModel
-import shap
 
-from services.explanation_service import explanation_service
-from services.ai_service import ai_service
+import shap
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from config import get_settings
 from middleware.auth_middleware import require_permission
 from middleware.rbac import Permissions
-from config import get_settings
+from services.ai_service import ai_service
+from services.explanation_service import explanation_service
 
 # See routers/ai.py — the same router-level guard applies here.
 router = APIRouter(
@@ -31,7 +31,7 @@ class TelemetryPayload(BaseModel):
     timestamp: str
 
 class ExplanationRequest(BaseModel):
-    telemetry_history: List[TelemetryPayload]
+    telemetry_history: list[TelemetryPayload]
 
 @router.post("/explain")
 async def explain_anomaly(request: ExplanationRequest):

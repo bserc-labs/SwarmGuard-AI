@@ -1,34 +1,75 @@
+import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from datetime import datetime
 
 import models
 import schemas
+from config import get_settings
 from database import get_db
-from middleware.auth_middleware import get_tenant_context, TenantContext, require_permission
+from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
 from services.audit_service import audit_service
 
+settings = get_settings()
+
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
-# Valid state transitions
+# The incident lifecycle, in order.
+#
+# The rule this enforces is that an incident's recorded history is a *contiguous
+# walk* through this list -- no state is ever skipped in the audit trail. That is
+# not the same as requiring an operator to click through every state, and
+# conflating the two is what broke the console: the UI exposes acknowledge,
+# resolve and close, there was never a route to reach INVESTIGATING or
+# CONTAINED, and so `resolve` on an ACKNOWLEDGED incident returned 400 every
+# single time. The Resolve button could not succeed from any reachable state.
+#
+# So a transition request names a *destination*, and `_advance_to` walks every
+# intermediate state, writing an audit row for each hop. The record stays
+# complete; the operator gets one button.
+LIFECYCLE = [
+    "NEW",
+    "OPEN",
+    "ACKNOWLEDGED",
+    "INVESTIGATING",
+    "CONTAINED",
+    "RESOLVED",
+    "CLOSED",
+]
+
+_ORDER = {status: index for index, status in enumerate(LIFECYCLE)}
+
+# Direct successors. Retained because it states the adjacency rule declaratively,
+# and because the walk below is only correct if each step is a legal single hop.
 TRANSITIONS = {
-    "NEW": ["OPEN"],
-    "OPEN": ["ACKNOWLEDGED"],
-    "ACKNOWLEDGED": ["INVESTIGATING"],
-    "INVESTIGATING": ["CONTAINED"],
-    "CONTAINED": ["RESOLVED"],
-    "RESOLVED": ["CLOSED"]
+    status: [LIFECYCLE[index + 1]] for index, status in enumerate(LIFECYCLE[:-1])
 }
+
 
 def _validate_transition(current_status: str, new_status: str):
     allowed = TRANSITIONS.get(current_status, [])
     if new_status not in allowed:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Invalid transition from {current_status} to {new_status}. Allowed: {allowed}"
         )
+
+
+def _load_incident(db: Session, incident_id: int, tenant: TenantContext) -> models.Incident:
+    """Fetch one incident within the caller's organization, or 404.
+
+    Tenant-scoped in the query rather than checked afterwards, so a caller
+    cannot distinguish "does not exist" from "belongs to another organization".
+    """
+    incident = db.query(models.Incident).filter(
+        models.Incident.id == incident_id,
+        models.Incident.organization_id == tenant.organization_id
+    ).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return incident
 
 @router.get("/", response_model=list[schemas.IncidentOut])
 def get_incidents(
@@ -79,9 +120,9 @@ def get_incident_stats(
         return {"total": 0}
         
     severity_dist = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    status_dist = {}
-    attack_type_dist = {}
-    drone_dist = {}
+    status_dist: dict[str, int] = {}
+    attack_type_dist: dict[str, int] = {}
+    drone_dist: dict[str, int] = {}
     
     # Timing metrics
     res_times = []
@@ -113,23 +154,30 @@ def get_incident(
     db: Session = Depends(get_db),
     tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_READ))
 ):
-    incident = db.query(models.Incident).filter(
-        models.Incident.id == id,
-        models.Incident.organization_id == tenant.organization_id
-    ).first()
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return incident
+    return _load_incident(db, id, tenant)
 
 
-def _transition_incident(db: Session, incident: models.Incident, new_status: str, tenant: TenantContext, ip: str, reason: str = None):
+def _apply_transition(
+    db: Session,
+    incident: models.Incident,
+    new_status: str,
+    tenant: TenantContext,
+    ip: str | None,
+    reason: str | None = None,
+    correlation_id: str | None = None,
+):
+    """Move one legal step and record it. Does not commit.
+
+    Committing is the caller's job because a single operator action can span
+    several steps, and a partially-walked lifecycle must never reach the table.
+    """
     _validate_transition(incident.status, new_status)
     old_status = incident.status
     incident.status = new_status
-    
+
     if new_status == "RESOLVED":
         incident.resolution_time = datetime.utcnow()
-        
+
     audit_service.log_from_context(
         db=db,
         tenant=tenant,
@@ -139,37 +187,122 @@ def _transition_incident(db: Session, incident: models.Incident, new_status: str
         previous_state=old_status,
         new_state=new_status,
         reason=reason,
-        ip_address=ip
+        ip_address=ip,
+        correlation_id=correlation_id,
     )
+    return incident
+
+
+def _advance_to(
+    db: Session,
+    incident: models.Incident,
+    target: str,
+    tenant: TenantContext,
+    ip: str | None,
+    reason: str | None = None,
+):
+    """Walk the lifecycle forward to `target`, auditing every state entered.
+
+    The operator's note is attached to the hop they actually asked for. The
+    intermediate hops are labelled as automatic, so reading the audit trail
+    still tells you which state the human chose and which the system passed
+    through on the way -- information a single skipping transition would lose.
+
+    Backwards moves are refused rather than silently ignored: reopening a
+    resolved incident is a different action with different authorisation, not a
+    transition.
+    """
+    if target not in _ORDER:
+        raise HTTPException(status_code=400, detail=f"Unknown incident status '{target}'.")
+
+    current = incident.status
+    if current not in _ORDER:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Incident #{incident.id} is in unrecognised state '{current}'.",
+        )
+
+    start, end = _ORDER[current], _ORDER[target]
+
+    if start == end:
+        raise HTTPException(
+            status_code=400, detail=f"Incident #{incident.id} is already {target}."
+        )
+    if start > end:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Incident #{incident.id} is {current}, which is past {target}. "
+                "The lifecycle does not move backwards."
+            ),
+        )
+
+    # One operator action, one correlation id. Without it each hop gets its own
+    # uuid and the audit trail shows five unrelated transitions rather than one
+    # decision that passed through five states.
+    correlation_id = str(uuid.uuid4())
+
+    for index in range(start + 1, end + 1):
+        step = LIFECYCLE[index]
+        _apply_transition(
+            db,
+            incident,
+            step,
+            tenant,
+            ip,
+            reason if index == end else f"Auto-advanced en route to {target}",
+            correlation_id=correlation_id,
+        )
+
     db.commit()
     db.refresh(incident)
     return incident
 
 
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
 @router.post("/{id}/acknowledge", response_model=schemas.IncidentOut)
-def acknowledge_incident(id: int, request: Request, transition: schemas.IncidentTransition = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_ACKNOWLEDGE))):
-    incident = db.query(models.Incident).filter(
-        models.Incident.id == id,
-        models.Incident.organization_id == tenant.organization_id
-    ).first()
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    # Quick jump logic (NEW -> OPEN -> ACKNOWLEDGED) to simplify UI flows if needed, but strict logic requires sequence.
-    # To satisfy strict sequence, UI must send the proper requests, but here we enforce it purely.
-    if incident.status == "NEW":
-        _transition_incident(db, incident, "OPEN", tenant, request.client.host if request.client else None, "Auto-opened for ack")
-    return _transition_incident(db, incident, "ACKNOWLEDGED", tenant, request.client.host if request.client else None, transition.reason if transition else None)
+def acknowledge_incident(id: int, request: Request, transition: schemas.IncidentTransition | None = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_ACKNOWLEDGE))):
+    """Take ownership of an incident. From NEW this passes through OPEN."""
+    incident = _load_incident(db, id, tenant)
+    return _advance_to(
+        db, incident, "ACKNOWLEDGED", tenant, _client_ip(request),
+        transition.reason if transition else None,
+    )
+
+
+# INVESTIGATING and CONTAINED had no route at all, which is why `resolve` was
+# unreachable: the lifecycle requires passing through them and nothing could.
+# They are gated on INCIDENT_ACKNOWLEDGE rather than a new permission, because
+# they are the same tier of work as acknowledging -- an analyst triaging an
+# incident -- and adding a permission would have to be mirrored in
+# frontend/src/lib/rbac.ts to stay in sync.
+@router.post("/{id}/investigate", response_model=schemas.IncidentOut)
+def investigate_incident(id: int, request: Request, transition: schemas.IncidentTransition | None = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_ACKNOWLEDGE))):
+    """Mark an incident as under active investigation."""
+    incident = _load_incident(db, id, tenant)
+    return _advance_to(
+        db, incident, "INVESTIGATING", tenant, _client_ip(request),
+        transition.reason if transition else None,
+    )
+
+
+@router.post("/{id}/contain", response_model=schemas.IncidentOut)
+def contain_incident(id: int, request: Request, transition: schemas.IncidentTransition | None = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_ACKNOWLEDGE))):
+    """Record that the threat has been contained but not yet resolved."""
+    incident = _load_incident(db, id, tenant)
+    return _advance_to(
+        db, incident, "CONTAINED", tenant, _client_ip(request),
+        transition.reason if transition else None,
+    )
 
 
 @router.post("/{id}/assign", response_model=schemas.IncidentOut)
 def assign_incident(id: int, request: Request, payload: schemas.IncidentAssign, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_ASSIGN))):
-    incident = db.query(models.Incident).filter(
-        models.Incident.id == id,
-        models.Incident.organization_id == tenant.organization_id
-    ).first()
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-        
+    incident = _load_incident(db, id, tenant)
+
     old_analyst = incident.assigned_analyst
     incident.assigned_analyst = payload.username
     
@@ -190,24 +323,23 @@ def assign_incident(id: int, request: Request, payload: schemas.IncidentAssign, 
 
 
 @router.post("/{id}/resolve", response_model=schemas.IncidentOut)
-def resolve_incident(id: int, request: Request, transition: schemas.IncidentTransition = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_RESOLVE))):
-    incident = db.query(models.Incident).filter(
-        models.Incident.id == id,
-        models.Incident.organization_id == tenant.organization_id
-    ).first()
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return _transition_incident(db, incident, "RESOLVED", tenant, request.client.host if request.client else None, transition.reason if transition else None)
+def resolve_incident(id: int, request: Request, transition: schemas.IncidentTransition | None = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_RESOLVE))):
+    """Resolve an incident, recording every lifecycle state it passes through."""
+    incident = _load_incident(db, id, tenant)
+    return _advance_to(
+        db, incident, "RESOLVED", tenant, _client_ip(request),
+        transition.reason if transition else None,
+    )
+
 
 @router.post("/{id}/close", response_model=schemas.IncidentOut)
-def close_incident(id: int, request: Request, transition: schemas.IncidentTransition = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_CLOSE))):
-    incident = db.query(models.Incident).filter(
-        models.Incident.id == id,
-        models.Incident.organization_id == tenant.organization_id
-    ).first()
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return _transition_incident(db, incident, "CLOSED", tenant, request.client.host if request.client else None, transition.reason if transition else None)
+def close_incident(id: int, request: Request, transition: schemas.IncidentTransition | None = None, db: Session = Depends(get_db), tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_CLOSE))):
+    """Close an incident. From anything earlier this resolves it on the way."""
+    incident = _load_incident(db, id, tenant)
+    return _advance_to(
+        db, incident, "CLOSED", tenant, _client_ip(request),
+        transition.reason if transition else None,
+    )
 
 
 @router.get("/audit/logs", response_model=list[schemas.AuditLogOut])

@@ -1,12 +1,12 @@
 from datetime import datetime
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 import models
 import schemas
 from utils.logger import logger
-from services.ws_manager import ws_manager
+
 
 class TelemetryService:
     def process_telemetry(self, packet: schemas.TelemetryPacket, db: Session, *, organization_id: int | None = None) -> dict:
@@ -45,7 +45,7 @@ class TelemetryService:
         except SQLAlchemyError as e:
             db.rollback()
             logger.error(f"Database insertion failed for telemetry: {e}")
-            raise ValueError("Database transaction failed")
+            raise ValueError("Database transaction failed") from e
 
         return packet.model_dump()
 

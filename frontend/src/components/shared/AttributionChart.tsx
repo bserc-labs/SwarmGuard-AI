@@ -25,6 +25,10 @@ interface Row {
   feature: string;
   magnitude: number;
   share: number;
+  /** Tier 1 only: the measured value, the limit, and their unit. */
+  observed?: number;
+  threshold?: number;
+  unit?: string;
 }
 
 function buildRows(incident: Incident): Row[] {
@@ -34,9 +38,15 @@ function buildRows(incident: Incident): Row[] {
     .map((entry) => {
       const magnitude = attributionMagnitude(entry);
       if (!entry.feature || magnitude === null || !Number.isFinite(magnitude)) return null;
-      return { feature: entry.feature, magnitude: Math.abs(magnitude) };
+      return {
+        feature: entry.feature,
+        magnitude: Math.abs(magnitude),
+        observed: entry.observed,
+        threshold: entry.threshold,
+        unit: entry.unit,
+      };
     })
-    .filter((e): e is { feature: string; magnitude: number } => e !== null);
+    .filter((e): e is NonNullable<typeof e> => e !== null);
 
   if (usable.length === 0) return [];
 
@@ -44,13 +54,23 @@ function buildRows(incident: Incident): Row[] {
   if (total <= 0) return [];
 
   return usable
-    .map((e) => ({
-      feature: e.feature,
-      magnitude: e.magnitude,
-      share: (e.magnitude / total) * 100,
-    }))
+    .map((e) => ({ ...e, share: (e.magnitude / total) * 100 }))
     .sort((a, b) => b.share - a.share)
     .slice(0, 8);
+}
+
+/**
+ * "3,706 / 25 m/s" — the number measured against the limit it crossed.
+ *
+ * Only Tier 1 can populate this. A deterministic check knows what it compared;
+ * a SHAP attribution over a learned model does not, so those rows show a share
+ * alone rather than an invented figure.
+ */
+function evidence(row: Row): string | null {
+  if (row.observed === undefined || row.threshold === undefined) return null;
+  const fmt = (v: number) =>
+    Math.abs(v) >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1);
+  return `${fmt(row.observed)} / ${fmt(row.threshold)}${row.unit ? ` ${row.unit}` : ""}`;
 }
 
 export function AttributionChart({ incident }: { incident: Incident }) {
@@ -158,16 +178,36 @@ export function AttributionChart({ incident }: { incident: Incident }) {
 
             {/* The numbers, because a chart alone is not an audit record. */}
             <ul className="mt-2 flex flex-col gap-1">
-              {rows.map((row) => (
-                <li
-                  key={row.feature}
-                  className="flex items-baseline justify-between gap-3 text-[12px]"
-                >
-                  <span className="truncate text-content-muted">{humanizeEnum(row.feature)}</span>
-                  <Mono className="shrink-0 text-content">{row.share.toFixed(1)}%</Mono>
-                </li>
-              ))}
+              {rows.map((row) => {
+                const measured = evidence(row);
+                return (
+                  <li
+                    key={row.feature}
+                    className="flex items-baseline justify-between gap-3 text-[12px]"
+                  >
+                    <span className="truncate text-content-muted">{humanizeEnum(row.feature)}</span>
+                    <span className="flex shrink-0 items-baseline gap-2.5">
+                      {measured ? (
+                        <Mono
+                          className="text-content-dim"
+                          title="Observed value / threshold it crossed"
+                        >
+                          {measured}
+                        </Mono>
+                      ) : null}
+                      <Mono className="text-content">{row.share.toFixed(1)}%</Mono>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
+
+            {rows.some((r) => evidence(r) !== null) ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-content-dim">
+                Paired figures are the observed value against the threshold it crossed. They come
+                from a deterministic check, so the arithmetic can be verified by hand.
+              </p>
+            ) : null}
           </>
         )}
       </section>

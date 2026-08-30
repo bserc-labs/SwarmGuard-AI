@@ -1,12 +1,13 @@
-from fastapi import Depends, HTTPException, Request, status
+from dataclasses import dataclass
+
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from dataclasses import dataclass
 
 import models
 from database import get_db
+from middleware.rbac import has_permission
 from services.auth_service import decode_access_token
-from middleware.rbac import has_permission, Permissions
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -37,7 +38,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if payload is None:
         raise credentials_exception
 
-    username: str = payload.get("sub")
+    username = payload.get("sub")
     if username is None:
         raise credentials_exception
 

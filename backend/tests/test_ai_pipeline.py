@@ -6,9 +6,9 @@ import pytest
 
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
 
+from experimental.sensor_fusion import sensor_fusion_engine
+from experimental.threat_service import threat_service
 from services.ai_service import ai_service
-from services.sensor_fusion import sensor_fusion_engine
-from services.threat_service import threat_service
 
 
 @pytest.mark.skip(reason="AI models are out of scope for Sprint 1")
@@ -29,7 +29,7 @@ def test_normal_telemetry_inference():
         "battery": 85.0,
         "packet_sequence": 150
     }
-    is_anomaly, anomaly_score, attack_type = ai_service.analyze_telemetry(normal_telemetry)
+    is_anomaly, anomaly_score, _attack_type = ai_service.analyze_telemetry(normal_telemetry)
     assert isinstance(is_anomaly, bool)
     assert 0.0 <= anomaly_score <= 1.0
 

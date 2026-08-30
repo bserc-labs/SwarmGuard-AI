@@ -8,13 +8,72 @@ These tests validate:
 - Auth token validation
 - IDOR prevention
 """
-import requests
 import json
+import os
 import sys
 import time
 
-BASE_URL = "http://localhost:8000"
+import pytest
+import requests
+
+BASE_URL = os.getenv("SWARMGUARD_API", "http://localhost:8000")
 RESULTS = {"passed": 0, "failed": 0, "errors": []}
+
+# This module is an integration script, not a unit suite: it drives a running
+# server over HTTP and needs a real administrator to provision its fixtures.
+# Credentials come from the environment. They were hardcoded as
+# admin/admin123 -- which fails on any deployment with a real ADMIN_PASSWORD,
+# and then failed *badly*: get_token returned None, the unauthenticated
+# /drones call returned an error object, and `drones[0]` raised KeyError: 0
+# instead of reporting that authentication had failed.
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+# Fixture accounts this module creates. Passwords must clear
+# schemas.MIN_PASSWORD_LENGTH or the create-user route rejects them with a 422.
+OBSERVER_USERNAME = "sprint7_observer"
+OBSERVER_PASSWORD = "sprint7-observer-pw"
+ANALYST_USERNAME = "sprint7_analyst"
+ANALYST_PASSWORD = "sprint7-analyst-pw"
+COMMANDER_USERNAME = "sprint7_commander"
+COMMANDER_PASSWORD = "sprint7-commander-pw"
+
+
+def requires_live_server():
+    """Skip rather than fail when there is no server or no admin to drive it.
+
+    A skipped integration test reports honestly that it did not run. A crashing
+    one reports a defect that does not exist, which is worse: it trains everyone
+    reading CI to ignore this file.
+    """
+    if not ADMIN_PASSWORD:
+        pytest.skip("ADMIN_PASSWORD is not set; cannot provision integration fixtures")
+    try:
+        health = requests.get(f"{BASE_URL}/health", timeout=3)
+    except requests.RequestException as exc:
+        pytest.skip(f"No server reachable at {BASE_URL}: {exc}")
+    if health.status_code != 200:
+        pytest.skip(f"Server at {BASE_URL} is not healthy (HTTP {health.status_code})")
+
+    res = requests.post(
+        f"{BASE_URL}/auth/login",
+        data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+        timeout=10,
+    )
+    if res.status_code == 429:
+        # /auth/login allows 5 per minute. test_rate_limiting deliberately
+        # exhausts it, so a later suite in the same minute cannot log in. Say
+        # that, rather than blaming the credentials.
+        pytest.skip(
+            "Login is rate-limited right now (HTTP 429). The limit is 5/minute "
+            "and test_rate_limiting exhausts it deliberately; re-run in a minute."
+        )
+    if res.status_code != 200:
+        pytest.skip(
+            f"Could not authenticate as '{ADMIN_USERNAME}' (HTTP {res.status_code}). "
+            "Set ADMIN_USERNAME and ADMIN_PASSWORD to match the running backend."
+        )
+    return res.json()["access_token"]
 
 
 def log_result(test_name: str, passed: bool, detail: str = ""):
@@ -40,38 +99,39 @@ def headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+FIXTURE_USERS = [
+    (OBSERVER_USERNAME, OBSERVER_PASSWORD, "observer"),
+    (ANALYST_USERNAME, ANALYST_PASSWORD, "analyst"),
+    (COMMANDER_USERNAME, COMMANDER_PASSWORD, "commander"),
+]
+
+
 def setup_test_organizations():
-    """Create two orgs and users for isolation testing."""
-    admin_token = get_token("admin", "admin123")
-    if not admin_token:
-        print("FATAL: Cannot authenticate as admin. Aborting.")
-        sys.exit(1)
+    """Provision the role fixtures these suites drive, and return an admin token.
+
+    Idempotent: a 400 from the create-user route means the account already
+    exists from an earlier run, which is success for our purposes. It used to
+    sys.exit(1) on an auth failure, which killed the whole pytest process rather
+    than failing one test.
+    """
+    admin_token = requires_live_server()
     h = headers(admin_token)
 
-    # Create Org B user (we'll create via the users endpoint)
-    # First, create org B in DB directly via a helper endpoint or SQL
-    # For now, we'll create a second user in the same org and test RBAC
-    
-    # Create an observer user
-    res = requests.post(f"{BASE_URL}/users/", json={
-        "username": "observer_user",
-        "password": "observer123",
-        "role": "observer"
-    }, headers=h)
-    
-    # Create an analyst user
-    res2 = requests.post(f"{BASE_URL}/users/", json={
-        "username": "analyst_user", 
-        "password": "analyst123",
-        "role": "analyst"
-    }, headers=h)
-
-    # Create a commander user
-    res3 = requests.post(f"{BASE_URL}/users/", json={
-        "username": "commander_user",
-        "password": "commander123",
-        "role": "commander"
-    }, headers=h)
+    for username, password, role in FIXTURE_USERS:
+        res = requests.post(
+            f"{BASE_URL}/users/",
+            json={"username": username, "password": password, "role": role},
+            headers=h,
+            timeout=10,
+        )
+        # 201 created, 400/409 already present. Anything else means the fixture
+        # cannot be established and the suite should say so rather than proceed
+        # with a None token and fail somewhere confusing.
+        if res.status_code not in (201, 400, 409):
+            pytest.skip(
+                f"Could not provision fixture user '{username}': "
+                f"HTTP {res.status_code} {res.text[:200]}"
+            )
 
     return admin_token
 
@@ -83,12 +143,14 @@ def test_auth():
     print("\n[SUITE 1] Authentication Tests")
     print("-" * 50)
 
+    setup_test_organizations()
+
     # Test 1: Valid login
-    token = get_token("admin", "admin123")
+    token = get_token(ADMIN_USERNAME, ADMIN_PASSWORD)
     log_result("Valid login returns token", token is not None)
 
     # Test 2: Invalid password
-    res = requests.post(f"{BASE_URL}/auth/login", data={"username": "admin", "password": "wrongpassword"})
+    res = requests.post(f"{BASE_URL}/auth/login", data={"username": ADMIN_USERNAME, "password": "wrongpassword"})
     log_result("Invalid password returns 401", res.status_code == 401)
 
     # Test 3: Non-existent user
@@ -123,10 +185,12 @@ def test_rbac():
     print("\n[SUITE 2] RBAC Permission Tests")
     print("-" * 50)
 
-    observer_token = get_token("observer_user", "observer123")
-    analyst_token = get_token("analyst_user", "analyst123")
-    commander_token = get_token("commander_user", "commander123")
-    admin_token = get_token("admin", "admin123")
+    setup_test_organizations()
+
+    observer_token = get_token(OBSERVER_USERNAME, OBSERVER_PASSWORD)
+    analyst_token = get_token(ANALYST_USERNAME, ANALYST_PASSWORD)
+    commander_token = get_token(COMMANDER_USERNAME, COMMANDER_PASSWORD)
+    admin_token = get_token(ADMIN_USERNAME, ADMIN_PASSWORD)
 
     if not all([observer_token, analyst_token, commander_token, admin_token]):
         print("  SKIP: Could not authenticate test users")
@@ -189,9 +253,11 @@ def test_command_framework():
     print("\n[SUITE 3] Secure Command Framework (Dry-Run)")
     print("-" * 50)
 
-    admin_token = get_token("admin", "admin123")
-    commander_token = get_token("commander_user", "commander123")
-    observer_token = get_token("observer_user", "observer123")
+    setup_test_organizations()
+
+    admin_token = get_token(ADMIN_USERNAME, ADMIN_PASSWORD)
+    commander_token = get_token(COMMANDER_USERNAME, COMMANDER_PASSWORD)
+    observer_token = get_token(OBSERVER_USERNAME, OBSERVER_PASSWORD)
 
     # First, we need a drone. Let's check if one exists or note the behavior.
     res = requests.get(f"{BASE_URL}/drones", headers=headers(admin_token))
@@ -252,7 +318,9 @@ def test_tenant_isolation():
     print("\n[SUITE 4] Tenant Isolation Tests")
     print("-" * 50)
 
-    admin_token = get_token("admin", "admin123")
+    setup_test_organizations()
+
+    admin_token = get_token(ADMIN_USERNAME, ADMIN_PASSWORD)
     
     # All current users belong to org 1. Verify scoped data returns correctly.
     res = requests.get(f"{BASE_URL}/drones", headers=headers(admin_token))
@@ -278,7 +346,7 @@ def test_tenant_isolation():
     # Note: Full cross-tenant isolation requires a second organization.
     # Since we can't easily create one via API without an org management endpoint,
     # we verify the architectural enforcement.
-    print("  ℹ NOTE: Full cross-org isolation requires a second organization.")
+    print("  NOTE: Full cross-org isolation requires a second organization.")
     print("          Server-side enforcement verified by code review:")
     print("          - All queries filter by organization_id from TenantContext")
     print("          - TenantContext derives org_id from authenticated user, not client input")
@@ -292,7 +360,9 @@ def test_audit():
     print("\n[SUITE 5] Audit Trail Tests")
     print("-" * 50)
 
-    admin_token = get_token("admin", "admin123")
+    setup_test_organizations()
+
+    admin_token = get_token(ADMIN_USERNAME, ADMIN_PASSWORD)
     res = requests.get(f"{BASE_URL}/incidents/audit/logs", headers=headers(admin_token))
     if res.status_code == 200:
         logs = res.json()
@@ -315,10 +385,12 @@ def test_rate_limiting():
     print("\n[SUITE 6] Rate Limiting Tests")
     print("-" * 50)
 
+    setup_test_organizations()
+
     # Attempt 10 rapid login failures
     blocked = False
-    for i in range(10):
-        res = requests.post(f"{BASE_URL}/auth/login", data={"username": "admin", "password": "wrongpwd"})
+    for _i in range(10):
+        res = requests.post(f"{BASE_URL}/auth/login", data={"username": ADMIN_USERNAME, "password": "wrongpwd"})
         if res.status_code == 429:
             blocked = True
             break
@@ -351,7 +423,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print(f"  RESULTS: {RESULTS['passed']}/{total} passed, {RESULTS['failed']} failed")
     if RESULTS["errors"]:
-        print(f"\n  FAILURES:")
+        print("\n  FAILURES:")
         for e in RESULTS["errors"]:
             print(f"    - {e}")
     print("=" * 60)

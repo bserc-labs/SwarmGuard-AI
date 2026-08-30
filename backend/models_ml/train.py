@@ -1,22 +1,19 @@
 import time
-import pandas as pd
+from datetime import datetime
+
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from sklearn.neighbors import LocalOutlierFactor
-from sklearn.svm import OneClassSVM
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
-)
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
-from datetime import datetime
-import joblib
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import OneClassSVM
 
 from config import get_settings
 from models_ml.dataset_loader import DatasetLoader
+from models_ml.experiment_tracker import experiment_tracker
 from models_ml.preprocess import FeatureEngineer
 from models_ml.registry import model_registry
-from models_ml.experiment_tracker import experiment_tracker
 from utils.logger import logger
 
 settings = get_settings()

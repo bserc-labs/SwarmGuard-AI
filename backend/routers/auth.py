@@ -2,19 +2,20 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 import models
 import schemas
 from database import get_db
+from middleware.auth_middleware import get_current_user
+from services.audit_service import audit_service
 from services.auth_service import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
     verify_password,
 )
-from services.audit_service import audit_service
-from middleware.auth_middleware import get_current_user
+
 # The shared, Redis-backed limiter. This module previously constructed its own
 # in-memory Limiter, so the login limit was counted separately from every other
 # rate-limited route and was lost on restart.
@@ -23,7 +24,7 @@ from utils.limiter import limiter
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _log_audit(db: Session, username: str, action: str, ip: str = None, organization_id: int = None):
+def _log_audit(db: Session, username: str, action: str, ip: str | None = None, organization_id: int | None = None):
     """Log an authentication audit event with the new expanded schema."""
     audit_service.log(
         db=db,
