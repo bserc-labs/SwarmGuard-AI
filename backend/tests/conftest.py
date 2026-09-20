@@ -3,12 +3,13 @@ import os
 import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 # Load env variables for testing if not set
 load_dotenv()
 
+import models
 from database import DATABASE_URL, get_db
 from main import app
 from utils.limiter import limiter
@@ -61,3 +62,27 @@ def db_session():
 def client():
     with TestClient(app) as c:
         yield c
+
+
+def purge_audit_logs(db, organization_id: int) -> int:
+    """Remove a throwaway organization's audit rows during teardown.
+
+    `audit_logs` is append-only at the database level as of migration
+    e5f6a7b8c9d0: a trigger rejects UPDATE outright and permits DELETE only
+    when the session has announced a maintenance pass. Fixtures still need to
+    clean up after themselves -- `fk_audit_org` will not let a throwaway
+    organization go while its rows reference it -- so they go through here
+    rather than each rediscovering the flag.
+
+    Scoped to one organization on purpose. This must never become a way to
+    clear the real audit trail.
+    """
+    db.rollback()
+    db.execute(text("SET LOCAL swarmguard.audit_maintenance = 'on'"))
+    deleted = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.organization_id == organization_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return deleted

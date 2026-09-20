@@ -147,8 +147,15 @@ class AuditLog(Base):
     details: Mapped[str | None] = mapped_column(String, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    # One timestamp, not two. `timestamp` was added alongside this column in
+    # sprint 7, both defaulting to now(), and nothing ever read it -- see
+    # migration e5f6a7b8c9d0, which drops it and moves its index here, onto the
+    # column `routers/incidents.py` actually orders by.
+    #
+    # Rows in this table are append-only at the database level: a trigger
+    # rejects UPDATE outright and permits DELETE only for a retention pass that
+    # sets `swarmguard.audit_maintenance` on its session first.
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
 
 
 class SystemSettings(Base):

@@ -13,6 +13,8 @@ import uuid
 
 import pytest
 
+from tests.conftest import purge_audit_logs
+
 
 @pytest.fixture
 def seeded_admin(db_session):
@@ -52,11 +54,14 @@ def seeded_admin(db_session):
     # fk_audit_org refuses to let the organization go while it is referenced.
     # These are this fixture's own rows in its own throwaway organization, so
     # removing them does not touch the real audit trail.
-    db_session.rollback()
-    for model in (models.AuditLog, models.User):
-        db_session.query(model).filter(
-            model.organization_id == organization.id
-        ).delete(synchronize_session=False)
+    #
+    # The audit rows go through purge_audit_logs because the table is
+    # append-only at the database level (migration e5f6a7b8c9d0); a plain
+    # DELETE is rejected by a trigger.
+    purge_audit_logs(db_session, organization.id)
+    db_session.query(models.User).filter(
+        models.User.organization_id == organization.id
+    ).delete(synchronize_session=False)
     db_session.query(models.Organization).filter(
         models.Organization.id == organization.id
     ).delete(synchronize_session=False)
