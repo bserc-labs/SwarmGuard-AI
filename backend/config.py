@@ -61,6 +61,22 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # Login attempts per client address. Five a minute is the production value
+    # and the default; it exists as a setting only so the live integration suite
+    # can be given room to run.
+    #
+    # tests/test_sprint7_security.py drives a real server over HTTP and every
+    # test in it authenticates. Against the 5/minute limit the third test
+    # onwards always took a 429 and skipped -- so of six tests covering auth,
+    # RBAC, tenant isolation, audit and rate limiting, at most two ever
+    # executed. Run one per rate-limit window, all six pass; the suite was
+    # failing to run, not failing.
+    #
+    # Raise this only for an ephemeral test deployment. A production value
+    # loose enough to make brute force cheap is worse than no limit, because it
+    # looks like protection.
+    LOGIN_RATE_LIMIT: str = "5/minute"
+
     # AI models & thresholds (for future use)
     THREAT_ANOMALY_THRESHOLD: float = 0.8
     THREAT_CRITICAL_THRESHOLD: float = 85.0

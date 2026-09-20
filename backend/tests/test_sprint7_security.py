@@ -39,21 +39,39 @@ COMMANDER_USERNAME = "sprint7_commander"
 COMMANDER_PASSWORD = "sprint7-commander-pw"
 
 
+# In CI this suite is the point of the job, so "could not run" must be a
+# failure. Locally it stays a skip: a developer without a server running should
+# not be told they broke something.
+#
+# This distinction is why the file went unnoticed for so long. Every test here
+# skipped on every CI run -- the workflow never started a server -- so auth,
+# RBAC, tenant isolation, audit and rate limiting were reported green while
+# none of them had executed. A skip that means "we never checked" must not look
+# like a pass.
+IN_CI = os.getenv("CI", "").lower() in {"1", "true", "yes"}
+
+
+def _did_not_run(reason: str):
+    if IN_CI:
+        pytest.fail(f"live security suite could not run in CI: {reason}")
+    pytest.skip(reason)
+
+
 def requires_live_server():
-    """Skip rather than fail when there is no server or no admin to drive it.
+    """Skip locally, fail in CI, when there is no server or no admin to drive it.
 
     A skipped integration test reports honestly that it did not run. A crashing
     one reports a defect that does not exist, which is worse: it trains everyone
     reading CI to ignore this file.
     """
     if not ADMIN_PASSWORD:
-        pytest.skip("ADMIN_PASSWORD is not set; cannot provision integration fixtures")
+        _did_not_run("ADMIN_PASSWORD is not set; cannot provision integration fixtures")
     try:
         health = requests.get(f"{BASE_URL}/health", timeout=3)
     except requests.RequestException as exc:
-        pytest.skip(f"No server reachable at {BASE_URL}: {exc}")
+        _did_not_run(f"No server reachable at {BASE_URL}: {exc}")
     if health.status_code != 200:
-        pytest.skip(f"Server at {BASE_URL} is not healthy (HTTP {health.status_code})")
+        _did_not_run(f"Server at {BASE_URL} is not healthy (HTTP {health.status_code})")
 
     res = requests.post(
         f"{BASE_URL}/auth/login",
@@ -61,15 +79,17 @@ def requires_live_server():
         timeout=10,
     )
     if res.status_code == 429:
-        # /auth/login allows 5 per minute. test_rate_limiting deliberately
-        # exhausts it, so a later suite in the same minute cannot log in. Say
-        # that, rather than blaming the credentials.
-        pytest.skip(
-            "Login is rate-limited right now (HTTP 429). The limit is 5/minute "
-            "and test_rate_limiting exhausts it deliberately; re-run in a minute."
+        # Every test here logs in, and the production limit is 5/minute, so
+        # from the third test onwards this always fired and the rest of the
+        # suite skipped. In CI the job sets LOGIN_RATE_LIMIT high enough for
+        # the whole suite against an ephemeral server, so a 429 there means the
+        # job is misconfigured and the suite is silently not running again.
+        _did_not_run(
+            "Login is rate-limited right now (HTTP 429). Set LOGIN_RATE_LIMIT "
+            "on the server under test; locally, re-run in a minute."
         )
     if res.status_code != 200:
-        pytest.skip(
+        _did_not_run(
             f"Could not authenticate as '{ADMIN_USERNAME}' (HTTP {res.status_code}). "
             "Set ADMIN_USERNAME and ADMIN_PASSWORD to match the running backend."
         )
