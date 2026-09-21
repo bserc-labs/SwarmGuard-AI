@@ -37,6 +37,19 @@ def angle_difference(series: pd.Series) -> pd.Series:
     return (diff + 180) % 360 - 180
 
 
+def undefined_features(feature_columns: list[str], feature_row) -> list[str]:
+    """Names of the columns that are NaN/None in one feature row of shape (1, n) or (n,).
+
+    A NaN here is not a value the model can reason about: a delta or rate feature
+    had nothing to difference against -- too few packets, or missing or repeated
+    timestamps. Callers must refuse to score or explain such a row rather than
+    hand it to the model, because sklearn and shap both accept NaN silently as a
+    "missing value" and return a confident-looking answer anyway.
+    """
+    mask = pd.isna(np.asarray(feature_row, dtype=object)).reshape(-1)
+    return [col for col, missing in zip(feature_columns, mask, strict=True) if missing]
+
+
 class FeatureEngineer:
     """Builds the model's feature vector from a window of telemetry packets.
 

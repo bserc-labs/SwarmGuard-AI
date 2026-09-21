@@ -6,6 +6,7 @@ import pandas as pd
 
 from config import get_settings
 from models_ml.explainability import ExplainabilityEngine
+from models_ml.preprocess import undefined_features
 from services.ai_service import ai_service
 from utils.logger import logger
 
@@ -141,6 +142,26 @@ class AIExplanationService:
             return "UNCLASSIFIED_ANOMALY"
         return max(votes.items(), key=lambda kv: kv[1])[0]
 
+    def _insufficient_data(self, nan_features: list[str]) -> dict[str, Any]:
+        """Explicit refusal for a window whose feature vector is not fully defined.
+
+        Carries the {"error": ...} key detection_pipeline and the router already
+        check, a status the router maps to a client error, and the undefined
+        columns so the caller can tell a short window from packets without
+        usable timestamps.
+        """
+        return {
+            "error": (
+                "Insufficient data: the feature vector is undefined for "
+                f"{', '.join(nan_features) or 'one or more features'}. Delta and rate "
+                "features need more packets with distinct, increasing timestamps "
+                "(`timestamp` on /ai/explain; `created_at` from the telemetry store) "
+                "than this window provides."
+            ),
+            "status": "insufficient_data",
+            "nan_features": nan_features,
+        }
+
     def explain_prediction(self, telemetry_history: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Executes full inference and SHAP explainability pipeline.
@@ -155,6 +176,15 @@ class AIExplanationService:
         inference_result = ai_service.predict(telemetry_history)
         if "error" in inference_result:
             return {"error": f"Inference failed: {inference_result['error']}"}
+
+        # predict() reports an undefined feature vector as status "warmup", with
+        # no "error" key -- so the check above sailed past it, and this method
+        # went on to recompute the same NaN row and hand it to SHAP, which
+        # treats NaN as "missing" and attributes anyway. That is how /ai/explain
+        # returned a confident GPS_SPOOFING attribution for a window in which
+        # none of the GPS features existed.
+        if inference_result.get("status") == "warmup":
+            return self._insufficient_data(inference_result.get("nan_features") or [])
             
         # 2. Reconstruct Scaled Features (since inference service doesn't expose them directly to avoid tight coupling)
         try:
@@ -162,6 +192,12 @@ class AIExplanationService:
             df_features = ai_service.engineer.transform(df)
             feature_cols = ai_service.engineer.get_feature_columns()
             latest_features = df_features[feature_cols].iloc[[-1]].values
+            # Defensive re-check, not the primary guard: this row is recomputed
+            # independently of predict(), and the two must never be allowed to
+            # disagree about whether the window is defined.
+            nan_features = undefined_features(feature_cols, latest_features)
+            if nan_features:
+                return self._insufficient_data(nan_features)
             scaled_features = ai_service.scaler.transform(latest_features)
         except Exception as e:
             logger.error(json.dumps({"event": "explain_feature_prep_failed", "error": str(e)}))

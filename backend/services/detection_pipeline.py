@@ -36,9 +36,10 @@ settings = get_settings()
 
 # Two packets is the floor for any rate at all, which is what the kinematic
 # guard needs. The ML tier wants settings.WINDOW_SIZE for its rolling
-# statistics and reports a warm-up status below that on its own, so gating the
-# whole pipeline at the larger number would delay physics checks that are
-# already valid.
+# statistics and declines on its own below that -- explain_prediction returns
+# status "insufficient_data" for any window whose feature vector is undefined --
+# so gating the whole pipeline at the larger number would delay physics checks
+# that are already valid.
 MIN_HISTORY_PACKETS = 2
 
 # Upper bound on the window handed to the feature engineer. Enough context for
@@ -158,6 +159,11 @@ def _run_detectors(
         return None
 
     result = explanation_service.explain_prediction(history)
+    if result.get("status") == "insufficient_data":
+        # Routine, not a fault: a drone that has just come online does not yet
+        # have a window the rate features are defined over.
+        logger.info(f"ML detection declined for {drone_id}: window not yet defined.")
+        return None
     if "error" in result:
         logger.warning(f"ML detection skipped for {drone_id}: {result['error']}")
         return None

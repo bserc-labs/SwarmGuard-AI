@@ -93,6 +93,14 @@ class ExplainabilityEngine:
         
         try:
             # Generate SHAP values
+            if np.isnan(np.asarray(scaled_features, dtype=float)).any():
+                # shap treats NaN as a missing-value mask and walks the trees
+                # anyway, producing plausible attributions over features that do
+                # not exist for this window.
+                return {
+                    "error": "Refusing to explain a feature vector containing NaN: "
+                    "attributions over undefined features are meaningless."
+                }
             shap_values = self.explainer.shap_values(scaled_features)
             shap_values = self._to_2d(shap_values)
 

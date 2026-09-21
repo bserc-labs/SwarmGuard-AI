@@ -32,6 +32,12 @@ Every explanation is formatted identically to reduce cognitive load on the analy
 
 ## 3. Explanation API (`routers/ai_explain.py`)
 - `POST /ai/explain`: Re-runs inference, extracts features, calculates SHAP values, and returns the analyst template.
+  - Returns `400` when the window's feature vector is undefined (NaN) — too few
+    packets, or `timestamp` values that do not advance — instead of a prediction
+    and an attribution. sklearn and SHAP both accept NaN silently as a "missing
+    value", so without this the endpoint explained features that did not exist.
+  - `timestamp` must be ISO-8601. It is used as `created_at` for feature
+    engineering, normalised to naive UTC to match the telemetry store.
 - `GET /ai/explanation/model`: Exposes XAI health, current `shap.__version__`, explainer type, and loaded feature mappings.
 
 ## 4. XAI Technical Debt & Future Migration
