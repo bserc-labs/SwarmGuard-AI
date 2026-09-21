@@ -15,6 +15,24 @@ settings = get_settings()
 # every call site.
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
+# Statuses in which an incident is still the operator's live concern: every
+# lifecycle state before RESOLVED (routers/incidents.py LIFECYCLE; a test pins
+# the two together). Suppression and escalation consult only these. An incident
+# an operator has resolved or closed is history; a detection that follows it is
+# a new event and must be recorded and broadcast, not folded into a record
+# nobody is watching.
+#
+# A row whose status is NULL is not live by this definition. The ORM always
+# writes "NEW"; only a row inserted outside it could be NULL, and making that
+# count would need a NOT NULL + server_default migration rather than a filter.
+LIVE_INCIDENT_STATUSES: tuple[str, ...] = (
+    "NEW",
+    "OPEN",
+    "ACKNOWLEDGED",
+    "INVESTIGATING",
+    "CONTAINED",
+)
+
 # Defaults, as fractions of a 0-100 threat score. These are the values the
 # severity mapping used to hardcode; they are now only the fallback for an
 # organization that has not set its own.
@@ -152,9 +170,20 @@ class AlertService:
         # Within the window, one drone means one incident. `attack_type` is
         # escalated on the existing row instead (see
         # IncidentEngine._update_existing_incident).
+        #
+        # Only live incidents count. Before this filter a RESOLVED row inside
+        # the window suppressed the next detection: an operator who resolved an
+        # incident while the attack was still running got nothing written and
+        # nothing broadcast for the next 60 s.
+        #
+        # This check is not atomic with the insert that follows it.
+        # IncidentEngine serialises the two with a per-drone advisory lock
+        # (_serialize_incident_writes); do not call this standalone expecting
+        # it to be race-free.
         query = db.query(Incident).filter(
             Incident.drone_id == drone_id,
-            Incident.detection_time >= cutoff_time
+            Incident.status.in_(LIVE_INCIDENT_STATUSES),
+            Incident.detection_time >= cutoff_time,
         )
         if organization_id is not None:
             query = query.filter(Incident.organization_id == organization_id)

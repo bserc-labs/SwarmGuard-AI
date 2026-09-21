@@ -185,11 +185,12 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
         if detection is None:
             return None
 
-        incident = incident_engine.process_ai_detection(
+        outcome = incident_engine.record_detection(
             db, detection, organization_id=organization_id
         )
+        incident = outcome.incident
         if incident is None:
-            # Suppressed as a duplicate of an already-open incident.
+            # A repeat of a live incident that this reading did not worsen.
             return None
 
         # Field names follow the frontend's DetectionResult interface
@@ -199,7 +200,12 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
         ranked = incident.shap_values or []
         return {
             "type": "incident",
-            "event_type": "AI_DETECTION",
+            # An escalation inside the suppression window used to update the
+            # row and tell nobody: the dashboard kept showing the lower
+            # severity. It is now broadcast as the same frame with the same
+            # incident_id, so a client keyed on the incident updates in place.
+            # Only event_type differs.
+            "event_type": "AI_DETECTION" if outcome.created else "INCIDENT_ESCALATED",
             "is_anomaly": True,
             "drone_id": incident.drone_id,
             "attack_type": incident.attack_type,

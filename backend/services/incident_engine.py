@@ -1,11 +1,14 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from models import Incident
 from services.alert_service import (
+    LIVE_INCIDENT_STATUSES,
     SEVERITY_RANK,
     alert_service,
     resolve_thresholds,
@@ -31,6 +34,55 @@ def _threat_level_ordinal(threat_level: Any) -> int:
     if isinstance(threat_level, str):
         return THREAT_LEVEL_ORDINALS.get(threat_level.upper(), 0)
     return 0
+
+
+def _serialize_incident_writes(db: Session, organization_id: int, drone_id: str) -> None:
+    """Serialise check-then-insert per (organization, drone) for this transaction.
+
+    Suppression is a SELECT followed by an INSERT, and detection runs one
+    thread per ingested packet (detection_pipeline.run_detection), so two
+    cycles for the same drone could both miss and both insert: one attack, two
+    incidents on the operator's screen. A transaction-scoped advisory lock makes
+    the second wait for the first to commit; under READ COMMITTED its
+    suppression SELECT then sees the committed row.
+
+    Released at commit or rollback, never explicitly. Keyed on
+    (organization_id, hashtext(drone_id)) so tenants never share a key; a hash
+    collision inside one tenant only serialises two unrelated drones. Nothing
+    else in the codebase takes advisory locks; if that changes, keep this
+    (int, int) convention or use the bigint form with a distinct prefix.
+
+    A partial unique index was considered and rejected: the intended key is a
+    60 s window per drone (commit 1d17747), not "one live incident per drone",
+    and an index cannot express a sliding window.
+
+    PostgreSQL only. The SQLite-backed unit suites run on one connection and
+    have no concurrency to protect.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:org, hashtext(:drone))"),
+        {"org": organization_id, "drone": drone_id},
+    ).scalar()
+
+
+@dataclass(frozen=True)
+class DetectionOutcome:
+    """What a detection did to the incident table.
+
+    `incident` is the row that was created or escalated, or None when the
+    detection changed nothing an operator can see -- a repeat inside the
+    suppression window that did not worsen the live incident.
+    """
+
+    incident: Incident | None
+    created: bool
+
+    @property
+    def escalated(self) -> bool:
+        """An existing incident got worse. Derived, so it cannot contradict `created`."""
+        return self.incident is not None and not self.created
 
 
 class IncidentEngine:
@@ -61,6 +113,27 @@ class IncidentEngine:
         *,
         organization_id: int | None = None,
     ) -> Incident | None:
+        """The newly created incident, or None. See `record_detection`.
+
+        Kept for callers that only care whether a new row exists. It cannot
+        report an escalation -- that returned None too, which is exactly how an
+        incident climbing from MEDIUM to CRITICAL inside the suppression window
+        never reached the operator's screen. The live pipeline uses
+        `record_detection`.
+        """
+        outcome = self.record_detection(
+            db, detection, mission_id, organization_id=organization_id
+        )
+        return outcome.incident if outcome.created else None
+
+    def record_detection(
+        self,
+        db: Session,
+        detection: dict[str, Any],
+        mission_id: str | None = None,
+        *,
+        organization_id: int | None = None,
+    ) -> DetectionOutcome:
         """
         Takes raw output from the Explainable AI layer and determines if a new
         Incident should be created or an existing one updated.
@@ -91,7 +164,8 @@ class IncidentEngine:
         is_anomaly = prediction.get("is_anomaly", False)
 
         if not is_anomaly:
-            return None # Do nothing for normal telemetry
+            # Nothing to do for normal telemetry, and no lock taken for it.
+            return DetectionOutcome(incident=None, created=False)
 
         anomaly_score = prediction.get("anomaly_score", 0.0)
         # Using threat_level logic for basic mapping or passing threat_score
@@ -115,19 +189,26 @@ class IncidentEngine:
         # the same event against two different policies.
         thresholds = resolve_thresholds(db, organization_id)
 
+        # From the suppression check to the commit is one critical section per
+        # (organization, drone). See _serialize_incident_writes.
+        _serialize_incident_writes(db, organization_id, drone_id)
+
         # 1. Alerting & Suppression
         alert = alert_service.process_alert(
             db, incident_data, organization_id=organization_id, thresholds=thresholds
         )
         if not alert:
-            # Suppressed, but we might want to update the existing incident's last detection time.
-            self._update_existing_incident(
+            # Suppressed: fold this reading into the live incident. If that made
+            # it worse -- a higher severity band, or a new label -- the caller
+            # gets the row back so the change can be broadcast. It used to be
+            # dropped here: the database escalated and the dashboard did not.
+            escalated = self._update_existing_incident(
                 db, drone_id, attack_type, threat_score,
                 organization_id=organization_id,
                 thresholds=thresholds,
                 evidence=explanation,
             )
-            return None
+            return DetectionOutcome(incident=escalated, created=False)
 
         # Two severities, and the more serious one wins.
         #
@@ -211,7 +292,7 @@ class IncidentEngine:
         db.refresh(new_incident)
         
         logger.info(f"Generated new Incident #{new_incident.id} for Drone {drone_id} (Severity: {severity}, Priority: {priority})")
-        return new_incident
+        return DetectionOutcome(incident=new_incident, created=True)
 
     def _update_existing_incident(
         self,
@@ -223,10 +304,20 @@ class IncidentEngine:
         organization_id: int | None = None,
         thresholds=None,
         evidence: dict[str, Any] | None = None,
-    ):
+    ) -> Incident | None:
         """
         Updates the threat score and updated_at timestamp of an ongoing incident
         to prevent duplicate spam while keeping the active incident fresh.
+
+        Returns the incident when this reading escalated it -- its severity band
+        rose or its label changed -- and None otherwise, so the caller can
+        broadcast exactly the changes an operator needs to see.
+
+        Known limitation: this picks the newest *live* incident for the drone
+        with no time window, so a heartbeat-raised SIGNAL_LOSS_JAMMING incident
+        (heartbeat_service creates those outside this engine) can be the row a
+        later spoofing detection escalates and relabels. Now that escalations
+        are broadcast, that relabel is operator-visible.
 
         `evidence` is the suppressed detection's explanation block. When the
         escalation also changes the incident's label, the attribution is
@@ -244,12 +335,18 @@ class IncidentEngine:
         # attack's signature develops.
         query = db.query(Incident).filter(
             Incident.drone_id == drone_id,
-            Incident.status.in_(["NEW", "OPEN", "ACKNOWLEDGED", "INVESTIGATING", "CONTAINED"])
+            Incident.status.in_(LIVE_INCIDENT_STATUSES),
         )
         if organization_id is not None:
             query = query.filter(Incident.organization_id == organization_id)
         incident = query.order_by(Incident.created_at.desc()).first()
-        
+
+        if incident is None:
+            return None
+
+        previous_severity = incident.severity
+        previous_attack_type = incident.attack_type
+
         if incident:
             # Escalate threat score if the new one is higher
             if threat_score > incident.threat_score:
@@ -283,6 +380,25 @@ class IncidentEngine:
                 incident.priority = priority_service.calculate_priority(incident.threat_score, incident.anomaly_score, 1)
 
             incident.updated_at = datetime.utcnow()
-            db.commit()
+
+        # Decided before the commit: SessionLocal expires attributes on commit,
+        # so reading them afterwards would cost a reload per comparison.
+        escalated = (
+            SEVERITY_RANK.get(incident.severity or "", 0)
+            > SEVERITY_RANK.get(previous_severity or "", 0)
+            or incident.attack_type != previous_attack_type
+        )
+        db.commit()  # also releases the per-drone advisory lock
+
+        if not escalated:
+            return None
+        db.refresh(incident)
+        logger.info(
+            f"Escalated Incident #{incident.id} for Drone {drone_id}: "
+            f"{previous_severity} {previous_attack_type} -> "
+            f"{incident.severity} {incident.attack_type}"
+        )
+        return incident
+
 
 incident_engine = IncidentEngine()
