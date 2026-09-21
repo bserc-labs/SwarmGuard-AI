@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 
 import models
@@ -110,43 +111,53 @@ def get_incident_stats(
     tenant: TenantContext = Depends(require_permission(Permissions.INCIDENT_READ))
 ):
     """Get extended incident statistics for dashboard analytics."""
-    # Base query scoped to tenant's organization
-    incidents = db.query(models.Incident).filter(
-        models.Incident.organization_id == tenant.organization_id
-    ).all()
-    
-    total = len(incidents)
+    # Aggregated in SQL. This used to load every incident of the organization
+    # -- shap_values JSON, explanation text and all -- and count in a Python
+    # loop. Incidents are never deleted, so that request grew without bound.
+    #
+    # The response is unchanged, key for key. Portable constructs only
+    # (func.count + group_by, extract): the SQLite unit suites also reach this
+    # route. extract("epoch") renders EXTRACT(epoch FROM ..) on PostgreSQL and
+    # CAST(STRFTIME('%s', ..) AS INTEGER) on SQLite.
+    scoped = models.Incident.organization_id == tenant.organization_id
+
+    # avg() ignores NULLs and NULL - x is NULL, so an incident missing either
+    # timestamp is left out: the same rows the old
+    # `if inc.resolution_time and inc.detection_time` skipped.
+    resolution_seconds = extract("epoch", models.Incident.resolution_time) - extract(
+        "epoch", models.Incident.detection_time
+    )
+    total, avg_resolution = db.execute(
+        select(func.count(models.Incident.id), func.avg(resolution_seconds)).where(scoped)
+    ).one()
+
     if total == 0:
         return {"total": 0}
-        
-    severity_dist = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    status_dist: dict[str, int] = {}
-    attack_type_dist: dict[str, int] = {}
-    drone_dist: dict[str, int] = {}
-    
-    # Timing metrics
-    res_times = []
-    
-    for inc in incidents:
-        severity_dist[inc.severity] = severity_dist.get(inc.severity, 0) + 1
-        status_dist[inc.status] = status_dist.get(inc.status, 0) + 1
-        attack_type_dist[inc.attack_type] = attack_type_dist.get(inc.attack_type, 0) + 1
-        drone_dist[inc.drone_id] = drone_dist.get(inc.drone_id, 0) + 1
-        
-        if inc.resolution_time and inc.detection_time:
-            res_times.append((inc.resolution_time - inc.detection_time).total_seconds())
 
-    avg_resolution = sum(res_times) / len(res_times) if res_times else 0
+    def distribution(column) -> dict:
+        rows = db.execute(
+            select(column, func.count(models.Incident.id)).where(scoped).group_by(column)
+        ).all()
+        return {value: count for value, count in rows}
+
+    # The four tiers are always present, even at zero; anything else the column
+    # holds is appended after them, as before.
+    severity_dist = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    severity_dist.update(distribution(models.Incident.severity))
 
     return {
         "total": total,
         "by_severity": severity_dist,
-        "by_status": status_dist,
-        "by_threat_type": attack_type_dist,
-        "by_drone": drone_dist,
-        "avg_resolution_time_seconds": round(avg_resolution, 2)
+        "by_status": distribution(models.Incident.status),
+        "by_threat_type": distribution(models.Incident.attack_type),
+        "by_drone": distribution(models.Incident.drone_id),
+        # PostgreSQL returns numeric (Decimal) for EXTRACT/avg; float() so the
+        # JSON number is what it always was. Integer 0 when nothing has been
+        # resolved: the frontend tests this value for falsiness.
+        "avg_resolution_time_seconds": (
+            round(float(avg_resolution), 2) if avg_resolution is not None else 0
+        ),
     }
-
 
 @router.get("/{id}", response_model=schemas.IncidentOut)
 def get_incident(

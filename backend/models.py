@@ -15,7 +15,19 @@ Typing convention, chosen so that no DDL changes:
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -53,6 +65,19 @@ class User(Base):
 
 class TelemetryLog(Base):
     __tablename__ = "telemetry_logs"
+    # Serves GET /telemetry/latest (one newest row per drone via LATERAL),
+    # GET /telemetry/{drone_id}[/latest] and the detection pipeline's history
+    # window: every read of this table filters on (organization_id, drone_id)
+    # and orders by created_at DESC, and until migration j0e1f2a3b4c5 the table
+    # had only single-column indexes, so each of them fetched and sorted.
+    __table_args__ = (
+        Index(
+            "ix_telemetry_logs_org_drone_created_at",
+            "organization_id",
+            "drone_id",
+            text("created_at DESC"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, index=True)
     organization_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)

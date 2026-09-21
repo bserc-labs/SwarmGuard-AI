@@ -64,6 +64,39 @@ def client():
         yield c
 
 
+def legacy_incident_stats(incidents) -> dict:
+    """The old /incidents/stats aggregation, verbatim, as an oracle.
+
+    The route used to load every incident and count in a Python loop. It now
+    aggregates in SQL; the tests assert the JSON did not move by running the old
+    loop over the seeded rows and comparing the whole body.
+    """
+    total = len(incidents)
+    if total == 0:
+        return {"total": 0}
+    severity_dist = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    status_dist: dict = {}
+    attack_type_dist: dict = {}
+    drone_dist: dict = {}
+    res_times = []
+    for inc in incidents:
+        severity_dist[inc.severity] = severity_dist.get(inc.severity, 0) + 1
+        status_dist[inc.status] = status_dist.get(inc.status, 0) + 1
+        attack_type_dist[inc.attack_type] = attack_type_dist.get(inc.attack_type, 0) + 1
+        drone_dist[inc.drone_id] = drone_dist.get(inc.drone_id, 0) + 1
+        if inc.resolution_time and inc.detection_time:
+            res_times.append((inc.resolution_time - inc.detection_time).total_seconds())
+    avg_resolution = sum(res_times) / len(res_times) if res_times else 0
+    return {
+        "total": total,
+        "by_severity": severity_dist,
+        "by_status": status_dist,
+        "by_threat_type": attack_type_dist,
+        "by_drone": drone_dist,
+        "avg_resolution_time_seconds": round(avg_resolution, 2),
+    }
+
+
 def purge_audit_logs(db, organization_id: int) -> int:
     """Remove a throwaway organization's audit rows during teardown.
 
