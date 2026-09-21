@@ -4,11 +4,17 @@ on:
   push:
     branches:
       - main
-      - develop
+      # The integration branch is `development`. This said `develop`, which is
+      # not a branch in this repository, so every push to the branch the team
+      # actually works on ran zero jobs -- no pytest, no Ruff, no Mypy, no
+      # frontend build, and no Trivy secret scan, which README.md advertises as
+      # the check that blocks merges.
+      - development
+  # Deliberately unfiltered. A branch filter here means a PR targeting anything
+  # unexpected is merged with no checks at all, which is the failure this file
+  # just had. Checking a PR that did not need it costs a few runner-minutes;
+  # not checking one that did is how the `develop` typo went unnoticed.
   pull_request:
-    branches:
-      - main
-      - develop
 
 # Cancel superseded runs on the same ref so a busy PR does not queue behind itself.
 concurrency:

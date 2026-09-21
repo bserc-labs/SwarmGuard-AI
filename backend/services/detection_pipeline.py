@@ -102,10 +102,11 @@ def _run_detectors(
 
     **Tier 2 — ML anomaly model (advisory, off by default).** Runs only when
     AI_INCIDENTS_ENABLED is set. Under leave-one-flight-out validation the v2
-    model scores F1 0.041 at a 0.813 false-positive rate, so by default it does
-    not get to raise anything -- four out of five of its alerts would be noise,
-    and an operator who learns to ignore the dashboard is worse off than one
-    who has none.
+    model scores F1 0.086 at a 0.862 false-positive rate, so by default it does
+    not get to raise anything -- roughly six of every seven of its alerts would
+    be noise, and an operator who learns to ignore the dashboard is worse off
+    than one who has none. backend/models_ml/v2/evaluation.json is the
+    authoritative source for those numbers.
 
     The ordering is deliberate: physics first. When both would fire, the
     explanation an operator sees should be the one with checkable numbers

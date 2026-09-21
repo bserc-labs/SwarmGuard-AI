@@ -3,10 +3,10 @@
 Why this exists alongside the ML model:
 
 The v2 RandomForest, trained on real PX4 flights and validated
-leave-one-flight-out, scores F1 0.041 with a 0.813 false-positive rate. It does
+leave-one-flight-out, scores F1 0.086 with a 0.862 false-positive rate. It does
 not generalize across flights, so it cannot be the thing that decides whether
 an operator sees an alert. See model_train/ and backend/models_ml/v2/
-evaluation.json for the full numbers.
+evaluation.json -- which is authoritative -- for the full numbers.
 
 What does work is physics. A UAV cannot be in two places 5 km apart in 1.5
 seconds. It cannot climb at 200 m/s. Its GPS-derived ground speed and the

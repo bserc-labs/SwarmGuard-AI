@@ -1,7 +1,13 @@
 # SwarmGuard AI — API Reference Documentation
 
 **Base URL:** `/` (Development: `http://localhost:8000`, Production: `/api/`)  
-**Authentication:** Bearer JWT Token (`Authorization: Bearer <token>`) or `x-drone-api-key` header.
+**Authentication:** Bearer JWT (`Authorization: Bearer <token>`). `/telemetry/ingest`
+additionally requires an `x-drone-api-key` header — both, not either.
+
+> **The generated OpenAPI schema at `/docs` is authoritative.** It is produced
+> from the routers themselves and cannot drift. This file is a hand-written
+> orientation guide covering the routes most people integrate against first;
+> it describes a subset of the 40 routes the application actually serves.
 
 ---
 
@@ -28,14 +34,26 @@
 
 | Method | Endpoint | Auth | Rate Limit | Description |
 |:---|:---|:---:|:---:|:---|
-| `POST` | `/telemetry/ingest` | API Key | `50/sec` | Ingest real-time drone telemetry JSON |
-| `GET` | `/telemetry/live` | JWT | None | Fetch latest 500 telemetry logs |
-| `GET` | `/telemetry/history` | JWT | None | Fetch historical telemetry with time window & `limit`/`skip` pagination |
-| `GET` | `/telemetry/sensor-fusion/live` | JWT | None | Fetch live 5-sensor fusion matrix across active drones |
-| `GET` | `/telemetry/swarm-formation` | JWT | None | Fetch real-time drone spatial formation classification |
+| `POST` | `/telemetry/ingest` | JWT **and** API Key | `50/sec` | Ingest one telemetry packet |
+| `GET` | `/telemetry/latest` | JWT | None | Latest packet per drone in the caller's organization |
+| `GET` | `/telemetry/history` | JWT | None | Historical telemetry; `start_time` and `end_time` are **required**, with `limit`/`skip` pagination |
+| `GET` | `/telemetry/{drone_id}` | JWT | None | Recent packets for one drone |
+| `GET` | `/telemetry/{drone_id}/latest` | JWT | None | Latest packet for one drone |
+| `GET` | `/telemetry/health/status` | None | None | MAVLink receiver status |
+
+<!--
+This table previously listed /telemetry/live, /telemetry/sensor-fusion/live and
+/telemetry/swarm-formation. None of them exist in backend/routers/telemetry.py
+and none ever did under those paths -- documentation that sends an integrator
+down a dead end is worse than documentation that is merely incomplete. The
+routes above were read off the router.
+-->
 
 ### `POST /telemetry/ingest`
-- **Headers:** `x-drone-api-key: <KEY>`
+- **Headers:** `Authorization: Bearer <token>` (needs the `telemetry:ingest`
+  permission) **and** `x-drone-api-key: <KEY>`. Missing or wrong key → `403`.
+- **Note:** `packet_sequence` is **required**. Omitting it yields a `422` whose
+  body names the field but is easy to miss.
 - **Request Body:**
 ```json
 {
