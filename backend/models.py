@@ -101,10 +101,20 @@ class Incident(Base):
 
 class Drone(Base):
     __tablename__ = "drones"
+    # Identifiers are unique per organization, not globally -- the same defect
+    # and the same fix as geofence zone names below. See migration f6a7b8c9d0e1.
+    __table_args__ = (
+        UniqueConstraint("organization_id", "drone_id", name="uq_drones_org_drone_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     organization_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
-    drone_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=True)
+    # Unique per organization, not globally -- see migration f6a7b8c9d0e1. A
+    # global unique index here meant two tenants could not both operate a
+    # "UAV-001": the second one's ingest failed with a constraint violation on
+    # every packet, and the failure itself disclosed that another tenant held
+    # that identifier.
+    drone_id: Mapped[str] = mapped_column(String, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String, default="ACTIVE", nullable=True)  # ACTIVE, COMPROMISED, GROUNDED, RETURNING
     last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
     last_command: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -147,8 +157,15 @@ class AuditLog(Base):
     details: Mapped[str | None] = mapped_column(String, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    # One timestamp, not two. `timestamp` was added alongside this column in
+    # sprint 7, both defaulting to now(), and nothing ever read it -- see
+    # migration e5f6a7b8c9d0, which drops it and moves its index here, onto the
+    # column `routers/incidents.py` actually orders by.
+    #
+    # Rows in this table are append-only at the database level: a trigger
+    # rejects UPDATE outright and permits DELETE only for a retention pass that
+    # sets `swarmguard.audit_maintenance` on its session first.
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
 
 
 class SystemSettings(Base):

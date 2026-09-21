@@ -43,14 +43,33 @@ def ingest_telemetry(
     # Drone Device Security Check (Anti-Spoofing)
     if not x_drone_api_key or x_drone_api_key != EXPECTED_DRONE_API_KEY:
         logger.warning(f"🚨 UNAUTHORIZED DRONE SPOOFING ATTEMPT: {packet.drone_id} sent invalid or missing API Key!")
+        # Recorded, not just logged. A caller holding a valid operator token but
+        # presenting the wrong device key is the signature of a compromised or
+        # misconfigured airframe, and it is exactly the event an investigator
+        # comes looking for. `commit=True` because this request ends in a 403
+        # and there is no later write to carry the row.
+        audit_service.log_from_context(
+            db=db,
+            tenant=tenant,
+            action="TELEMETRY_DEVICE_AUTH_FAILED",
+            resource="TelemetryLog",
+            resource_id=packet.drone_id,
+            reason="missing_api_key" if not x_drone_api_key else "invalid_api_key",
+            details=(
+                f"Rejected telemetry for drone '{packet.drone_id}': device API key "
+                f"{'missing' if not x_drone_api_key else 'did not match'}."
+            ),
+            ip_address=request.client.host if request.client else None,
+            commit=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Device Authentication Failed: Invalid or missing API Key for drone '{packet.drone_id}'"
         )
-    
+
     try:
         processed_data = telemetry_service.process_telemetry(
-            packet, db, organization_id=tenant.organization_id
+            packet, db, organization_id=tenant.organization_id, actor=tenant.username
         )
         # Scoped to the ingesting device's organization so the live feed cannot
         # cross tenants.
@@ -66,16 +85,18 @@ def ingest_telemetry(
             run_detection, packet.drone_id, tenant.organization_id
         )
 
-        audit_service.log_from_context(
-            db=db,
-            tenant=tenant,
-            action="TELEMETRY_INGEST",
-            resource="TelemetryLog",
-            resource_id=packet.drone_id,
-            details=f"Ingested telemetry for drone {packet.drone_id}",
-            ip_address=request.client.host if request.client else None,
-        )
-
+        # No per-packet audit row. There used to be a TELEMETRY_INGEST entry
+        # here, and it never reached the database: process_telemetry had already
+        # committed, this staged an INSERT, and the request-scoped session was
+        # closed without another commit -- which rolls it back. The trail was
+        # silently empty rather than merely wrong.
+        #
+        # Committing it would have been the worse fix. This route is rate
+        # limited at 50 req/s, so a row per packet is ~4.3 M rows a day on a
+        # table that has no retention policy. `telemetry_logs` already records
+        # every packet. What is audited instead is the security-relevant subset:
+        # a rejected device key (above) and a drone seen for the first time
+        # (inside process_telemetry, in the same transaction as the drone row).
         return {"status": "success", "data": processed_data}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

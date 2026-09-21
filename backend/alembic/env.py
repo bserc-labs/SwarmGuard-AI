@@ -18,6 +18,15 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+# `models` is imported for its side effect: defining the classes is what
+# registers their tables on Base.metadata. Without it this file assigned an
+# *empty* MetaData to target_metadata -- database.py declares Base and imports
+# no models -- so autogenerate compared a live database against nothing.
+#
+# The next `alembic revision --autogenerate` would therefore have produced a
+# migration whose upgrade() was op.drop_table() for every table in the schema,
+# and it would have looked entirely routine in review.
+import models  # noqa: F401
 from database import DATABASE_URL, Base
 
 # Set the target metadata

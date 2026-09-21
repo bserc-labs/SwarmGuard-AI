@@ -23,10 +23,32 @@ class AuditService:
         reason: str | None = None,
         details: str | None = None,
         ip_address: str | None = None,
-        correlation_id: str | None = None
+        correlation_id: str | None = None,
+        commit: bool = False,
     ) -> AuditLog:
-        """
-        Record an immutable, append-only audit trail entry for defense-grade traceability.
+        """Record an append-only audit trail entry.
+
+        **This method stages a row; by default it does not commit it.** The
+        caller owns the transaction, so that an audit entry and the action it
+        describes land together or not at all.
+
+        That contract is easy to violate silently, and was: `/telemetry/ingest`
+        called this after `telemetry_service.process_telemetry` had already
+        committed the packet, then returned. `get_db`'s `finally: db.close()`
+        rolled the staged INSERT back, so every device-authenticated ingest --
+        the highest-volume security-relevant event in the system -- produced no
+        audit record at all. 315 ingests, 0 rows. Nothing failed loudly.
+
+        Two things now guard against a repeat:
+
+        * `commit=True` for callers that have nothing else to commit, notably
+          those that raise immediately afterwards (a rejected device key must
+          still be recorded even though the request ends in a 403).
+        * `tests/test_audit_persistence.py`, which asserts that the rows this
+          service is asked to write are actually readable from a new session.
+
+        Pass `commit=True` only when this row is the whole transaction. When it
+        accompanies another write, leave it False and let that write commit.
         """
         if correlation_id is None:
             correlation_id = str(uuid.uuid4())
@@ -47,8 +69,11 @@ class AuditService:
         )
         db.add(audit)
 
-        # We don't commit here. Let the calling transaction commit
-        # so that the incident creation and audit log are atomic.
+        # By default the calling transaction commits, so that the action and
+        # its audit entry are atomic. See the docstring for why this is not the
+        # default everywhere.
+        if commit:
+            db.commit()
 
         logger.info(f"Audit: {actor} (org:{organization_id}) performed {action} on {resource}:{resource_id} ({previous_state}->{new_state})")
         return audit
@@ -67,8 +92,12 @@ class AuditService:
         details: str | None = None,
         ip_address: str | None = None,
         correlation_id: str | None = None,
+        commit: bool = False,
     ) -> AuditLog:
-        """Convenience method that extracts actor and org_id from TenantContext."""
+        """Convenience method that extracts actor and org_id from TenantContext.
+
+        Stages rather than commits, exactly as `log` does. See its docstring.
+        """
         return self.log(
             db=db,
             actor=tenant.username,
@@ -83,6 +112,7 @@ class AuditService:
             details=details,
             ip_address=ip_address,
             correlation_id=correlation_id,
+            commit=commit,
         )
 
 audit_service = AuditService()

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+from config import get_settings
 from database import get_db
 from middleware.auth_middleware import get_current_user
 from services.audit_service import audit_service
@@ -22,6 +23,10 @@ from services.auth_service import (
 from utils.limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Defaults to 5/minute, the production value. Configurable only so the live
+# integration suite can be given room to run -- see Settings.LOGIN_RATE_LIMIT.
+LOGIN_RATE_LIMIT = get_settings().LOGIN_RATE_LIMIT
 
 
 def _log_audit(db: Session, username: str, action: str, ip: str | None = None, organization_id: int | None = None):
@@ -39,7 +44,7 @@ def _log_audit(db: Session, username: str, action: str, ip: str | None = None, o
 
 
 @router.post("/login", response_model=schemas.TokenResponse)
-@limiter.limit("5/minute")
+@limiter.limit(LOGIN_RATE_LIMIT)
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
 
     client_ip = request.client.host if request.client else None
