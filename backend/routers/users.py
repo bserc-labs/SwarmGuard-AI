@@ -75,10 +75,22 @@ def update_user_me(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Update current user's email classification."""
+    """Update the current user's email.
+
+    A blank or null email is a no-op: omitting the field and sending null both
+    mean "no change", and a blank submission normalises to null. Clearing an
+    address is not supported by this route.
+    """
     if user_update.email is not None:
         current_user.email = user_update.email
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # The unique email index: another account already holds this
+            # address. Unhandled, this was a 500 that also left the session in
+            # a failed transaction.
+            db.rollback()
+            raise HTTPException(status_code=409, detail="That email is already in use") from None
         db.refresh(current_user)
     return current_user
 

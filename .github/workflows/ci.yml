@@ -133,6 +133,10 @@ jobs:
       # database and server exist only for the length of this job.
       ADMIN_PASSWORD: ci-integration-password
       SWARMGUARD_API: http://localhost:8000
+      # This job is the owner of the live suite: here, and only here, a test
+      # that cannot run is a failure rather than a skip. The unit-test job
+      # collects the same file without a server and must be free to skip it.
+      REQUIRE_LIVE_SECURITY_SUITE: "1"
       # Every test in the suite authenticates, and the production limit of
       # 5/minute meant the third test onwards always took a 429 and skipped.
       # Raised only for this throwaway server; see Settings.LOGIN_RATE_LIMIT.
@@ -180,8 +184,9 @@ jobs:
 
       - name: Run the live security suite
         working-directory: ./backend
-        # CI=true makes this suite fail rather than skip when it cannot run,
-        # so "never executed" can no longer read as green.
+        # REQUIRE_LIVE_SECURITY_SUITE (job env above) makes this suite fail
+        # rather than skip when it cannot run, so "never executed" can no
+        # longer read as green.
         run: pytest tests/test_sprint7_security.py -v
 
       - name: API log

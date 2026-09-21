@@ -174,8 +174,15 @@ Converts a detection into a persisted, prioritised incident.
 - **Attack type** — voted across the top three SHAP features rather than taken
   from the single largest, so a marginally-larger unrelated feature cannot name
   an incident in a way that contradicts the explanation shown beneath it.
-- **Suppression** — a repeat detection within 60s updates the open incident
-  instead of creating a duplicate.
+- **Suppression** — a repeat detection within 60s of a *live* incident
+  (`NEW` … `CONTAINED`) for the same drone updates that incident instead of
+  creating a duplicate. A resolved or closed incident does not suppress: a
+  detection that follows it is a new event. If the repeat raises the severity
+  band or relabels the incident, the escalation is broadcast as an
+  `INCIDENT_ESCALATED` frame carrying the same `incident_id`, so the console
+  updates in place. The check-then-insert is serialised per
+  (organization, drone) with a transaction-scoped PostgreSQL advisory lock.
+  A row whose `status` is NULL is not live by this definition.
 - **Threat level** — the inference layer reports a band name; the column stores
   an Integer rank. `_threat_level_ordinal` converts. Passing the raw string
   through raised a DataError on insert.

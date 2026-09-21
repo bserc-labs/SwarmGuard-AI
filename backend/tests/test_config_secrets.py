@@ -136,3 +136,19 @@ class TestDefaultsAreSafe:
         )
         assert settings.MAVLINK_ENABLED is False
         assert settings.GUARD_ENABLED is True
+
+    def test_a_blank_env_value_means_unset(self, monkeypatch):
+        """compose passes .env through whole, and .env.example ships blanks.
+
+        `MAVLINK_ORGANIZATION_ID=` used to reach the `int | None` field as the
+        empty string and kill startup with int_parsing.
+        """
+        from config import Settings
+
+        monkeypatch.setenv("MAVLINK_ORGANIZATION_ID", "")
+        settings = Settings(
+            DATABASE_URL=f"postgresql://u:{STRONG}@h:5432/db",
+            SECRET_KEY=STRONG,
+            DRONE_API_KEY=STRONG,
+        )
+        assert settings.MAVLINK_ORGANIZATION_ID is None

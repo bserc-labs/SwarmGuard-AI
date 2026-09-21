@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 
 import shap
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,7 +29,9 @@ class TelemetryPayload(BaseModel):
     flight_mode: str
     satellites: int
     packet_sequence: int
-    timestamp: str
+    # ISO-8601. Parsed, not passed through as text: it becomes `created_at`, the
+    # column every rate feature is differenced against.
+    timestamp: datetime
 
 class ExplanationRequest(BaseModel):
     telemetry_history: list[TelemetryPayload]
@@ -48,11 +51,33 @@ async def explain_anomaly(request: ExplanationRequest):
             detail=f"At least {settings.WINDOW_SIZE} packets are required for rolling feature computation."
         )
         
-    # Convert Pydantic models to dicts
-    history_dicts = [item.model_dump() for item in request.telemetry_history]
-    
+    # FeatureEngineer derives every rate feature from `created_at`, the column
+    # the live pipeline reads from the database. This schema calls the same
+    # thing `timestamp`, and nothing bridged the two -- so on this route every
+    # time-derived feature was NaN on every call, and the endpoint returned a
+    # confident attribution computed from features that did not exist.
+    #
+    # Normalised to naive UTC, matching the naive column the live pipeline
+    # feeds: a payload mixing "...Z" with offset-less values otherwise reaches
+    # pandas as mixed tz-aware/naive and becomes a 500.
+    history_dicts = [
+        {
+            **item.model_dump(),
+            "created_at": (
+                item.timestamp.astimezone(UTC).replace(tzinfo=None)
+                if item.timestamp.tzinfo
+                else item.timestamp
+            ),
+        }
+        for item in request.telemetry_history
+    ]
+
     result = explanation_service.explain_prediction(history_dicts)
-    
+
+    # A window the model cannot be asked about is the caller's to fix, not a
+    # server fault: too few packets, or timestamps that do not advance.
+    if result.get("status") == "insufficient_data":
+        raise HTTPException(status_code=400, detail=result["error"])
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
         

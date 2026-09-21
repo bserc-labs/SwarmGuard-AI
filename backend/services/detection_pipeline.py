@@ -36,9 +36,10 @@ settings = get_settings()
 
 # Two packets is the floor for any rate at all, which is what the kinematic
 # guard needs. The ML tier wants settings.WINDOW_SIZE for its rolling
-# statistics and reports a warm-up status below that on its own, so gating the
-# whole pipeline at the larger number would delay physics checks that are
-# already valid.
+# statistics and declines on its own below that -- explain_prediction returns
+# status "insufficient_data" for any window whose feature vector is undefined --
+# so gating the whole pipeline at the larger number would delay physics checks
+# that are already valid.
 MIN_HISTORY_PACKETS = 2
 
 # Upper bound on the window handed to the feature engineer. Enough context for
@@ -63,6 +64,13 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
         # `id` breaks ties: created_at is a server default, so packets ingested
         # in the same instant share a timestamp and would otherwise come back
         # in arbitrary order -- which scrambles every diff-based feature.
+        #
+        # Ordered by arrival, not by sample_time_ms, even when every row has
+        # one: a reboot resets time_boot_ms to ~0, so a window spanning one
+        # would sort the post-reboot packets *before* the pre-reboot ones and
+        # the guard would keep re-evaluating an old pair for up to
+        # MAX_HISTORY_PACKETS packets. The guard handles a non-monotonic
+        # device interval itself (kinematic_guard._interval_seconds).
         .order_by(
             models.TelemetryLog.created_at.desc(),
             models.TelemetryLog.id.desc(),
@@ -84,6 +92,7 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
             "armed_status": row.armed_status,
             "satellites": row.satellites,
             "packet_sequence": row.packet_sequence,
+            "sample_time_ms": row.sample_time_ms,
             "created_at": row.created_at,
         }
         for row in reversed(rows)
@@ -150,6 +159,11 @@ def _run_detectors(
         return None
 
     result = explanation_service.explain_prediction(history)
+    if result.get("status") == "insufficient_data":
+        # Routine, not a fault: a drone that has just come online does not yet
+        # have a window the rate features are defined over.
+        logger.info(f"ML detection declined for {drone_id}: window not yet defined.")
+        return None
     if "error" in result:
         logger.warning(f"ML detection skipped for {drone_id}: {result['error']}")
         return None
@@ -177,11 +191,12 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
         if detection is None:
             return None
 
-        incident = incident_engine.process_ai_detection(
+        outcome = incident_engine.record_detection(
             db, detection, organization_id=organization_id
         )
+        incident = outcome.incident
         if incident is None:
-            # Suppressed as a duplicate of an already-open incident.
+            # A repeat of a live incident that this reading did not worsen.
             return None
 
         # Field names follow the frontend's DetectionResult interface
@@ -191,7 +206,12 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
         ranked = incident.shap_values or []
         return {
             "type": "incident",
-            "event_type": "AI_DETECTION",
+            # An escalation inside the suppression window used to update the
+            # row and tell nobody: the dashboard kept showing the lower
+            # severity. It is now broadcast as the same frame with the same
+            # incident_id, so a client keyed on the incident updates in place.
+            # Only event_type differs.
+            "event_type": "AI_DETECTION" if outcome.created else "INCIDENT_ESCALATED",
             "is_anomaly": True,
             "drone_id": incident.drone_id,
             "attack_type": incident.attack_type,

@@ -257,7 +257,11 @@ DRONE_API_KEY=$(openssl rand -hex 32)
 ADMIN_USERNAME, ADMIN_PASSWORD   # optional: provisions the first admin
 ```
 
-Frontend on `:80`, API on `:8000`, OpenAPI docs at `/docs`.
+Frontend on `:80`. The API is published on loopback only —
+`http://localhost:8000` (OpenAPI docs at `/docs`) — for the local demo and
+scripts; everything else reaches it through nginx at `/api`. Every variable in
+`.env` is passed to the backend container; the compose file overrides
+`DATABASE_URL` and `REDIS_URL` with the in-network values.
 
 ### Local development
 
@@ -304,12 +308,16 @@ cd frontend && npm run test
 | `GUARD_MAX_CLIMB_MPS` | `25` | Airframe climb/descent envelope |
 | `GUARD_GPS_SPEED_ERROR_MPS` | `25` | Tolerated GNSS/airframe speed disagreement |
 | `GUARD_MIN_SATELLITES` | `6` | Satellite-loss floor |
+| `GUARD_DEVICE_CLOCK_MAX_LEAD_S` | `10` | How far the device sample clock (`sample_time_ms`) may exceed packet arrival spacing before it is disbelieved for that pair |
 | `AI_INCIDENTS_ENABLED` | `false` | Let Tier 2 raise incidents — see Model results before enabling |
 | `MODEL_VERSION` | `v2` | Active model in the registry |
 | `MAVLINK_ENABLED` | `false` | Enable the MAVLink receiver |
 | `MAVLINK_ORGANIZATION_ID` | — | Required when MAVLink is enabled; telemetry without it is invisible to every tenant |
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
+| `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `FORWARDED_ALLOW_IPS` | nginx container (compose) / `127.0.0.1` (image) | Peers whose `X-Forwarded-For` uvicorn honours. Set by compose; not overridable from `.env` |
+| `SWARMGUARD_SUBNET` / `SWARMGUARD_PROXY_IP` | `172.28.0.0/24` / `172.28.0.10` | Compose network and the frontend's static address. Change only on a subnet collision, then `docker compose down` once |
 
 ## Roadmap
 

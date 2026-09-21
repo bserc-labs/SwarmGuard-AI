@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,26 @@ router = APIRouter(prefix="/ws", tags=["websocket"])
 # Policy violation. Used for every rejection so an unauthenticated client cannot
 # distinguish a bad token from a disabled account.
 CLOSE_POLICY = status.WS_1008_POLICY_VIOLATION
+
+# Application-level keepalive. The browser sends {"type": "ping"} every 15 s and
+# closes the socket itself if no frame arrives within 30 s
+# (frontend/src/services/websocket.ts). Protocol-level PING/PONG never reaches
+# browser JavaScript, so the answer has to be a data frame, in the one shape the
+# client already treats as liveness and discards without forwarding.
+PONG = {"type": "pong"}
+
+# The keepalive is 15 bytes. Anything larger is not one and is not worth parsing.
+MAX_KEEPALIVE_BYTES = 256
+
+
+def _is_ping(raw: str) -> bool:
+    if len(raw) > MAX_KEEPALIVE_BYTES:
+        return False
+    try:
+        message = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(message, dict) and message.get("type") == "ping"
 
 
 def _resolve_user(token: str) -> models.User | None:
@@ -65,8 +87,26 @@ async def telemetry_socket(websocket: WebSocket, token: str | None = None):
 
     try:
         while True:
-            # The client sends only keepalive pings; inbound content is ignored.
-            await websocket.receive_text()
+            # Inbound content is ignored except the keepalive, which is answered.
+            # It never was: on an idle feed -- no drones reporting, the normal
+            # state between sorties -- nothing arrived within the client's 30 s
+            # stale window, so it tore the socket down and reconnected every
+            # ~31 s, forever.
+            raw = await websocket.receive_text()
+            if not _is_ping(raw):
+                continue
+
+            # That reconnect loop was also, by accident, the only thing that
+            # re-validated the session: every reconnect re-ran the handshake.
+            # A socket that now stays up must not outlive its token, so expiry
+            # is re-checked on each ping -- no database, just the signature and
+            # `exp`. This close is post-accept, so the browser really does see
+            # 1008 and the client stops retrying instead of looping.
+            if decode_access_token(token) is None:
+                await websocket.close(code=CLOSE_POLICY, reason="Session expired")
+                break
+
+            await websocket.send_json(PONG)
     except WebSocketDisconnect:
         pass
     except Exception as exc:

@@ -26,6 +26,7 @@ erDiagram
         float speed
         float battery
         int packet_sequence
+        bigint sample_time_ms
         datetime created_at
     }
 

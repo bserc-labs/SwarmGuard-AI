@@ -102,6 +102,9 @@ class DroneSimulator:
         self.sequence = 0
         self.under_attack = False
         self.attack_type = None
+        # The simulated autopilot's boot clock: monotonic, never wall time,
+        # exactly like MAVLink time_boot_ms.
+        self.boot_monotonic = time.monotonic()
 
     def update_position(self):
         self.sequence += 1
@@ -164,6 +167,7 @@ class DroneSimulator:
             "armed_status": True,
             "satellites": self.satellites,
             "packet_sequence": self.sequence,
+            "sample_time_ms": int((time.monotonic() - self.boot_monotonic) * 1000),
         }
 
         try:

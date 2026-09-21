@@ -39,8 +39,8 @@ COMMANDER_USERNAME = "sprint7_commander"
 COMMANDER_PASSWORD = "sprint7-commander-pw"
 
 
-# In CI this suite is the point of the job, so "could not run" must be a
-# failure. Locally it stays a skip: a developer without a server running should
+# In the job that exists to run this suite, "could not run" must be a failure.
+# Everywhere else it stays a skip: a developer without a server running should
 # not be told they broke something.
 #
 # This distinction is why the file went unnoticed for so long. Every test here
@@ -48,17 +48,28 @@ COMMANDER_PASSWORD = "sprint7-commander-pw"
 # RBAC, tenant isolation, audit and rate limiting were reported green while
 # none of them had executed. A skip that means "we never checked" must not look
 # like a pass.
-IN_CI = os.getenv("CI", "").lower() in {"1", "true", "yes"}
+#
+# The switch is an explicit opt-in, not the generic CI variable. GitHub sets
+# CI=true in *every* job, including the unit-test job that collects this file
+# with no server and no administrator: keyed on CI, that job failed on all six
+# tests here and turned main red for a suite it was never meant to run. Only
+# the job that starts a server and provisions an admin sets this flag, and
+# tests/test_ci_workflow.py fails if that ever stops being true.
+REQUIRE_FLAG = "REQUIRE_LIVE_SECURITY_SUITE"
+
+
+def _must_run() -> bool:
+    return os.getenv(REQUIRE_FLAG, "").lower() in {"1", "true", "yes"}
 
 
 def _did_not_run(reason: str):
-    if IN_CI:
-        pytest.fail(f"live security suite could not run in CI: {reason}")
+    if _must_run():
+        pytest.fail(f"live security suite was required but could not run: {reason}")
     pytest.skip(reason)
 
 
 def requires_live_server():
-    """Skip locally, fail in CI, when there is no server or no admin to drive it.
+    """Skip, or fail where the suite is required, when it cannot be driven.
 
     A skipped integration test reports honestly that it did not run. A crashing
     one reports a defect that does not exist, which is worse: it trains everyone

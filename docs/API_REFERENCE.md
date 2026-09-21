@@ -54,6 +54,11 @@ routes above were read off the router.
   permission) **and** `x-drone-api-key: <KEY>`. Missing or wrong key → `403`.
 - **Note:** `packet_sequence` is **required**. Omitting it yields a `422` whose
   body names the field but is easy to miss.
+- **Optional:** `sample_time_ms` — the device's own sample clock in
+  milliseconds (MAVLink `time_boot_ms`; monotonic is sufficient, wall-clock
+  sync is not required). The kinematic guard rates motion over this interval
+  when present and over server arrival time otherwise; the incident evidence
+  records which (`"Time Base"`).
 - **Request Body:**
 ```json
 {
@@ -63,23 +68,30 @@ routes above were read off the router.
   "altitude": 150.0,
   "speed": 18.5,
   "battery": 82.0,
-  "packet_sequence": 1042
+  "packet_sequence": 1042,
+  "sample_time_ms": 812345
 }
 ```
-- **Response `200 OK`:**
+- **Response `200 OK`:** the accepted packet, echoed. Detection runs in the
+  background after the request returns; incidents arrive over the WebSocket and
+  `GET /incidents/`, not in this response.
 ```json
 {
-  "is_anomaly": true,
-  "anomaly_score": 0.88,
-  "attack_type": "GPS_SPOOFING",
-  "threat_level": 92,
-  "severity": "CRITICAL",
-  "explanation": "CRITICAL severity alert: Drone is reporting geographically impossible movements.",
-  "shap_top3": [
-    { "feature": "speed", "importance": 0.48 },
-    { "feature": "altitude", "importance": 0.32 },
-    { "feature": "battery_drain_rate", "importance": 0.20 }
-  ]
+  "status": "success",
+  "data": {
+    "drone_id": "drone_alpha",
+    "latitude": 34.0522,
+    "longitude": -118.2437,
+    "altitude": 150.0,
+    "speed": 18.5,
+    "heading": null,
+    "battery": 82.0,
+    "flight_mode": null,
+    "armed_status": null,
+    "satellites": null,
+    "packet_sequence": 1042,
+    "sample_time_ms": 812345
+  }
 }
 ```
 
@@ -113,4 +125,4 @@ routes above were read off the router.
 
 | Type | Endpoint | Query Param | Description |
 |:---|:---|:---:|:---|
-| `WebSocket` | `/ws/telemetry` | `?token=<JWT>` | Stream real-time telemetry alerts, threat updates, and kill-chain actions |
+| `WebSocket` | `/ws/telemetry` | `?token=<JWT>` | Live telemetry frames and incident alerts (`AI_DETECTION`, `INCIDENT_ESCALATED`), scoped to the caller's organization. Clients send `{"type":"ping"}` every 15 s as an application-level keepalive and the server answers `{"type":"pong"}`; token expiry is re-checked on each ping and an expired session is closed with `1008`. All other client frames are ignored. |

@@ -5,7 +5,7 @@ from typing import Any
 import pandas as pd
 
 from config import get_settings
-from models_ml.preprocess import FeatureEngineer
+from models_ml.preprocess import FeatureEngineer, undefined_features
 from models_ml.registry import model_registry
 from utils.logger import logger
 
@@ -62,6 +62,15 @@ class AIInferenceService:
         silently inverts the verdict, so neither path is a fallback for the
         other.
         """
+        if pd.isna(scaled_features).any():
+            # sklearn >= 1.4 treats NaN as a missing value and still returns a
+            # probability. A verdict over undefined features is not a verdict.
+            # Unreachable from predict(), which checks first; this is for every
+            # other caller that reaches the model.
+            raise ValueError(
+                "Refusing to score a feature vector containing NaN: the window is not fully defined."
+            )
+
         if hasattr(self.model, "predict_proba"):
             proba = self.model.predict_proba(scaled_features)[0]
             # Column order follows model.classes_; positive class is label 1.
@@ -110,15 +119,21 @@ class AIInferenceService:
             
             latest_features = df_features[feature_cols].iloc[[-1]].values
             
-            if pd.isna(latest_features).any():
-                logger.warning(json.dumps({"event": "invalid_feature_vector", "reason": "NaNs in features"}))
+            nan_features = undefined_features(feature_cols, latest_features)
+            if nan_features:
+                logger.warning(json.dumps({
+                    "event": "invalid_feature_vector",
+                    "reason": "NaNs in features",
+                    "features": nan_features,
+                }))
                 return {
-                    "is_anomaly": False, 
-                    "anomaly_score": 0.0, 
+                    "is_anomaly": False,
+                    "anomaly_score": 0.0,
                     "threat_level": "LOW",
-                    "status": "warmup"
+                    "status": "warmup",
+                    "nan_features": nan_features,
                 }
-                
+
             scaled_features = self.scaler.transform(latest_features)
 
             is_anomaly, score = self._score(scaled_features)

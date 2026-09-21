@@ -10,7 +10,8 @@ from fastapi import (
     Request,
     status,
 )
-from sqlalchemy.orm import Session
+from sqlalchemy import select, true
+from sqlalchemy.orm import Session, aliased
 
 import models
 import schemas
@@ -110,14 +111,43 @@ def get_latest_telemetry(
     tenant: TenantContext = Depends(require_permission(Permissions.TELEMETRY_READ)),
 ):
     """Fetch the latest telemetry packet for each active drone."""
-    # Note: DISTINCT ON is specific to PostgreSQL
-    logs = db.query(models.TelemetryLog).filter(
-        models.TelemetryLog.organization_id == tenant.organization_id
-    ).order_by(
-        models.TelemetryLog.drone_id, 
-        models.TelemetryLog.created_at.desc()
-    ).distinct(models.TelemetryLog.drone_id).all()
-    return logs
+    # One index lookup per drone, not one sort of the tenant's whole history.
+    #
+    # This used to be `SELECT DISTINCT ON (drone_id) ... ORDER BY drone_id,
+    # created_at DESC` over every telemetry row the organization holds -- no
+    # LIMIT, and no index covering that order, so the planner fetched them all
+    # and sorted (EXPLAIN: Unique -> Sort -> Seq Scan). The table keeps three
+    # days of packets; at the ingest cap that is about 13 million rows, sorted
+    # on every poll from three dashboard pages.
+    #
+    # `drones` holds exactly one row per (organization_id, drone_id)
+    # (uq_drones_org_drone_id, migration f6a7b8c9d0e1) and is refreshed by every
+    # packet, so it is the natural driver: for each drone the LATERAL subquery
+    # walks ix_telemetry_logs_org_drone_created_at (migration j0e1f2a3b4c5)
+    # newest-first and stops at the first row. Cost is proportional to fleet
+    # size, not to history length. Still PostgreSQL-only, as DISTINCT ON was.
+    #
+    # A drone that has never reported has no telemetry row and is therefore
+    # absent, exactly as before: the join is inner.
+    newest = (
+        select(models.TelemetryLog)
+        .where(
+            models.TelemetryLog.organization_id == models.Drone.organization_id,
+            models.TelemetryLog.drone_id == models.Drone.drone_id,
+        )
+        .order_by(models.TelemetryLog.created_at.desc(), models.TelemetryLog.id.desc())
+        .limit(1)
+        .lateral("newest")
+    )
+    newest_log = aliased(models.TelemetryLog, newest)
+    stmt = (
+        select(newest_log)
+        .select_from(models.Drone)
+        .join(newest, true())
+        .where(models.Drone.organization_id == tenant.organization_id)
+        .order_by(models.Drone.drone_id)
+    )
+    return db.execute(stmt).scalars().all()
 
 @router.get("/health/status")
 def get_telemetry_health():

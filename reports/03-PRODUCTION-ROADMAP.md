@@ -26,6 +26,35 @@ head.**
 | **New:** `drone_id` globally unique | ✅ scoped per organization |
 | **New:** CI ran on a branch that doesn't exist | ✅ `develop` → `development` |
 
+**Phase 0b is also done** — branch `fix/phase0b-hardening`, nine commits, one per
+item, each designed, independently re-verified against the code and adversarially
+critiqued before it was written (`04-PHASE0B-EXECUTION-PLAN.md`). Gates after
+every one: **ruff clean, mypy clean, 497 passed / 48 skipped** (from 388),
+frontend 107/107, single alembic head `j0e1f2a3b4c5`.
+
+| Item | Status |
+|---|---|
+| 0b.1 Tier 1 divided by DB insert time | ✅ rates on the device sample clock; evidence records which clock |
+| 0b.2 Rate limit defeated by `X-Forwarded-For` | ✅ API on loopback; uvicorn trusts only nginx's pinned address |
+| 0b.3 Docker ignored every `.env` tuning variable | ✅ `env_file`, with `environment:` still winning for network URLs |
+| 0b.4 Suppression race / resolved incidents / silent escalation | ✅ advisory lock, live-status filter, `INCIDENT_ESCALATED` broadcast |
+| 0b.5a `system_settings` not unique per org | ✅ unique index + race-safe create |
+| 0b.5b Email-collision account lockout | ✅ exact-username-first login + email validation |
+| 0b.5c/e Token in nginx log; idle socket reconnect loop | ✅ pong keepalive with expiry re-check; token redacted in both logs |
+| 0b.5f MAVLink blocked the event loop | ✅ persists via `asyncio.to_thread` |
+| 0b.5g Unbounded `/latest` sort; `/stats` in Python | ✅ composite index + LATERAL; SQL aggregates, byte-identical JSON |
+| 0b.5h `/ai/explain` attributed from NaN | ✅ refuses undefined vectors; `timestamp` now reaches the feature engineer |
+
+Two results worth more than the green: the concurrency test was run with the
+lock disabled and produced **2 rows instead of 1**, so it has teeth; and
+`EXPLAIN` shows the planner doing an **Index Scan on the new composite index**
+for `/telemetry/latest`, not a sort of the table.
+
+Still deliberately open from 0b: moving the WebSocket token out of the URL
+altogether; wiring MAVLink telemetry into the detection pipeline; routing
+heartbeat-raised incidents through the incident engine. Each is a behaviour
+change that did not belong inside the fix next to it.
+
 Everything in Phases 1–3 below is still outstanding.
 
 ---
@@ -218,12 +247,13 @@ defaulting to `now()`. Pick one; migrate the other away.
 
 ---
 
-## Phase 0b — Blockers found by the audit, not yet fixed
+## Phase 0b — Blockers found by the audit (✅ all fixed)
 
 A 126-agent audit ran across eight dimensions with adversarial verification
-after Phase 0 was implemented. Four of its blockers are fixed above. These
-remain, each verified by reading the cited code. They are ordered by how badly
-they hurt.
+after Phase 0 was implemented. Four of its blockers were fixed with Phase 0; the
+rest are below, each verified by reading the cited code, ordered by how badly
+they hurt. **All are now fixed** — see the status table at the top. The
+descriptions are kept as the record of what was wrong.
 
 ### 0b.1 — Tier 1 measures network arrival, not flight ⛔
 
