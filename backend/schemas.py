@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Mirrors the keys of middleware.rbac.ROLE_PERMISSIONS. A free-form string here
 # meant a typo produced a user with an empty permission set and no error at all.
@@ -11,6 +11,27 @@ UserRole = Literal["admin", "commander", "analyst", "operator", "observer"]
 # account creation and self-service password change.
 MIN_PASSWORD_LENGTH = 12
 
+# A structural check -- one "@", a non-empty local part, a dotted domain, no
+# whitespace -- deliberately not a full RFC 5322 validator. pydantic's EmailStr
+# needs the email-validator package, which is not a dependency, and its defaults
+# reject the `.test` and `.local` addresses the fixtures and bootstrap use. The
+# point is narrower: a value that is not shaped like an email must not be stored
+# as one. UserCreate.username forbids "@", so a valid email can never equal a
+# username -- which is what closed the login-shadowing attack at the input.
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+MAX_EMAIL_LENGTH = 254
+
+
+def _blank_email_is_none(value: object) -> object:
+    """Treat "" and whitespace as "no email" rather than storing them.
+
+    The Profile page submits the trimmed field verbatim, so clearing it sent "".
+    Stored as-is, the second user to do that collided on the unique email index.
+    """
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -18,9 +39,11 @@ class LoginRequest(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9._-]+$")
-    email: str | None = Field(None, max_length=254)
+    email: str | None = Field(None, max_length=MAX_EMAIL_LENGTH, pattern=EMAIL_PATTERN)
     password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
     role: UserRole = "operator"
+
+    _normalise_email = field_validator("email", mode="before")(_blank_email_is_none)
 
 class UserOut(BaseModel):
     id: int
@@ -35,7 +58,9 @@ class UserOut(BaseModel):
     }
 
 class UserUpdate(BaseModel):
-    email: str | None = None
+    email: str | None = Field(None, max_length=MAX_EMAIL_LENGTH, pattern=EMAIL_PATTERN)
+
+    _normalise_email = field_validator("email", mode="before")(_blank_email_is_none)
 
 class PasswordUpdate(BaseModel):
     current_password: str

@@ -2,7 +2,6 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import models
@@ -48,9 +47,18 @@ def _log_audit(db: Session, username: str, action: str, ip: str | None = None, o
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
 
     client_ip = request.client.host if request.client else None
-    user = db.query(models.User).filter(
-        or_(models.User.username == form_data.username, models.User.email == form_data.username)
-    ).first()
+    # Resolve the identifier deterministically. `username` and `email` are each
+    # unique, but nothing stops one account's email equalling another account's
+    # username. The previous `or_(...)` + `.first()` had no ORDER BY, so which of
+    # the two rows came back was a matter of heap order -- an operator in one
+    # organization could shadow an admin in another by setting their email to
+    # that admin's username, and the admin was locked out, with the failed
+    # logins audited against the wrong organization. An exact username match
+    # always wins; email is consulted only when no username matches.
+    identifier = form_data.username
+    user = db.query(models.User).filter(models.User.username == identifier).first()
+    if user is None:
+        user = db.query(models.User).filter(models.User.email == identifier).first()
     if not user:
         _log_audit(db, form_data.username, "LOGIN_FAILED", client_ip)
         raise HTTPException(

@@ -75,7 +75,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const payload = await res.json().catch(() => null);
-    throw new ApiError(payload?.detail || `Request failed (${res.status})`, res.status);
+    // FastAPI reports a request-validation failure (422) as a list of
+    // {loc, msg, type} objects, not a string. Passed through as-is it reached
+    // the operator as "[object Object]" -- which is what typing a non-email
+    // into the Profile page produced once the backend began validating it.
+    const detail = payload?.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((d: { msg?: string }) => d?.msg ?? String(d)).join("; ")
+      : detail;
+    throw new ApiError(message || `Request failed (${res.status})`, res.status);
   }
 
   if (res.status === 204) return undefined as T;
