@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
@@ -12,14 +13,37 @@ from services.audit_service import audit_service
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 def get_or_create_settings(db: Session, organization_id: int):
+    """This organization's settings row, created on first use.
+
+    May roll the session back (see below), so call it before staging anything
+    else on `db`. Both routes in this module do.
+    """
     settings = db.query(models.SystemSettings).filter(
         models.SystemSettings.organization_id == organization_id
     ).first()
-    if not settings:
-        settings = models.SystemSettings(organization_id=organization_id)
-        db.add(settings)
+    if settings:
+        return settings
+
+    settings = models.SystemSettings(organization_id=organization_id)
+    db.add(settings)
+    try:
         db.commit()
-        db.refresh(settings)
+    except IntegrityError:
+        # Two first requests for the same organization can both miss the SELECT
+        # above. ix_system_settings_organization_id (migration i9d0e1f2a3b4)
+        # lets exactly one INSERT through; the loser adopts the winner's row
+        # instead of surfacing a 500 -- or, before the index existed, leaving a
+        # second row whose thresholds the detector might or might not read.
+        db.rollback()
+        settings = db.query(models.SystemSettings).filter(
+            models.SystemSettings.organization_id == organization_id
+        ).first()
+        if settings is None:
+            # Not the race: a foreign-key failure or similar. Surface it.
+            raise
+        return settings
+
+    db.refresh(settings)
     return settings
 
 @router.get("/", response_model=schemas.SystemSettingsOut)
