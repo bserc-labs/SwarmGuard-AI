@@ -155,7 +155,14 @@ class Settings(BaseSettings):
     # Enable only to collect advisory scores for research.
     AI_INCIDENTS_ENABLED: bool = False
     
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: a blank assignment such as `MAVLINK_ORGANIZATION_ID=`
+    # means "unset", not "the empty string". .env.example ships several blanks
+    # and compose now passes .env through to the container whole; without this
+    # an empty string reached the `int | None` field and startup died with
+    # int_parsing before the first request.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
+    )
 
     @field_validator("SECRET_KEY")
     @classmethod
