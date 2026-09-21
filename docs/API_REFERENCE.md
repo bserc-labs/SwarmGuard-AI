@@ -125,4 +125,4 @@ routes above were read off the router.
 
 | Type | Endpoint | Query Param | Description |
 |:---|:---|:---:|:---|
-| `WebSocket` | `/ws/telemetry` | `?token=<JWT>` | Stream real-time telemetry alerts, threat updates, and kill-chain actions |
+| `WebSocket` | `/ws/telemetry` | `?token=<JWT>` | Live telemetry frames and incident alerts (`AI_DETECTION`, `INCIDENT_ESCALATED`), scoped to the caller's organization. Clients send `{"type":"ping"}` every 15 s as an application-level keepalive and the server answers `{"type":"pong"}`; token expiry is re-checked on each ping and an expired session is closed with `1008`. All other client frames are ignored. |

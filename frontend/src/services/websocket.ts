@@ -72,8 +72,10 @@ export class TelemetrySocket {
     this.intentionalClose = false;
     this.updateState(this.retries > 0 ? "RECONNECTING" : "CONNECTING");
 
-    // The backend reads the token from the query string. This lands in proxy
-    // access logs and is tracked for migration to a cookie-authenticated handshake.
+    // The backend reads the token from the query string. nginx no longer logs
+    // the /ws/ request line and the backend redacts it from its own access
+    // log, but a credential in a URL is still one proxy misconfiguration away
+    // from a log file. Tracked for removal from the URL.
     const url = `${telemetrySocketUrl()}?token=${encodeURIComponent(token)}`;
 
     try {

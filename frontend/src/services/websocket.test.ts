@@ -225,6 +225,38 @@ describe("TelemetrySocket", () => {
     expect(ws.readyState).toBe(MockWebSocket.OPEN);
   });
 
+  it("sends a JSON ping on each heartbeat tick", () => {
+    // The backend answers exactly this frame (routers/websocket.py _is_ping);
+    // changing it is a wire-format change, not a refactor.
+    build({ pingIntervalMs: 1000, staleAfterMs: 5000 }).connect();
+    const ws = MockWebSocket.latest();
+    ws.open();
+
+    vi.advanceTimersByTime(1000);
+    expect(ws.sent).toEqual([JSON.stringify({ type: "ping" })]);
+  });
+
+  it("treats a pong as liveness so an idle feed stays connected", () => {
+    // No telemetry at all -- the normal state between sorties -- only the
+    // backend's pong replies, for four times the stale window. The backend
+    // used to send nothing back, so this socket tore itself down and
+    // reconnected every ~31 s for as long as the dashboard was open.
+    const onMessage = vi.fn();
+    build({ onMessage, pingIntervalMs: 1000, staleAfterMs: 5000 }).connect();
+    const ws = MockWebSocket.latest();
+    ws.open();
+
+    for (let i = 0; i < 20; i += 1) {
+      vi.advanceTimersByTime(1000);
+      ws.receive({ type: "pong" });
+    }
+
+    expect(ws.readyState).toBe(MockWebSocket.OPEN);
+    expect(states.at(-1)).toBe("CONNECTED");
+    expect(MockWebSocket.instances).toHaveLength(1); // never reconnected
+    expect(onMessage).not.toHaveBeenCalled(); // pongs never reach the app
+  });
+
   it("does not reconnect after an intentional disconnect", () => {
     const socket = build();
     socket.connect();

@@ -1,3 +1,5 @@
+import logging
+import re
 from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI
@@ -27,6 +29,31 @@ from utils.limiter import limiter, storage_healthy
 
 # Setup JSON logging
 from utils.logger import logger
+
+
+class RedactQueryToken(logging.Filter):
+    """Keep bearer tokens out of the access log.
+
+    The WebSocket handshake carries the JWT as `?token=<jwt>`, and uvicorn's
+    access logger writes the full path with its query string for every accepted
+    and every rejected socket. nginx was told to stop logging /ws/, but this is
+    the second place the same credential landed, and the one nginx cannot reach.
+    """
+
+    _token = re.compile(r"([?&]token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self._token.sub(r"\1[redacted]", arg) if isinstance(arg, str) else arg
+                for arg in record.args
+            )
+        if isinstance(record.msg, str):
+            record.msg = self._token.sub(r"\1[redacted]", record.msg)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(RedactQueryToken())
 
 app = FastAPI(title="SwarmGuard AI API")
 app.state.limiter = limiter
