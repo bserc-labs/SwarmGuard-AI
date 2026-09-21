@@ -145,9 +145,9 @@ class MavlinkReceiver:
                 await asyncio.sleep(0.01)
                 continue
                 
-            self._process_message(msg)
+            await self._process_message(msg)
 
-    def _process_message(self, msg):
+    async def _process_message(self, msg):
         msg_type = msg.get_type()
         sys_id = msg.get_srcSystem()
         drone_id = f"{self.drone_id_prefix}{sys_id}"
@@ -207,9 +207,25 @@ class MavlinkReceiver:
                 "sample_time_ms": msg.time_boot_ms,
             }
             
-            self._ingest_packet(packet_data)
+            await self._ingest_packet(packet_data)
 
-    def _ingest_packet(self, packet_data: dict):
+    @staticmethod
+    def _persist_packet(packet: schemas.TelemetryPacket, organization_id: int) -> dict:
+        """Blocking database work for one packet. Runs in a worker thread.
+
+        Owns its session. A Session is not thread-safe, so each unit of work
+        that leaves the loop opens and closes its own -- the same rule
+        detection_pipeline._detect_sync and the heartbeat monitor follow.
+        """
+        db = SessionLocal()
+        try:
+            return telemetry_service.process_telemetry(
+                packet, db, organization_id=organization_id
+            )
+        finally:
+            db.close()
+
+    async def _ingest_packet(self, packet_data: dict) -> None:
         try:
             # Validate via Pydantic
             packet = schemas.TelemetryPacket(**packet_data)
@@ -224,18 +240,29 @@ class MavlinkReceiver:
             logger.error("MAVLINK_ORGANIZATION_ID is not set; dropping packet.")
             return
 
-        db = SessionLocal()
+        # The SELECT + INSERT + COMMIT is synchronous psycopg2 I/O. It used to
+        # run right here, on the loop that also serves HTTP and WebSockets, so
+        # at ~10 Hz per vehicle every packet stalled every client for a database
+        # round trip.
+        #
+        # Awaited in a worker thread rather than fired off as a task, so one
+        # vehicle's packets land in order. The consequence is deliberate and
+        # worth knowing: all vehicles share one in-flight write, so sustained
+        # rate is bounded by database round-trip time, and a saturated pool
+        # (DB_POOL_TIMEOUT) stalls this receiver -- not the HTTP server.
         try:
-            processed_data = telemetry_service.process_telemetry(
-                packet, db, organization_id=organization_id
+            processed_data = await asyncio.to_thread(
+                self._persist_packet, packet, organization_id
             )
-            task = asyncio.create_task(ws_manager.broadcast(processed_data, organization_id))
-            _broadcast_tasks.add(task)
-            task.add_done_callback(_broadcast_tasks.discard)
         except Exception as e:
             logger.error(f"Failed to ingest MAVLink packet: {e}")
-        finally:
-            db.close()
+            return
+
+        # Delivery stays on the loop, which owns the sockets; create_task from
+        # the worker thread would raise "no running event loop".
+        task = asyncio.create_task(ws_manager.broadcast(processed_data, organization_id))
+        _broadcast_tasks.add(task)
+        task.add_done_callback(_broadcast_tasks.discard)
 
 
 mavlink_receiver = MavlinkReceiver()
