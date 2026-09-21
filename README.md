@@ -308,6 +308,7 @@ cd frontend && npm run test
 | `GUARD_MAX_CLIMB_MPS` | `25` | Airframe climb/descent envelope |
 | `GUARD_GPS_SPEED_ERROR_MPS` | `25` | Tolerated GNSS/airframe speed disagreement |
 | `GUARD_MIN_SATELLITES` | `6` | Satellite-loss floor |
+| `GUARD_DEVICE_CLOCK_MAX_LEAD_S` | `10` | How far the device sample clock (`sample_time_ms`) may exceed packet arrival spacing before it is disbelieved for that pair |
 | `AI_INCIDENTS_ENABLED` | `false` | Let Tier 2 raise incidents — see Model results before enabling |
 | `MODEL_VERSION` | `v2` | Active model in the registry |
 | `MAVLINK_ENABLED` | `false` | Enable the MAVLink receiver |

@@ -105,6 +105,8 @@ export interface TelemetryPacket {
   armed_status?: boolean | null;
   satellites?: number | null;
   packet_sequence: number;
+  /** Device sample clock in ms (MAVLink time_boot_ms). Absent when the source does not report one. */
+  sample_time_ms?: number | null;
 }
 
 /** Rows from GET /telemetry/* also carry storage metadata. */

@@ -77,6 +77,14 @@ class TelemetryPacket(BaseModel):
     armed_status: bool | None = None
     satellites: int | None = Field(None, ge=0)
     packet_sequence: int = Field(..., ge=0)
+    # Device sample clock, milliseconds. Only monotonicity is required -- the
+    # kinematic guard needs two samples that share a zero, not a wall clock --
+    # so MAVLink GLOBAL_POSITION_INT.time_boot_ms is the canonical source and
+    # epoch-milliseconds works equally. Optional: a packet without it is rated
+    # on server arrival time (created_at) and the incident evidence says so.
+    # Bounded at the largest integer JSON consumers carry exactly; uint32
+    # time_boot_ms (4.29e9) and epoch-ms (1.7e12) both fit.
+    sample_time_ms: int | None = Field(None, ge=0, le=2**53 - 1)
 
 
 class DetectionResult(BaseModel):

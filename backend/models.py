@@ -15,7 +15,7 @@ Typing convention, chosen so that no DDL changes:
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -67,6 +67,12 @@ class TelemetryLog(Base):
     armed_status: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     satellites: Mapped[int | None] = mapped_column(Integer, nullable=True)
     packet_sequence: Mapped[int] = mapped_column(Integer, nullable=True)
+    # Device sample clock, ms (MAVLink time_boot_ms or equivalent). Nullable:
+    # added by migration g7b8c9d0e1f2, so rows from before it, and devices that
+    # never report one, are NULL and the kinematic guard rates them on
+    # created_at. BigInteger because a device may report epoch milliseconds,
+    # which overflow a 32-bit Integer.
+    sample_time_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, primary_key=True, server_default=func.now(), index=True)
 
 

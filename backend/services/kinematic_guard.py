@@ -39,6 +39,16 @@ settings = get_settings()
 
 EARTH_RADIUS_M = 6371000.0
 
+# Which clock supplied the interval a rate was computed over. Recorded in the
+# evidence: an analyst reading "5,533 m in 1.50 s" needs to know whether that
+# 1.50 s is flight time or the gap between two database inserts.
+TIME_BASE_DEVICE = "device"
+TIME_BASE_ARRIVAL = "arrival"
+_TIME_BASE_LABELS = {
+    TIME_BASE_DEVICE: "device clock",
+    TIME_BASE_ARRIVAL: "server arrival time",
+}
+
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in metres between two fixes."""
@@ -100,6 +110,12 @@ class GuardVerdict:
     severity: str | None = None
     threat_score: float = 0.0
     violations: list[Violation] = field(default_factory=list)
+    # Which clock the interval came from (TIME_BASE_*), the interval itself,
+    # and why the device clock was not used when it was not. All None when no
+    # interval was computed at all (fewer than two packets, or no timestamps).
+    time_base: str | None = None
+    interval_s: float | None = None
+    interval_note: str | None = None
 
     def to_detection(self, drone_id: str) -> dict[str, Any]:
         """Shape this as the detection dict IncidentEngine consumes.
@@ -152,6 +168,7 @@ class GuardVerdict:
                         v.detail for v in self.violations[2:5]
                     ) or "None",
                     "Detector": "kinematic_guard",
+                    "Time Base": _TIME_BASE_LABELS.get(self.time_base or "", "unknown"),
                 },
                 "metadata": {
                     "detector": "kinematic_guard",
@@ -160,6 +177,9 @@ class GuardVerdict:
                     "deterministic": True,
                     "violations": [v.to_dict() for v in self.violations],
                     "explanation_confidence_percent": 100.0,
+                    "time_base": self.time_base,
+                    "interval_s": round(self.interval_s, 3) if self.interval_s is not None else None,
+                    "interval_note": self.interval_note,
                 },
             },
         }
@@ -177,22 +197,31 @@ class KinematicGuard:
         self.max_climb_mps = settings.GUARD_MAX_CLIMB_MPS
         self.gps_speed_error_mps = settings.GUARD_GPS_SPEED_ERROR_MPS
         self.min_satellites = settings.GUARD_MIN_SATELLITES
+        self.device_clock_max_lead_s = settings.GUARD_DEVICE_CLOCK_MAX_LEAD_S
 
     def evaluate(self, history: list[dict[str, Any]]) -> GuardVerdict:
         """Check the most recent packet against its predecessor.
 
         Needs two packets: every check is a rate, and a rate needs an interval.
+        The interval comes from the device's own sample clock when both packets
+        carry one and it is usable, otherwise from server arrival time -- see
+        `_interval_seconds` for why that distinction is the whole detector.
         """
         if len(history) < 2:
             return GuardVerdict(triggered=False)
 
         prev, curr = history[-2], history[-1]
 
-        dt = self._interval_seconds(prev, curr)
+        dt, time_base, note = self._interval_seconds(prev, curr)
         if dt is None or dt <= 0:
             # Two packets sharing a timestamp make every rate infinite. Decline
             # rather than report a division artefact as an attack.
-            return GuardVerdict(triggered=False)
+            return GuardVerdict(
+                triggered=False,
+                time_base=None if dt is None else time_base,
+                interval_note=note,
+            )
+        clock = _TIME_BASE_LABELS.get(time_base or "", "unknown clock")
 
         violations: list[Violation] = []
 
@@ -211,7 +240,7 @@ class KinematicGuard:
                     threshold=self.max_speed_mps,
                     unit="m/s",
                     detail=(
-                        f"Position moved {distance:,.0f} m in {dt:.2f} s, implying "
+                        f"Position moved {distance:,.0f} m in {dt:.2f} s ({clock}), implying "
                         f"{gps_speed:,.0f} m/s — beyond the airframe's {self.max_speed_mps:.0f} m/s limit."
                     ),
                 )
@@ -229,7 +258,7 @@ class KinematicGuard:
                     threshold=self.gps_speed_error_mps,
                     unit="m/s",
                     detail=(
-                        f"GPS track implies {gps_speed:,.0f} m/s but the airframe reports "
+                        f"GPS track implies {gps_speed:,.0f} m/s ({clock}) but the airframe reports "
                         f"{reported_speed:,.1f} m/s — a {speed_error:,.0f} m/s disagreement."
                     ),
                 )
@@ -246,7 +275,7 @@ class KinematicGuard:
                     threshold=self.max_climb_mps,
                     unit="m/s",
                     detail=(
-                        f"Altitude changed {alt_change:,.1f} m in {dt:.2f} s "
+                        f"Altitude changed {alt_change:,.1f} m in {dt:.2f} s ({clock}) "
                         f"({vertical_speed:,.1f} m/s), beyond the {self.max_climb_mps:.0f} m/s limit."
                     ),
                 )
@@ -278,7 +307,9 @@ class KinematicGuard:
             )
 
         if not violations:
-            return GuardVerdict(triggered=False)
+            return GuardVerdict(
+                triggered=False, time_base=time_base, interval_s=dt, interval_note=note
+            )
 
         # Rank by how far past the threshold, so the most egregious violation
         # leads the explanation.
@@ -289,17 +320,64 @@ class KinematicGuard:
             severity=self._severity(violations),
             threat_score=self._score(violations),
             violations=violations,
+            time_base=time_base,
+            interval_s=dt,
+            interval_note=note,
         )
 
-    @staticmethod
-    def _interval_seconds(prev: dict, curr: dict) -> float | None:
+    def _interval_seconds(
+        self, prev: dict, curr: dict
+    ) -> tuple[float | None, str | None, str | None]:
+        """The interval to divide by, which clock it came from, and why.
+
+        This used to read only `created_at`, a server-side now() at insert. That
+        is packet *arrival* cadence, not flight time, and with Tier 2 disabled
+        this guard is the entire detector -- so every rate it checked was being
+        divided by the wrong number. Two nominal packets delivered in a 50 ms
+        burst implied 540 m/s and filed a CRITICAL spoof; a real jump whose
+        packets happened to arrive far apart was diluted under the threshold.
+
+        A rate needs a clock that is monotonic between two samples, not one
+        that agrees with the wall. MAVLink `time_boot_ms` is exactly that, and
+        `sample_time_ms` carries it. The device clock is preferred when both
+        packets have one and it is usable; otherwise arrival time, as before,
+        and the verdict records which so the evidence is honest about it.
+
+        Returns (interval, time_base, note). `note` names the reason the device
+        clock was not used; it is None on the device path.
+        """
+        arrival: float | None = None
         prev_t, curr_t = prev.get("created_at"), curr.get("created_at")
-        if prev_t is None or curr_t is None:
-            return None
-        try:
-            return (curr_t - prev_t).total_seconds()
-        except (TypeError, AttributeError):
-            return None
+        if prev_t is not None and curr_t is not None:
+            try:
+                arrival = (curr_t - prev_t).total_seconds()
+            except (TypeError, AttributeError):
+                arrival = None
+
+        prev_ms, curr_ms = prev.get("sample_time_ms"), curr.get("sample_time_ms")
+        if prev_ms is None or curr_ms is None:
+            if arrival is None:
+                return None, None, "no_timestamps"
+            return arrival, TIME_BASE_ARRIVAL, "device_time_absent"
+
+        device = (curr_ms - prev_ms) / 1000.0
+
+        # A reboot resets time_boot_ms to ~0, and a uint32 wraps after 49.7
+        # days; either shows up as a backwards or repeated clock. Degrade to
+        # arrival time rather than divide by a negative or zero interval.
+        if device <= 0:
+            return arrival, TIME_BASE_ARRIVAL, "device_clock_not_monotonic"
+
+        # Clock-rate sanity bound, not an evasion defence: packets cannot have
+        # been sampled much further apart than they were delivered plus
+        # buffering. A device interval far beyond arrival means the clock is
+        # broken or mis-scaled, and dividing by it would hide a real jump.
+        # Buffered bursts run the other way (device > arrival by a little) and
+        # are exactly the case the device clock exists for.
+        if arrival is not None and device > arrival + self.device_clock_max_lead_s:
+            return arrival, TIME_BASE_ARRIVAL, "device_interval_exceeds_arrival"
+
+        return device, TIME_BASE_DEVICE, None
 
     @staticmethod
     def _classify(violations: list[Violation]) -> str:

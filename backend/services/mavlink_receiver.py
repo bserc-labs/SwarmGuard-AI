@@ -200,7 +200,11 @@ class MavlinkReceiver:
                 "flight_mode": state["flight_mode"],
                 "armed_status": state["armed_status"],
                 "satellites": state["satellites"],
-                "packet_sequence": self.packet_sequence
+                "packet_sequence": self.packet_sequence,
+                # ms since autopilot boot (uint32, wraps after 49.7 days). The
+                # guard needs only a monotonic clock, so this is the right
+                # source; SYS_TIME.time_unix_usec is not required.
+                "sample_time_ms": msg.time_boot_ms,
             }
             
             self._ingest_packet(packet_data)

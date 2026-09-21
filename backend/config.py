@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     # disagrees by orders of magnitude.
     GUARD_GPS_SPEED_ERROR_MPS: float = 25.0
     GUARD_MIN_SATELLITES: int = 6
+    # Clock-rate sanity bound for the device sample clock (sample_time_ms).
+    # How much longer the device may say two samples were apart than their
+    # packets were on arrival before the device clock is disbelieved for that
+    # pair and the guard falls back to arrival time. Covers delivery jitter and
+    # buffered bursts; a device interval far beyond that means a broken or
+    # mis-scaled clock, and dividing by it would hide a real jump.
+    GUARD_DEVICE_CLOCK_MAX_LEAD_S: float = 10.0
 
     # --- Tier 2: ML anomaly layer ------------------------------------------
     #

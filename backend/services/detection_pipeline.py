@@ -63,6 +63,13 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
         # `id` breaks ties: created_at is a server default, so packets ingested
         # in the same instant share a timestamp and would otherwise come back
         # in arbitrary order -- which scrambles every diff-based feature.
+        #
+        # Ordered by arrival, not by sample_time_ms, even when every row has
+        # one: a reboot resets time_boot_ms to ~0, so a window spanning one
+        # would sort the post-reboot packets *before* the pre-reboot ones and
+        # the guard would keep re-evaluating an old pair for up to
+        # MAX_HISTORY_PACKETS packets. The guard handles a non-monotonic
+        # device interval itself (kinematic_guard._interval_seconds).
         .order_by(
             models.TelemetryLog.created_at.desc(),
             models.TelemetryLog.id.desc(),
@@ -84,6 +91,7 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
             "armed_status": row.armed_status,
             "satellites": row.satellites,
             "packet_sequence": row.packet_sequence,
+            "sample_time_ms": row.sample_time_ms,
             "created_at": row.created_at,
         }
         for row in reversed(rows)
