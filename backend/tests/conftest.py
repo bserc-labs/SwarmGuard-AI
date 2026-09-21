@@ -76,6 +76,12 @@ def purge_audit_logs(db, organization_id: int) -> int:
 
     Scoped to one organization on purpose. This must never become a way to
     clear the real audit trail.
+
+    **It opens with a rollback**, so anything the caller has merely staged is
+    discarded. Commit your own deletes before calling this, and do not
+    interleave it with other teardown steps in a loop -- doing exactly that
+    silently dropped a fixture's drone deletions and left its organizations
+    un-deletable behind their foreign key.
     """
     db.rollback()
     db.execute(text("SET LOCAL swarmguard.audit_maintenance = 'on'"))

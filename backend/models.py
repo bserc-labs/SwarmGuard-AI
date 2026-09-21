@@ -101,10 +101,20 @@ class Incident(Base):
 
 class Drone(Base):
     __tablename__ = "drones"
+    # Identifiers are unique per organization, not globally -- the same defect
+    # and the same fix as geofence zone names below. See migration f6a7b8c9d0e1.
+    __table_args__ = (
+        UniqueConstraint("organization_id", "drone_id", name="uq_drones_org_drone_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     organization_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
-    drone_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=True)
+    # Unique per organization, not globally -- see migration f6a7b8c9d0e1. A
+    # global unique index here meant two tenants could not both operate a
+    # "UAV-001": the second one's ingest failed with a constraint violation on
+    # every packet, and the failure itself disclosed that another tenant held
+    # that identifier.
+    drone_id: Mapped[str] = mapped_column(String, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String, default="ACTIVE", nullable=True)  # ACTIVE, COMPROMISED, GROUNDED, RETURNING
     last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
     last_command: Mapped[str | None] = mapped_column(String, nullable=True)
