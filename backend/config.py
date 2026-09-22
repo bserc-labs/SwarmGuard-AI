@@ -1,7 +1,28 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Where Docker and Kubernetes mount secrets, one file per value, named after
+# the setting (`/run/secrets/secret_key` fills SECRET_KEY; matching ignores
+# case and surrounding whitespace is stripped).
+#
+# A secret passed as an environment variable is printed by `docker inspect`,
+# inherited by every child process and captured in crash dumps. A mounted file
+# is none of those. Environment variables are still read, and still win, so a
+# native run, CI and the test suite are unchanged; compose deliberately passes
+# the secrets as *empty* variables, which env_ignore_empty treats as unset, so
+# the value can only come from the file.
+#
+# Only handed to pydantic when it exists: it warns on every start otherwise.
+SECRETS_DIR = Path(os.getenv("SECRETS_DIR", "/run/secrets"))
+
+
+def _secrets_dir() -> str | None:
+    return str(SECRETS_DIR) if SECRETS_DIR.is_dir() else None
+
 
 # Values that have appeared in committed examples, compose files, or CI.
 # Treating them as secrets in a real deployment is the same as having none.
@@ -38,6 +59,20 @@ def _db_password(database_url: str) -> str | None:
         return None
 
 
+def _warn_if_weak_db_password(password: str | None) -> None:
+    if password and password.lower() in WEAK_DB_PASSWORDS:
+        import warnings
+
+        warnings.warn(
+            f"The database connection uses a weak, guessable password ({len(password)} "
+            "chars, dictionary word). This is acceptable only for a local or "
+            "CI database that is not reachable off-host. Generate one with: "
+            "openssl rand -hex 32",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def _validate_secret(value: str, field_name: str, *, min_length: int = MIN_SECRET_LENGTH) -> str:
     """Reject secrets that are absent, too short, or publicly known."""
     if not value or not value.strip():
@@ -57,7 +92,22 @@ def _validate_secret(value: str, field_name: str, *, min_length: int = MIN_SECRE
 
 class Settings(BaseSettings):
     DATABASE_URL: str
+    # The database password, supplied apart from the URL so that the URL can sit
+    # in ordinary configuration and only this is secret. It fills in a
+    # DATABASE_URL that carries no password; a URL with its own is left alone.
+    # Under compose it arrives as the file /run/secrets/database_password.
+    DATABASE_PASSWORD: str | None = None
     SECRET_KEY: str
+    # Rotation without an outage. Tokens are always *signed* with SECRET_KEY and
+    # *verified* against SECRET_KEY and then this. To rotate: move the current
+    # key here, put a new one in SECRET_KEY, restart; clear this again once
+    # ACCESS_TOKEN_EXPIRE_MINUTES have passed and every old token has expired.
+    #
+    # Without it, changing SECRET_KEY invalidates every session at the same
+    # instant, so in practice the key is never changed. If the key has actually
+    # leaked, that instant logout is exactly what you want: rotate and leave
+    # this empty (scripts/rotate-secret-key.sh --emergency).
+    SECRET_KEY_PREVIOUS: str | None = None
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
@@ -131,6 +181,38 @@ class Settings(BaseSettings):
     # 30 s default, which the client times out before and so hides the cause.
     DB_POOL_TIMEOUT: int = 10
 
+    # --- CORS ----------------------------------------------------------------
+    #
+    # Comma-separated origins allowed to call the API from a browser with
+    # credentials. The deployed frontend does not need to be listed: nginx
+    # serves the page and proxies /api on one origin, so those requests are
+    # same-origin and CORS never applies. This is for a page served from
+    # somewhere else -- in practice the Vite dev server -- and for the API
+    # reached directly on the loopback port.
+    #
+    # Never "*": with credentials allowed that would let any site a logged-in
+    # operator visits drive the API as them.
+    CORS_ALLOWED_ORIGINS: str = (
+        "http://localhost:5173,https://localhost,https://127.0.0.1,"
+        "http://localhost,http://127.0.0.1"
+    )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    # --- Schema guard -------------------------------------------------------
+    #
+    # Migrations run once, from a dedicated job, not from every container start
+    # (two replicas starting together ran the same DDL concurrently). The API
+    # therefore checks at startup that the database is at the revision this
+    # build ships, and refuses to serve if it is behind -- see
+    # utils/schema_check.py for why "ahead" only warns.
+    #
+    # Turn this off only to bring the API up against a database you are in the
+    # middle of repairing by hand.
+    REQUIRE_SCHEMA_AT_HEAD: bool = True
+
     # --- Tier 1: kinematic guard -------------------------------------------
     #
     # Physical limits of the airframe, with margin. These are deliberately set
@@ -168,7 +250,11 @@ class Settings(BaseSettings):
     # an empty string reached the `int | None` field and startup died with
     # int_parsing before the first request.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_ignore_empty=True,
+        secrets_dir=_secrets_dir(),
     )
 
     @field_validator("SECRET_KEY")
@@ -180,6 +266,14 @@ class Settings(BaseSettings):
     @classmethod
     def _check_drone_api_key(cls, v: str) -> str:
         return _validate_secret(v, "DRONE_API_KEY")
+
+    @field_validator("SECRET_KEY_PREVIOUS", mode="before")
+    @classmethod
+    def _check_previous_secret_key(cls, v: str | None) -> str | None:
+        # Compose always mounts the file; an empty one means "not rotating".
+        if v is None or not str(v).strip():
+            return None
+        return _validate_secret(str(v).strip(), "SECRET_KEY_PREVIOUS")
 
     @field_validator("DATABASE_URL")
     @classmethod
@@ -196,19 +290,46 @@ class Settings(BaseSettings):
 
         Escalate this to a failure once deployment sets its own credentials.
         """
-        password = _db_password(v)
-        if password and password.lower() in WEAK_DB_PASSWORDS:
-            import warnings
+        _warn_if_weak_db_password(_db_password(v))
+        return v
 
-            warnings.warn(
-                f"DATABASE_URL uses a weak, guessable password ({len(password)} "
-                "chars, dictionary word). This is acceptable only for a local or "
-                "CI database that is not reachable off-host. Generate one with: "
-                "openssl rand -hex 32",
-                UserWarning,
-                stacklevel=2,
+    @field_validator("CORS_ALLOWED_ORIGINS")
+    @classmethod
+    def _no_wildcard_origin(cls, v: str) -> str:
+        if any(origin.strip() == "*" for origin in v.split(",")):
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must not contain '*': the API allows credentials, so a "
+                "wildcard would let any website act as a signed-in operator. List origins."
             )
         return v
+
+    @model_validator(mode="after")
+    def _previous_key_must_differ(self) -> "Settings":
+        if self.SECRET_KEY_PREVIOUS and self.SECRET_KEY_PREVIOUS == self.SECRET_KEY:
+            raise ValueError(
+                "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
+                "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _assemble_database_url(self) -> "Settings":
+        """Join DATABASE_PASSWORD into a DATABASE_URL that has none."""
+        if not self.DATABASE_PASSWORD or _db_password(self.DATABASE_URL) is not None:
+            return self
+        from sqlalchemy.engine import make_url
+        from sqlalchemy.exc import ArgumentError
+
+        try:
+            url = make_url(self.DATABASE_URL)
+        except ArgumentError as exc:
+            raise ValueError("DATABASE_URL is not a valid database URL") from exc
+        # .set() percent-encodes, so a password containing @ : / # survives.
+        self.DATABASE_URL = url.set(password=self.DATABASE_PASSWORD).render_as_string(
+            hide_password=False
+        )
+        _warn_if_weak_db_password(self.DATABASE_PASSWORD)
+        return self
 
 
 @lru_cache

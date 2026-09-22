@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -11,7 +12,8 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import models
-from database import SessionLocal
+from config import get_settings
+from database import SessionLocal, engine
 from routers import (
     ai,
     ai_explain,
@@ -29,6 +31,7 @@ from utils.limiter import limiter, storage_healthy
 
 # Setup JSON logging
 from utils.logger import logger
+from utils.schema_check import assert_schema_current
 
 
 class RedactQueryToken(logging.Filter):
@@ -61,7 +64,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost", "http://127.0.0.1"],
+    allow_origins=get_settings().cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,6 +76,24 @@ async def http_exception_handler(request, exc):
         status_code=exc.status_code,
         content={"error": "HTTP Exception", "detail": str(exc.detail)}
     )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """422 without echoing the rejected value back.
+
+    FastAPI's default body repeats each offending value under `input`. On
+    POST /users/ a password that failed the length rule came straight back in
+    the response, and from there into browser dev tools, proxy logs and crash
+    reports. Location, message and type tell a client everything it needs; the
+    value stays on the server. Same envelope as every other error, so a client
+    can key on `error` for all of them.
+    """
+    detail = [
+        {key: value for key, value in error.items() if key in ("type", "loc", "msg")}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"error": "Validation Error", "detail": detail})
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -163,7 +184,11 @@ async def periodic_database_cleanup():
 @app.on_event("startup")
 async def startup_event():
     logger.info("Initializing SwarmGuard AI Backend...")
-    # Alembic handles migrations and hypertable initialization in production.
+    # Migrations are applied by the migrate job, never here. Fail now, with the
+    # reason, rather than on whichever request first meets a missing column.
+    # In a worker thread: it is a blocking database call on the event loop.
+    if get_settings().REQUIRE_SCHEMA_AT_HEAD:
+        await asyncio.to_thread(assert_schema_current, engine, logger)
     # Hold references: a bare create_task() result can be garbage-collected
     # while the coroutine is still running.
     app.state.background_tasks = [

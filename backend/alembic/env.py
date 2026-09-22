@@ -1,6 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from alembic import context
 
@@ -65,13 +65,29 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# One migrator at a time.
+#
+# `alembic upgrade head` reads the current revision and then applies what is
+# missing. Two of them starting together both read "nothing applied", and both
+# run the same CREATE TABLE against the same database: one dies on "relation
+# already exists", and which one -- and how far the other got -- is a matter of
+# timing. That was the situation whenever two backend replicas started at once,
+# because migrations ran from the container entrypoint.
+#
+# They now run from a single job, and this lock is what makes an overlap safe
+# anyway: a rolling deploy that starts a second job, or a person at a terminal.
+# It is a session-level advisory lock, taken before alembic looks at the
+# version table, so the second migrator waits, then reads the revision the first
+# one just committed and finds nothing to do. Session-level rather than
+# transaction-level because it must outlive alembic's own transaction; it is
+# released explicitly, and by the server if this process dies holding it.
+#
+# The key is arbitrary but must be the same for every migrator: "SGMI".
+MIGRATION_LOCK_KEY = 0x53474D49
+
+
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
+    """Run migrations in 'online' mode, serialised across processes."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -79,12 +95,26 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        locked = connection.dialect.name == "postgresql"
+        if locked:
+            connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK_KEY})
+            # End the transaction the SELECT opened. Left open, alembic would
+            # find the connection already in a transaction, decline to manage
+            # it, and the migration would never be committed.
+            connection.commit()
+        try:
+            context.configure(
+                connection=connection, target_metadata=target_metadata
+            )
 
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if locked:
+                connection.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK_KEY}
+                )
+                connection.commit()
 
 
 if context.is_offline_mode():

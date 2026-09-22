@@ -1,5 +1,12 @@
-# Secrets are read from a local .env file that is never committed.
-# Copy .env.example to .env and fill it in before the first `docker compose up`.
+# First run:
+#   cp .env.example .env          # settings; fill in POSTGRES_USER at least
+#   scripts/init-secrets.sh       # secrets, one file each under ./secrets/
+#   docker compose up --build -d
+#
+# Settings come from .env. Secrets do not: they are files, mounted read-only at
+# /run/secrets. As environment variables they were printed by `docker inspect`
+# to anyone with Docker access, inherited by every child process, and written
+# into crash dumps.
 
 # The one peer whose X-Forwarded-For the backend trusts: the nginx container,
 # which is given this address statically below. Anchored so the two places that
@@ -9,11 +16,88 @@
 x-swarmguard:
   proxy_ip: &proxy_ip "${SWARMGUARD_PROXY_IP:-172.28.0.10}"
 
+  # Every container's stdout is kept by Docker as a JSON file with, by default,
+  # no size limit at all. A chatty service fills the disk, and a full disk takes
+  # postgres down with it. 5 x 10 MB per service is plenty to debug with.
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+  # A process in the container can never gain privileges it did not start with
+  # (setuid binaries, file capabilities). Costs nothing; applied everywhere.
+  hardening: &hardening
+    security_opt:
+      - "no-new-privileges:true"
+
+  # One image, two services: `migrate` runs it once to bring the schema up to
+  # date, `backend` runs it to serve. Same build, same tag, so the code that
+  # migrated the database is byte-for-byte the code that then reads it.
+  backend_image: &backend_image
+    build:
+      context: ./backend
+    image: "swarmguard-backend:${SWARMGUARD_TAG:-local}"
+
+  # The compose secret is named for what it is on the host (the postgres
+  # password); the application knows it as DATABASE_PASSWORD, and the file name
+  # is what config.py matches on, hence the explicit target.
+  backend_secrets: &backend_secrets
+    - secret_key
+    # Empty except during a key rotation -- scripts/rotate-secret-key.sh.
+    - secret_key_previous
+    - drone_api_key
+    - source: postgres_password
+      target: database_password
+
+  # What both need. alembic imports the application's settings, so the migrate
+  # job validates the same secrets the API does and fails on the same mistakes.
+  backend_env: &backend_env
+    # No password in the URL: it is the secret `database_password`, joined in
+    # memory by config.py.
+    DATABASE_URL: postgresql://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB:-swarmguard}
+    REDIS_URL: redis://redis:6379
+    # Empty ON PURPOSE. .env is passed through whole by env_file, and may well
+    # still contain these from before they were files. `environment:` beats
+    # `env_file:`, and the application treats an empty value as unset, so this
+    # line is what guarantees the secret can reach the container only as a
+    # file. Startup still fails on a missing, short, or publicly known value.
+    SECRET_KEY: ""
+    SECRET_KEY_PREVIOUS: ""
+    DRONE_API_KEY: ""
+    DATABASE_PASSWORD: ""
+    POSTGRES_PASSWORD: ""
+    ALGORITHM: ${ALGORITHM:-HS256}
+    ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+
 services:
   redis:
     image: redis:7-alpine
     container_name: swarmguard-redis
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # Rate-limit counters and pub/sub fan-out: nothing here needs to survive a
+    # restart, so persistence is off -- no disk writes, and no fork that briefly
+    # doubles memory. maxmemory sits below the container limit so redis sheds
+    # expiring keys (the counters) itself rather than being OOM-killed, which
+    # would drop every live WebSocket subscription at once.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "${REDIS_MAXMEMORY:-192mb}"
+      - --maxmemory-policy
+      - volatile-lru
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPUS:-0.50}"
+          memory: "${REDIS_MEMORY_LIMIT:-256m}"
+          pids: 64
     # Not published to the host: the backend reaches it over the compose network.
     expose:
       - "6379"
@@ -28,10 +112,45 @@ services:
     image: timescale/timescaledb:latest-pg16
     container_name: swarmguard-db
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # The memory limit and these settings are one decision and must be changed
+    # together. The image runs timescaledb-tune when it first initialises a
+    # volume and sizes postgres to whatever memory it sees: on the 7.75 GiB
+    # development host that was shared_buffers = 1984MB. Put a 2 GiB limit on a
+    # database configured like that and it grows into its buffers until the
+    # kernel kills it. Settings given on the command line override
+    # postgresql.conf, so they hold for a volume that was tuned long ago as well
+    # as for a new one. Rule of thumb: shared_buffers = 25% of the limit,
+    # effective_cache_size = 75%.
+    command:
+      - postgres
+      - -c
+      - "shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}"
+      - -c
+      - "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}"
+      - -c
+      - "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}"
+      - -c
+      - "work_mem=${POSTGRES_WORK_MEM:-8MB}"
+    # Parallel queries allocate in /dev/shm, which Docker caps at 64 MB: past
+    # that, postgres fails the query with "could not resize shared memory
+    # segment" rather than slowing down.
+    shm_size: "${POSTGRES_SHM_SIZE:-256m}"
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPUS:-2.0}"
+          memory: "${POSTGRES_MEMORY_LIMIT:-2g}"
+          pids: 512
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # The image reads the password from the file itself. It refuses to start
+      # if POSTGRES_PASSWORD is set as well, so that variable must stay out.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-swarmguard}
+    secrets:
+      - postgres_password
     # Not published to the host. For a shell: docker compose exec postgres psql -U <user>
     expose:
       - "5432"
@@ -47,11 +166,116 @@ services:
       # First boot initialises the cluster before it will answer at all.
       start_period: 30s
 
+  # A compressed pg_dump every BACKUP_INTERVAL_S (6 h), pruned after
+  # BACKUP_RETAIN_DAYS (14). That interval is the RPO: at most six hours of
+  # data can be lost. Same image as postgres, so pg_dump and the server are
+  # always the same version. The restore side lives in the same container:
+  #
+  #   docker compose run --rm backup /scripts/rehearse-restore.sh
+  #   docker compose run --rm backup /scripts/restore.sh --into swarmguard_scratch
+  #   docker compose run --rm backup /scripts/check-backups.sh
+  #
+  # Dumps go to the `backups` volume by default. For anything real point
+  # SWARMGUARD_BACKUP_DIR at a directory that is itself copied off the host --
+  # a backup on the same disk as the database survives a bad migration and not
+  # a dead disk. Minute-level RPO needs WAL archiving to object storage
+  # (docs/OPERATIONS.md); this is the floor, not the ceiling.
+  backup:
+    image: timescale/timescaledb:latest-pg16
+    container_name: swarmguard-backup
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    cap_drop:
+      - ALL
+    # `command`, not `entrypoint`: the image's entrypoint execs any non-postgres
+    # command as given, and `docker compose run --rm backup /scripts/<x>.sh`
+    # must be able to replace the loop with a one-off restore or rehearsal.
+    command: ["/scripts/backup.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB:-swarmguard}
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_S: ${BACKUP_INTERVAL_S:-21600}
+      BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-14}
+    secrets:
+      - postgres_password
+    volumes:
+      - ./scripts:/scripts:ro
+      - "${SWARMGUARD_BACKUP_DIR:-backups}:/backups"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256m
+          pids: 64
+
+  # Runs once per `docker compose up`, then exits. Migrations used to run from
+  # the backend's entrypoint on every start, which is safe for exactly one
+  # replica: two starting together ran the same DDL concurrently. A one-shot job
+  # is the compose spelling of an init container or a Kubernetes Job.
+  migrate:
+    <<: [*backend_image, *hardening]
+    container_name: swarmguard-migrate
+    command: ["migrate"]
+    restart: "no"
+    logging: *logging
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+          pids: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend_env
+      # Optional: provisions the default organization and its admin. Only the
+      # job that does the provisioning can read the admin password -- it is the
+      # secret `admin_password`, mounted here and nowhere else -- and the
+      # variable is blanked so a leftover in .env does not end up in
+      # `docker inspect` of this container, which is kept after it exits.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ""
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+    secrets:
+      - secret_key
+      - secret_key_previous
+      - drone_api_key
+      - source: postgres_password
+        target: database_password
+      - admin_password
+
   backend:
-    build:
-      context: ./backend
+    <<: [*backend_image, *hardening]
     container_name: swarmguard-backend
     restart: unless-stopped
+    logging: *logging
+    # Unprivileged user, high port, no raw sockets: it needs no capability.
+    cap_drop:
+      - ALL
+    # Measured: 206 MiB idle, 270 MiB with the RandomForest and SHAP loaded.
+    # The limit is about four times that, because a detection builds a pandas
+    # frame per packet and the pool holds up to 60 connections. Without one, a
+    # leak or a pathological request takes the host -- and the database on it
+    # -- down instead of just this container, which Docker would restart.
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACKEND_CPUS:-2.0}"
+          memory: "${BACKEND_MEMORY_LIMIT:-1g}"
+          pids: 512
     # Loopback only. Published on all interfaces, this was a second ingress
     # that skipped nginx entirely, and uvicorn trusted X-Forwarded-For from
     # whoever reached it -- so a client could pick its own address for the
@@ -61,6 +285,11 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      # Not merely started: finished, with exit code 0. If a migration fails the
+      # API does not come up at all, and the failure is the migrate container's
+      # log rather than a 500 on some later request.
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -76,21 +305,16 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-swarmguard}
-      REDIS_URL: redis://redis:6379
-      # Required. Startup fails on a missing, short, or publicly known value.
-      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY is required - generate with openssl rand -hex 32}"
-      DRONE_API_KEY: "${DRONE_API_KEY:?DRONE_API_KEY is required - generate with openssl rand -hex 32}"
-      ALGORITHM: ${ALGORITHM:-HS256}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
-      # Optional: provisions the default organization and its admin on first start.
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      <<: *backend_env
+      # Blanked, not omitted: .env is passed through whole, and an empty value
+      # here is what keeps the admin password out of the API's environment. The
+      # admin_password secret is not mounted here either.
+      ADMIN_PASSWORD: ""
       # uvicorn honours X-Forwarded-For only from this address -- the nginx
       # container, pinned below. Deliberately under `environment:` rather than
       # .env so it cannot be widened by accident.
       FORWARDED_ALLOW_IPS: *proxy_ip
+    secrets: *backend_secrets
     # Overrides the image's HEALTHCHECK, so it must not need curl either -- the
     # image no longer installs it. Python is in the image; 127.0.0.1 avoids
     # localhost resolving to [::1] against an IPv4 listener.
@@ -103,20 +327,47 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      # The entrypoint runs `alembic upgrade head` before serving. On a fresh
-      # volume that is eight migrations including hypertable setup; without a
-      # grace period the first probes failed, the container was marked
-      # unhealthy, and the frontend (which waits on service_healthy) never
-      # started. Docker does not restart an unhealthy container.
-      start_period: 60s
+      # Migrations no longer run here -- the migrate job has finished before
+      # this container starts -- so the grace period covers only the import of
+      # the application and its schema check. Failures during it do not count;
+      # a success ends it early.
+      start_period: 30s
 
   frontend:
     build:
       context: ./frontend
+    image: "swarmguard-frontend:${SWARMGUARD_TAG:-local}"
     container_name: swarmguard-frontend
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # nginx runs unprivileged and binds 80/443 because Docker lowers
+    # net.ipv4.ip_unprivileged_port_start to 0, not through CAP_NET_BIND_SERVICE.
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPUS:-0.50}"
+          memory: "${FRONTEND_MEMORY_LIMIT:-128m}"
+          pids: 128
+    # 443 is the application. 80 answers a health probe and the ACME challenge
+    # and redirects everything else; nothing is served over it.
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # tls.crt + tls.key. Read-only, and never baked into the image: a
+      # certificate in an image is a certificate in every registry it is pushed
+      # to. With nothing here the container generates a self-signed one and
+      # says so loudly -- fine on a laptop, not on a server.
+      - "${SWARMGUARD_CERTS_DIR:-./certs}:/etc/nginx/certs:ro"
+      # Let's Encrypt HTTP-01 webroot, written by certbot on the host.
+      - "${SWARMGUARD_ACME_DIR:-./acme}:/var/www/acme:ro"
+    environment:
+      # Subject of the self-signed fallback only; ignored once a real
+      # certificate is mounted.
+      TLS_SELF_SIGNED_CN: ${SWARMGUARD_HOSTNAME:-localhost}
     depends_on:
       backend:
         condition: service_healthy
@@ -128,7 +379,8 @@ services:
         # ignored.
         ipv4_address: *proxy_ip
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      # Answered on port 80 without a redirect; see frontend/nginx.conf.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -144,5 +396,22 @@ networks:
       config:
         - subnet: "${SWARMGUARD_SUBNET:-172.28.0.0/24}"
 
+# One file per secret, created by scripts/init-secrets.sh and never committed
+# (./secrets/ is gitignored). Point SWARMGUARD_SECRETS_DIR somewhere else to
+# keep them outside the checkout -- a tmpfs, or wherever your secret manager's
+# agent writes them. Rotation: docs/OPERATIONS.md.
+secrets:
+  secret_key:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key"
+  secret_key_previous:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key_previous"
+  drone_api_key:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/drone_api_key"
+  postgres_password:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/postgres_password"
+  admin_password:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/admin_password"
+
 volumes:
   postgres_data:
+  backups:

@@ -9,6 +9,8 @@ system — nothing is inferred from reading the README.
 | [`01-PROJECT-ORIENTATION.md`](01-PROJECT-ORIENTATION.md) | To understand what the project is, how it works, and what is real vs. aspirational. **Start here.** |
 | [`02-TASK-UNDERSTANDING.md`](02-TASK-UNDERSTANDING.md) | What was asked, how it was interpreted, the method, and the full evidence log. |
 | [`03-PRODUCTION-ROADMAP.md`](03-PRODUCTION-ROADMAP.md) | The phased plan to get to production, ordered by risk. |
+| [`04-PHASE0B-EXECUTION-PLAN.md`](04-PHASE0B-EXECUTION-PLAN.md) | How the nine Phase 0b blockers were fixed, and what an adversarial review corrected in the first design. |
+| [`05-PHASE1-3-EXECUTION-PLAN.md`](05-PHASE1-3-EXECUTION-PLAN.md) | Phases 1-3 explained in plain language: what is wrong, what the fix is, the order of work, and what needs you rather than code. |
 
 ## The short version
 

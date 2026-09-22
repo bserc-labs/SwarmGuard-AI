@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 
 from config import get_settings
@@ -10,6 +10,13 @@ settings = get_settings()
 SECRET_KEY = settings.SECRET_KEY
 if not SECRET_KEY:
     raise RuntimeError("CRITICAL: SECRET_KEY environment variable is not set. Cannot start securely.")
+
+# Signing always uses SECRET_KEY. Verifying tries it first and then the key it
+# replaced, so a rotation does not log every user out at the same instant --
+# see SECRET_KEY_PREVIOUS in config.py.
+VERIFICATION_KEYS: tuple[str, ...] = tuple(
+    key for key in (SECRET_KEY, settings.SECRET_KEY_PREVIOUS) if key
+)
 
 ALGORITHM = settings.ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
@@ -33,8 +40,13 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return encoded_jwt
 
 def decode_access_token(token: str) -> dict | None:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        return None
+    for key in VERIFICATION_KEYS:
+        try:
+            return jwt.decode(token, key, algorithms=[ALGORITHM])
+        except ExpiredSignatureError:
+            # The signature verified with this key; the token is simply too old.
+            # No other key can make it valid.
+            return None
+        except JWTError:
+            continue
+    return None

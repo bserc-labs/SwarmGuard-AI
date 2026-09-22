@@ -232,10 +232,16 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   outstanding session with a single `UPDATE`
 - **Device authentication** — `/telemetry/ingest` requires both an operator
   bearer token and a device API key
-- **Secret validation** — startup fails on absent, short, or publicly-known
-  secrets (`backend/config.py`)
+- **Secrets as files** — mounted at `/run/secrets`, never container environment
+  variables; startup fails on absent, short, or publicly-known secrets
+  (`backend/config.py`)
 - **CI gates** — Trivy secret scanning blocks merges; `pip-audit`, `npm audit`,
   Ruff and Mypy run on every PR
+- **Backups** — a 6-hourly `pg_dump` sidecar, a TimescaleDB-aware restore, and a
+  restore rehearsal that CI runs on every push
+- **Releases** — every push to `main` builds, scans and publishes images tagged
+  with the commit SHA; `scripts/deploy.sh` deploys one, smoke-tests it, and rolls
+  back by itself if that fails
 
 ---
 
@@ -244,20 +250,40 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 ### Docker (recommended)
 
 ```bash
-cp .env.example .env      # then fill in the required values
+cp .env.example .env          # settings: POSTGRES_USER, ADMIN_USERNAME, tuning
+scripts/init-secrets.sh       # secrets: one file each under ./secrets/
 docker compose up --build -d
 ```
 
-Required in `.env` — the backend refuses to start without them:
+**Settings live in `.env`; secrets do not.** `SECRET_KEY`, `DRONE_API_KEY`, the
+database password and the optional first-admin password are files under
+`./secrets/` (gitignored), mounted read-only at `/run/secrets`. As environment
+variables they were printed by `docker inspect` to anyone with Docker access.
+`init-secrets.sh` generates what is missing, never overwrites, and on an
+existing deployment takes the current values from `.env` so the database volume
+and every issued login keep working. `scripts/init-secrets.sh --check` verifies
+without changing anything. The backend refuses to start on a missing, short or
+publicly known secret, wherever it came from.
 
-```bash
-POSTGRES_USER, POSTGRES_PASSWORD
-SECRET_KEY=$(openssl rand -hex 32)
-DRONE_API_KEY=$(openssl rand -hex 32)
-ADMIN_USERNAME, ADMIN_PASSWORD   # optional: provisions the first admin
-```
+Running natively, without Docker, there is no `/run/secrets`: set the same names
+as environment variables or in `.env`, as before. The environment always wins
+over a file.
 
-Frontend on `:80`. The API is published on loopback only —
+Start-up order, the secret files, and how to rotate each key without an outage:
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+`docker compose up` first runs a one-shot **`migrate`** job (schema migrations,
+then the optional admin) and starts the API only once it has exited 0. The API
+itself never migrates: it checks that the database is at the revision the build
+ships and refuses to start if it is behind, because two replicas migrating on
+start ran the same DDL at the same time. To migrate by hand:
+`docker compose run --rm migrate`.
+
+The application is served over **HTTPS on `:443`** (`https://localhost`). Port 80
+only redirects. With no certificate in `./certs` the container generates a
+self-signed one, so expect a browser warning locally; `scripts/make-dev-cert.sh`
+makes that certificate stable, and a real deployment mounts its own
+([`docs/OPERATIONS.md`](docs/OPERATIONS.md#tls)). The API is published on loopback only —
 `http://localhost:8000` (OpenAPI docs at `/docs`) — for the local demo and
 scripts; everything else reaches it through nginx at `/api`. Every variable in
 `.env` is passed to the backend container; the compose file overrides
@@ -316,6 +342,24 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `SWARMGUARD_TAG` / `SWARMGUARD_IMAGE_PREFIX` | — / `ghcr.io/bserc-labs` | With `docker-compose.prod.yml`: which published image to run. `scripts/deploy.sh` sets the tag; see [`docs/OPERATIONS.md`](docs/OPERATIONS.md#releases-and-deploys) |
+| `BACKUP_INTERVAL_S` / `BACKUP_RETAIN_DAYS` | `21600` / `14` | Dump every 6 h (the RPO), keep 14 days. Restore and rehearsal: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#backups-and-restore) |
+| `SWARMGUARD_BACKUP_DIR` | `backups` volume | Where dumps go. Point it at a directory that is copied off the host |
+| `BACKEND_MEMORY_LIMIT` / `BACKEND_CPUS` | `1g` / `2.0` | Container limits. Measured: 270 MiB with the model and SHAP loaded |
+| `POSTGRES_MEMORY_LIMIT` / `POSTGRES_SHARED_BUFFERS` / `POSTGRES_EFFECTIVE_CACHE_SIZE` | `2g` / `512MB` / `1536MB` | Change together: 25% and 75% of the limit. The image tunes postgres to the *host* otherwise |
+| `REDIS_MEMORY_LIMIT` / `REDIS_MAXMEMORY` | `256m` / `192mb` | `maxmemory` stays below the limit so redis evicts rather than being OOM-killed |
+| `FRONTEND_MEMORY_LIMIT` | `128m` | nginx |
+| `SWARMGUARD_CERTS_DIR` | `./certs` | Host directory with `tls.crt` and `tls.key`. Empty means a self-signed certificate is generated at start |
+| `SWARMGUARD_HOSTNAME` | `localhost` | Subject of the self-signed fallback only |
+| `SWARMGUARD_ACME_DIR` | `./acme` | Let's Encrypt HTTP-01 webroot, served over plain HTTP on port 80 |
+| `CORS_ALLOWED_ORIGINS` | localhost, http and https | Comma-separated browser origins allowed to call the API with credentials. The deployed frontend is same-origin and needs no entry. `*` is refused |
+| `SWARMGUARD_SECRETS_DIR` | `./secrets` | Host directory holding the secret files compose mounts. Point it outside the checkout for anything real |
+| `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
+| `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
+| `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
+| `REQUIRE_SCHEMA_AT_HEAD` | `true` | The API refuses to start against a database that is behind the build's migrations. A database that is *ahead* (a rollback) only warns |
+| `RUN_MIGRATIONS_ON_START` | `false` | Image only: migrate before serving, for a single container run by hand. Under compose the `migrate` job does this once |
+| `SWARMGUARD_TAG` | `local` | Tag of the backend image shared by the `migrate` job and the API |
 | `FORWARDED_ALLOW_IPS` | nginx container (compose) / `127.0.0.1` (image) | Peers whose `X-Forwarded-For` uvicorn honours. Set by compose; not overridable from `.env` |
 | `SWARMGUARD_SUBNET` / `SWARMGUARD_PROXY_IP` | `172.28.0.0/24` / `172.28.0.10` | Compose network and the frontend's static address. Change only on a subnet collision, then `docker compose down` once |
 

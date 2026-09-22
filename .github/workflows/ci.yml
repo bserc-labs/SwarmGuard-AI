@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: warn
 
   integration-security:
-    name: Live security suite
+    name: Live security suite & restore rehearsal
     runs-on: ubuntu-latest
 
     # tests/test_sprint7_security.py drives a real server over HTTP. It has
@@ -188,6 +188,31 @@ jobs:
         # rather than skip when it cannot run, so "never executed" can no
         # longer read as green.
         run: pytest tests/test_sprint7_security.py -v
+
+      # An untested backup is a hypothesis. The suite has just filled this
+      # database with real organizations, users, drones, incidents and audit
+      # rows, so it is the right thing to dump, restore into a scratch
+      # database, and compare table by table. Run from the same image the
+      # compose stack uses for its backup service, against the service
+      # container on localhost, with the repository's own scripts mounted --
+      # so what passes here is what runs in production, not a look-alike.
+      - name: Rehearse a backup and restore
+        run: |
+          mkdir -p "${RUNNER_TEMP}/backups"
+          docker run --rm --network host \
+            -v "${PWD}/scripts:/scripts:ro" \
+            -v "${RUNNER_TEMP}/backups:/backups" \
+            -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=password \
+            -e PGDATABASE=swarmguard_integration -e BACKUP_DIR=/backups \
+            timescale/timescaledb:latest-pg16 /scripts/rehearse-restore.sh
+
+      - name: Check the backup is recent and complete
+        run: |
+          docker run --rm \
+            -v "${PWD}/scripts:/scripts:ro" \
+            -v "${RUNNER_TEMP}/backups:/backups" \
+            -e BACKUP_DIR=/backups \
+            timescale/timescaledb:latest-pg16 /scripts/check-backups.sh
 
       - name: API log
         if: always()
@@ -307,3 +332,107 @@ jobs:
           scanners: vuln,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+  # ---------------------------------------------------------------------------
+  # Release: build -> scan -> push, on main only, and only after every other
+  # job is green. CI used to test the code and never publish anything, so
+  # there was nothing to deploy and nothing to roll back to.
+  #
+  # Every image is tagged with the full commit SHA. That tag is immutable, so
+  # "what is running" always maps to exactly one commit, and a rollback is the
+  # previous tag. `main` and `latest` move and are for looking around only.
+  #
+  # The images are scanned BEFORE they are pushed: a CRITICAL or HIGH finding
+  # with a fix available means nothing is published from this commit. The
+  # filesystem scan in security-scan is advisory; this one is the gate, and it
+  # sees the built image -- base layers, the venv, the nginx binary -- which
+  # the filesystem scan cannot.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Build, scan & publish images
+    needs: [backend-test, integration-security, backend-lint, frontend, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR requires a lowercase path; repository owners need not be.
+      - name: Image names
+        id: names
+        run: |
+          prefix="${REGISTRY}/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "backend=${prefix}/swarmguard-backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=${prefix}/swarmguard-frontend" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: ${{ steps.names.outputs.backend }}:${{ steps.names.outputs.sha_tag }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          load: true
+          tags: ${{ steps.names.outputs.frontend }}:${{ steps.names.outputs.sha_tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: Scan backend image (blocking)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.names.outputs.backend }}:${{ steps.names.outputs.sha_tag }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan frontend image (blocking)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.names.outputs.frontend }}:${{ steps.names.outputs.sha_tag }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        run: |
+          for image in "${{ steps.names.outputs.backend }}" "${{ steps.names.outputs.frontend }}"; do
+            docker tag "$image:${{ steps.names.outputs.sha_tag }}" "$image:main"
+            docker tag "$image:${{ steps.names.outputs.sha_tag }}" "$image:latest"
+            docker push "$image:${{ steps.names.outputs.sha_tag }}"
+            docker push "$image:main"
+            docker push "$image:latest"
+          done
+
+      - name: What to deploy
+        run: |
+          {
+            echo "## Images published"
+            echo
+            echo '```'
+            echo "SWARMGUARD_TAG=${{ steps.names.outputs.sha_tag }}"
+            echo "scripts/deploy.sh ${{ steps.names.outputs.sha_tag }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+

@@ -7,6 +7,12 @@ pinned here. Each of these regressions shipped once:
 - tuning variables set in .env never reaching the container (no env_file);
 - healthchecks with no start_period, so a slow first migration marked the
   backend unhealthy and the frontend never started.
+- migrations run from the backend entrypoint on every start, so two replicas
+  starting together ran the same DDL against the same database at once.
+- SECRET_KEY, DRONE_API_KEY and the database password passed as environment
+  variables, where `docker inspect` prints them to anyone with Docker access.
+- no resource limits anywhere, so one runaway container could take the host and
+  the database on it down; and container logs that grew without bound.
 
 The file is read as YAML rather than through ``docker compose config`` so the
 check needs no Docker in CI. PyYAML is installed by uvicorn[standard].
@@ -31,6 +37,14 @@ def _default(value: object) -> str:
     """The value compose resolves to when the interpolated variable is unset."""
     match = _DEFAULT.match(str(value))
     return match.group("default") if match else str(value)
+
+
+def _secret_targets(service: dict) -> set[str]:
+    """File names a service sees under /run/secrets."""
+    return {
+        entry.get("target", entry["source"]) if isinstance(entry, dict) else entry
+        for entry in service.get("secrets", [])
+    }
 
 
 @pytest.fixture(scope="module")
@@ -144,3 +158,239 @@ class TestHealthchecks:
         test = compose["services"]["postgres"]["healthcheck"]["test"]
         command = " ".join(test) if isinstance(test, list) else str(test)
         assert "pg_isready" in command and "-h 127.0.0.1" in command, command
+
+
+class TestMigrationsRunOnce:
+    """Migrations are a one-shot job the API waits for, not something it does."""
+
+    @pytest.fixture(scope="class")
+    def migrate(self, compose) -> dict:
+        assert "migrate" in compose["services"], "there must be a dedicated migrate job"
+        return compose["services"]["migrate"]
+
+    def test_the_job_migrates_and_is_never_restarted(self, migrate):
+        assert migrate["command"] == ["migrate"]
+        # `restart: unless-stopped` would re-run a *failed* migration in a loop,
+        # and re-run a successful one on every daemon restart.
+        assert str(migrate.get("restart")) == "no"
+        assert "ports" not in migrate and "healthcheck" not in migrate
+
+    def test_it_is_the_same_image_as_the_api(self, migrate, backend):
+        """The code that migrates the schema must be the code that then reads it."""
+        assert migrate["image"] == backend["image"]
+        assert migrate["build"] == backend["build"]
+
+    def test_the_api_waits_for_it_to_succeed(self, backend):
+        condition = backend["depends_on"]["migrate"]["condition"]
+        assert condition == "service_completed_successfully", (
+            "service_started would let the API come up beside a failing migration"
+        )
+
+    def test_it_waits_for_a_database_that_is_ready(self, migrate):
+        assert migrate["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+    def test_it_validates_the_same_settings_the_api_does(self, migrate, backend):
+        """alembic imports the application's settings; a missing secret must fail here too."""
+        assert migrate["environment"]["DATABASE_URL"] == backend["environment"]["DATABASE_URL"]
+        assert _secret_targets(backend) <= _secret_targets(migrate)
+
+    def test_only_the_job_that_provisions_the_admin_can_read_its_password(self, migrate, backend):
+        assert "admin_password" in _secret_targets(migrate)
+        assert "admin_password" not in _secret_targets(backend)
+        # Blank rather than absent, in both: .env is passed through whole by
+        # env_file, and only an explicit empty value under `environment:`
+        # overrides it. The migrate container is kept after it exits, so a
+        # value here would sit in `docker inspect` indefinitely.
+        assert backend["environment"].get("ADMIN_PASSWORD") == ""
+        assert migrate["environment"].get("ADMIN_PASSWORD") == ""
+
+    def test_the_entrypoint_does_not_migrate_when_serving_by_default(self):
+        source = ENTRYPOINT.read_text()
+        assert '"${RUN_MIGRATIONS_ON_START:-false}" = "true"' in source
+
+
+class TestSecretsAreFilesNotVariables:
+    SECRET_VARIABLES = ("SECRET_KEY", "DRONE_API_KEY", "DATABASE_PASSWORD", "POSTGRES_PASSWORD")
+
+    @pytest.mark.parametrize("service", ["backend", "migrate"])
+    def test_every_secret_variable_is_explicitly_blank(self, compose, service):
+        """Blank, not absent.
+
+        env_file passes .env through whole, and .env may still hold these from
+        before they were files. Only a value under `environment:` overrides
+        env_file, and the application reads an empty value as unset -- so the
+        blank is what guarantees the secret reaches the container only as a file.
+        """
+        env = compose["services"][service]["environment"]
+        for key in self.SECRET_VARIABLES:
+            assert env.get(key) == "", f"{service}.{key} = {env.get(key)!r}"
+
+    def test_no_service_interpolates_a_secret_from_the_shell(self):
+        source = COMPOSE.read_text()
+        for key in ("SECRET_KEY", "DRONE_API_KEY", "POSTGRES_PASSWORD", "ADMIN_PASSWORD"):
+            assert "${" + key not in source, f"${{{key}}} is interpolated into the compose file"
+
+    def test_the_database_url_carries_no_password(self, backend):
+        url = backend["environment"]["DATABASE_URL"]
+        credentials = url.split("://", 1)[1].split("@", 1)[0]
+        assert ":" not in credentials, url
+
+    def test_the_api_mounts_the_names_the_application_looks_for(self, backend):
+        """config.py matches a secret to a setting by file name."""
+        assert _secret_targets(backend) == {
+            "secret_key",
+            "secret_key_previous",
+            "drone_api_key",
+            "database_password",
+        }
+
+    def test_postgres_reads_its_password_from_the_file(self, compose):
+        postgres = compose["services"]["postgres"]
+        env = postgres["environment"]
+        assert env["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+        # The image refuses to start when both are set.
+        assert "POSTGRES_PASSWORD" not in env
+        assert "postgres_password" in _secret_targets(postgres)
+
+    def test_every_mounted_secret_is_declared_and_lives_in_the_ignored_directory(self, compose):
+        declared = compose["secrets"]
+        used = {
+            entry["source"] if isinstance(entry, dict) else entry
+            for svc in compose["services"].values()
+            for entry in svc.get("secrets", [])
+        }
+        assert used <= set(declared), used - set(declared)
+        for name, spec in declared.items():
+            assert _default(spec["file"].rsplit("/", 1)[0]) == "./secrets", (name, spec)
+        assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def _bytes(value: str) -> int:
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    text = _default(value).lower().rstrip("b")
+    return int(float(text[:-1]) * units[text[-1]]) if text[-1] in units else int(text)
+
+
+class TestEveryContainerIsContained:
+    """A limit on every service, sized from measurement, plus log rotation."""
+
+    @pytest.fixture(scope="class")
+    def services(self, compose) -> dict:
+        return compose["services"]
+
+    def test_every_service_has_memory_cpu_and_pid_limits(self, services):
+        for name, svc in services.items():
+            limits = svc.get("deploy", {}).get("resources", {}).get("limits", {})
+            for key in ("memory", "cpus", "pids"):
+                assert key in limits, f"{name} has no {key} limit"
+            assert _bytes(limits["memory"]) >= 64 * 1024**2, f"{name}: implausibly small"
+
+    def test_every_service_rotates_its_logs(self, services):
+        for name, svc in services.items():
+            options = svc.get("logging", {}).get("options", {})
+            assert "max-size" in options and "max-file" in options, f"{name} logs without bound"
+
+    def test_every_service_forbids_privilege_escalation(self, services):
+        for name, svc in services.items():
+            assert "no-new-privileges:true" in svc.get("security_opt", []), name
+
+    @pytest.mark.parametrize("name", ["backend", "migrate", "frontend", "backup"])
+    def test_unprivileged_services_drop_every_capability(self, services, name):
+        assert services[name].get("cap_drop") == ["ALL"], name
+
+    def test_the_backend_limit_clears_its_measured_footprint_with_room(self, backend):
+        """270 MiB with the model and SHAP loaded; detections and the pool need headroom."""
+        assert _bytes(backend["deploy"]["resources"]["limits"]["memory"]) >= 768 * 1024**2
+
+    def test_postgres_memory_settings_fit_inside_its_limit(self, services):
+        """timescaledb-tune sizes postgres to the HOST; the limit must win."""
+        postgres = services["postgres"]
+        limit = _bytes(postgres["deploy"]["resources"]["limits"]["memory"])
+        command = " ".join(postgres["command"])
+        shared = _bytes(re.search(r"shared_buffers=([^\s\"]+)", command).group(1))
+        cache = _bytes(re.search(r"effective_cache_size=([^\s\"]+)", command).group(1))
+        assert shared <= limit // 3, "shared_buffers must leave room for connections and work_mem"
+        assert cache <= limit, "effective_cache_size beyond the limit misleads the planner"
+        assert "shm_size" in postgres, "parallel queries need more than Docker's 64 MB /dev/shm"
+
+    def test_redis_sheds_keys_before_it_can_be_oom_killed(self, services):
+        redis = services["redis"]
+        command = redis["command"]
+        limit = _bytes(redis["deploy"]["resources"]["limits"]["memory"])
+        maxmemory = _bytes(command[command.index("--maxmemory") + 1])
+        assert maxmemory < limit
+        assert command[command.index("--maxmemory-policy") + 1] == "volatile-lru"
+        assert command[command.index("--appendonly") + 1] == "no", "nothing in redis needs persistence"
+
+
+class TestBackups:
+    """A scheduled dump, restorable from the same container, on its own volume."""
+
+    @pytest.fixture(scope="class")
+    def backup(self, compose) -> dict:
+        assert "backup" in compose["services"], "there is no backup service"
+        return compose["services"]["backup"]
+
+    def test_pg_dump_is_the_same_version_as_the_server(self, backup, compose):
+        assert backup["image"] == compose["services"]["postgres"]["image"]
+
+    def test_it_runs_the_loop_as_a_command_so_run_can_replace_it(self, backup):
+        """`docker compose run --rm backup /scripts/restore.sh` must not start another loop."""
+        assert backup["command"] == ["/scripts/backup.sh"]
+        assert "entrypoint" not in backup
+
+    def test_it_reads_the_password_from_the_secret_not_the_environment(self, backup):
+        assert backup["environment"]["PGPASSWORD_FILE"] == "/run/secrets/postgres_password"
+        assert "PGPASSWORD" not in backup["environment"]
+        assert "postgres_password" in _secret_targets(backup)
+
+    def test_the_scripts_are_mounted_read_only_and_the_dumps_are_a_volume(self, backup, compose):
+        mounts = {v.split(":", 1)[1] for v in backup["volumes"]}
+        assert "/scripts:ro" in mounts
+        dumps = next(v for v in backup["volumes"] if v.endswith(":/backups"))
+        assert _default(dumps.rsplit(":", 1)[0]) == "backups"
+        assert "backups" in compose["volumes"]
+        assert "/backups/" in (ROOT / ".gitignore").read_text().splitlines()
+
+    def test_the_interval_is_the_documented_rpo(self, backup):
+        assert _default(backup["environment"]["BACKUP_INTERVAL_S"]) == "21600"
+        assert _default(backup["environment"]["BACKUP_RETAIN_DAYS"]) == "14"
+
+    def test_it_waits_for_a_healthy_database(self, backup):
+        assert backup["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+class TestProductionOverride:
+    """docker-compose.prod.yml: published images, immutable tags, no building."""
+
+    @pytest.fixture(scope="class")
+    def prod(self) -> dict:
+        path = ROOT / "docker-compose.prod.yml"
+        assert path.exists()
+        with path.open() as fh:
+            # A SafeLoader that additionally knows compose's `!reset` tag.
+            return yaml.load(fh, Loader=_ResetTolerantLoader)  # noqa: S506
+
+    def test_every_built_service_is_overridden(self, compose, prod):
+        built = {name for name, svc in compose["services"].items() if "build" in svc}
+        assert set(prod["services"]) == built
+
+    def test_the_tag_is_required_and_the_build_is_removed(self, prod):
+        for name, svc in prod["services"].items():
+            assert "${SWARMGUARD_TAG:?" in svc["image"], f"{name}: a default tag would deploy something unintended"
+            assert svc["build"] is None, f"{name}: build must be reset, or compose prefers building to pulling"
+            assert svc["pull_policy"] == "missing"
+
+    def test_migrate_and_api_run_the_same_image(self, prod):
+        assert prod["services"]["migrate"]["image"] == prod["services"]["backend"]["image"]
+
+    def test_deploy_state_is_ignored(self):
+        assert "/.deploy/" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+class _ResetTolerantLoader(yaml.SafeLoader):
+    """`build: !reset null` is compose syntax PyYAML does not know."""
+
+
+_ResetTolerantLoader.add_constructor("!reset", lambda loader, node: None)
+

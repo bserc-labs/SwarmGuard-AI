@@ -5,7 +5,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    # pip is a build tool. Nothing installs at runtime, and pip vendors its own
+    # copies of msgpack and setuptools whose CVEs the release image scan
+    # flags as HIGH. It is removed from the venv before the venv is copied.
+    /opt/venv/bin/pip uninstall -y pip
 
 # Stage 2: Runner
 FROM python:3.12-slim
@@ -16,6 +20,11 @@ FROM python:3.12-slim
 # failure surfaces as "Unable to locate package curl" rather than as a network
 # error. Python is already in this image and can make an HTTP request, so the
 # check has no external dependency and the image is smaller for it.
+
+# The base image ships its own pip as well, with the same vendored copies.
+# The runtime image installs nothing, so it goes too; `python -m ensurepip`
+# brings it back for a debugging session that needs it.
+RUN python -m pip uninstall -y pip
 
 # Non-root user security hardening
 RUN groupadd -r swarmguard && useradd -r -g swarmguard appuser

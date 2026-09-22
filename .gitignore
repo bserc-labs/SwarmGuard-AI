@@ -24,6 +24,15 @@ Icon
 .env.local
 .env.*.local
 
+# Secret files mounted by docker-compose.yml (scripts/init-secrets.sh) and TLS
+# material. Never committed; CI's secret scan is the backstop, not the plan.
+/secrets/
+/certs/
+/acme/
+/backups/
+# scripts/deploy.sh state: which image tag is deployed, and which was before it.
+/.deploy/
+
 # ==============================================================================
 # Python / FastAPI (Backend)
 # ==============================================================================
