@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -75,6 +76,24 @@ async def http_exception_handler(request, exc):
         status_code=exc.status_code,
         content={"error": "HTTP Exception", "detail": str(exc.detail)}
     )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """422 without echoing the rejected value back.
+
+    FastAPI's default body repeats each offending value under `input`. On
+    POST /users/ a password that failed the length rule came straight back in
+    the response, and from there into browser dev tools, proxy logs and crash
+    reports. Location, message and type tell a client everything it needs; the
+    value stays on the server. Same envelope as every other error, so a client
+    can key on `error` for all of them.
+    """
+    detail = [
+        {key: value for key, value in error.items() if key in ("type", "loc", "msg")}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"error": "Validation Error", "detail": detail})
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

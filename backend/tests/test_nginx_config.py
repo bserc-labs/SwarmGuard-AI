@@ -106,6 +106,20 @@ class TestTheTlsServer:
         assert "proxy_set_header X-Forwarded-Proto $scheme;" in body
 
 
+class TestFingerprint:
+    """Found by the live exercise: 'server: nginx/1.31.6' on every response."""
+
+    def test_the_version_is_not_advertised(self, servers):
+        for port, body in servers.items():
+            assert re.search(r"server_tokens\s+off;", body), f"port {port} advertises the nginx version"
+
+    def test_the_schema_and_docs_are_not_reachable_through_the_proxy(self, servers):
+        locations = dict(_blocks(servers["443"], "location"))
+        for path in ("/api/docs", "/api/redoc", "/api/openapi.json"):
+            body = locations.get(f"location = {path}")
+            assert body and "return 404;" in body, f"{path} is exposed through the public proxy"
+
+
 class TestSecurityHeaders:
     REQUIRED = (
         "Strict-Transport-Security",
