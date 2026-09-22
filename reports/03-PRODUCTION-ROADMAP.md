@@ -26,11 +26,24 @@ head.**
 | **New:** `drone_id` globally unique | ✅ scoped per organization |
 | **New:** CI ran on a branch that doesn't exist | ✅ `develop` → `development` |
 
-**Phase 0b is also done** — branch `fix/phase0b-hardening`, nine commits, one per
-item, each designed, independently re-verified against the code and adversarially
-critiqued before it was written (`04-PHASE0B-EXECUTION-PLAN.md`). Gates after
-every one: **ruff clean, mypy clean, 497 passed / 48 skipped** (from 388),
-frontend 107/107, single alembic head `j0e1f2a3b4c5`.
+**Phase 0b is also done** -- merged to `main` as PR #12 (`b5aed08`): eleven
+commits, one per item plus the plan and a CI fix, each designed, independently
+re-verified against the code and adversarially critiqued before it was written
+(`04-PHASE0B-EXECUTION-PLAN.md`). Gates after every one: **ruff clean, mypy
+clean, 506 passed / 48 skipped** (from 388), frontend 107/107, single alembic
+head `j0e1f2a3b4c5`.
+
+The CI fix was a Phase 0 defect, not a 0b one. Phase 0 made the live security
+suite fail rather than skip when it cannot run, keyed on `CI=true` -- which
+GitHub sets in *every* job. The unit-test job collects that file with no server,
+so it failed six tests it was never meant to run and `main` stayed red from PR
+#11 until PR #12. The requirement is now an explicit flag set only by the job
+that starts a server, pinned by `tests/test_ci_workflow.py`.
+
+**Phases 1-3 are planned in `05-PHASE1-3-EXECUTION-PLAN.md`**, which explains
+each item in plain language, records what was found while planning (the 7-day
+chunk interval that would have turned "3-day retention" into ten), and fixes
+the order of work.
 
 | Item | Status |
 |---|---|
