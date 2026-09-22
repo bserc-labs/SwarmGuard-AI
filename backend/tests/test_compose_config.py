@@ -9,6 +9,8 @@ pinned here. Each of these regressions shipped once:
   backend unhealthy and the frontend never started.
 - migrations run from the backend entrypoint on every start, so two replicas
   starting together ran the same DDL against the same database at once.
+- SECRET_KEY, DRONE_API_KEY and the database password passed as environment
+  variables, where `docker inspect` prints them to anyone with Docker access.
 
 The file is read as YAML rather than through ``docker compose config`` so the
 check needs no Docker in CI. PyYAML is installed by uvicorn[standard].
@@ -33,6 +35,14 @@ def _default(value: object) -> str:
     """The value compose resolves to when the interpolated variable is unset."""
     match = _DEFAULT.match(str(value))
     return match.group("default") if match else str(value)
+
+
+def _secret_targets(service: dict) -> set[str]:
+    """File names a service sees under /run/secrets."""
+    return {
+        entry.get("target", entry["source"]) if isinstance(entry, dict) else entry
+        for entry in service.get("secrets", [])
+    }
 
 
 @pytest.fixture(scope="module")
@@ -178,16 +188,72 @@ class TestMigrationsRunOnce:
         assert migrate["depends_on"]["postgres"]["condition"] == "service_healthy"
 
     def test_it_validates_the_same_settings_the_api_does(self, migrate, backend):
-        """alembic imports the application's settings; a missing key must fail here too."""
-        for key in ("DATABASE_URL", "SECRET_KEY", "DRONE_API_KEY"):
-            assert migrate["environment"][key] == backend["environment"][key], key
+        """alembic imports the application's settings; a missing secret must fail here too."""
+        assert migrate["environment"]["DATABASE_URL"] == backend["environment"]["DATABASE_URL"]
+        assert _secret_targets(backend) <= _secret_targets(migrate)
 
-    def test_only_the_job_that_provisions_the_admin_holds_its_password(self, migrate, backend):
-        assert "ADMIN_PASSWORD" in migrate["environment"]
-        # Blank rather than absent: .env is passed through whole by env_file,
-        # and only an explicit empty value under `environment:` overrides it.
+    def test_only_the_job_that_provisions_the_admin_can_read_its_password(self, migrate, backend):
+        assert "admin_password" in _secret_targets(migrate)
+        assert "admin_password" not in _secret_targets(backend)
+        # Blank rather than absent, in both: .env is passed through whole by
+        # env_file, and only an explicit empty value under `environment:`
+        # overrides it. The migrate container is kept after it exits, so a
+        # value here would sit in `docker inspect` indefinitely.
         assert backend["environment"].get("ADMIN_PASSWORD") == ""
+        assert migrate["environment"].get("ADMIN_PASSWORD") == ""
 
     def test_the_entrypoint_does_not_migrate_when_serving_by_default(self):
         source = ENTRYPOINT.read_text()
         assert '"${RUN_MIGRATIONS_ON_START:-false}" = "true"' in source
+
+
+class TestSecretsAreFilesNotVariables:
+    SECRET_VARIABLES = ("SECRET_KEY", "DRONE_API_KEY", "DATABASE_PASSWORD", "POSTGRES_PASSWORD")
+
+    @pytest.mark.parametrize("service", ["backend", "migrate"])
+    def test_every_secret_variable_is_explicitly_blank(self, compose, service):
+        """Blank, not absent.
+
+        env_file passes .env through whole, and .env may still hold these from
+        before they were files. Only a value under `environment:` overrides
+        env_file, and the application reads an empty value as unset -- so the
+        blank is what guarantees the secret reaches the container only as a file.
+        """
+        env = compose["services"][service]["environment"]
+        for key in self.SECRET_VARIABLES:
+            assert env.get(key) == "", f"{service}.{key} = {env.get(key)!r}"
+
+    def test_no_service_interpolates_a_secret_from_the_shell(self):
+        source = COMPOSE.read_text()
+        for key in ("SECRET_KEY", "DRONE_API_KEY", "POSTGRES_PASSWORD", "ADMIN_PASSWORD"):
+            assert "${" + key not in source, f"${{{key}}} is interpolated into the compose file"
+
+    def test_the_database_url_carries_no_password(self, backend):
+        url = backend["environment"]["DATABASE_URL"]
+        credentials = url.split("://", 1)[1].split("@", 1)[0]
+        assert ":" not in credentials, url
+
+    def test_the_api_mounts_the_names_the_application_looks_for(self, backend):
+        """config.py matches a secret to a setting by file name."""
+        assert _secret_targets(backend) == {"secret_key", "drone_api_key", "database_password"}
+
+    def test_postgres_reads_its_password_from_the_file(self, compose):
+        postgres = compose["services"]["postgres"]
+        env = postgres["environment"]
+        assert env["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password"
+        # The image refuses to start when both are set.
+        assert "POSTGRES_PASSWORD" not in env
+        assert "postgres_password" in _secret_targets(postgres)
+
+    def test_every_mounted_secret_is_declared_and_lives_in_the_ignored_directory(self, compose):
+        declared = compose["secrets"]
+        used = {
+            entry["source"] if isinstance(entry, dict) else entry
+            for svc in compose["services"].values()
+            for entry in svc.get("secrets", [])
+        }
+        assert used <= set(declared), used - set(declared)
+        for name, spec in declared.items():
+            assert _default(spec["file"].rsplit("/", 1)[0]) == "./secrets", (name, spec)
+        assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
+

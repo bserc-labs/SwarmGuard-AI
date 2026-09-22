@@ -88,6 +88,17 @@ class TestMigrate:
         _, calls = run("migrate", ADMIN_USERNAME="root", ADMIN_PASSWORD="a-long-password")
         assert calls == ["alembic upgrade head", "python bootstrap.py"], calls
 
+    def test_the_admin_password_is_read_from_its_secret_file(self, run, tmp_path):
+        """compose mounts it as a file so it never appears in `docker inspect`."""
+        (tmp_path / "admin_password").write_text("from-the-secret-file")
+        _, calls = run("migrate", ADMIN_USERNAME="root", SECRETS_DIR=str(tmp_path))
+        assert calls == ["alembic upgrade head", "python bootstrap.py"], calls
+
+    def test_an_empty_secret_file_means_do_not_provision(self, run, tmp_path):
+        (tmp_path / "admin_password").write_text("")
+        _, calls = run("migrate", ADMIN_USERNAME="root", SECRETS_DIR=str(tmp_path))
+        assert _programs(calls) == ["alembic"], calls
+
     def test_a_failed_migration_fails_the_job_and_skips_provisioning(self, run):
         """compose gates the API on this job's exit code."""
         done, calls = run("migrate", ADMIN_USERNAME="root", ADMIN_PASSWORD="pw", STUB_EXIT="1")

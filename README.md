@@ -232,8 +232,9 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   outstanding session with a single `UPDATE`
 - **Device authentication** — `/telemetry/ingest` requires both an operator
   bearer token and a device API key
-- **Secret validation** — startup fails on absent, short, or publicly-known
-  secrets (`backend/config.py`)
+- **Secrets as files** — mounted at `/run/secrets`, never container environment
+  variables; startup fails on absent, short, or publicly-known secrets
+  (`backend/config.py`)
 - **CI gates** — Trivy secret scanning blocks merges; `pip-audit`, `npm audit`,
   Ruff and Mypy run on every PR
 
@@ -244,18 +245,24 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 ### Docker (recommended)
 
 ```bash
-cp .env.example .env      # then fill in the required values
+cp .env.example .env          # settings: POSTGRES_USER, ADMIN_USERNAME, tuning
+scripts/init-secrets.sh       # secrets: one file each under ./secrets/
 docker compose up --build -d
 ```
 
-Required in `.env` — the backend refuses to start without them:
+**Settings live in `.env`; secrets do not.** `SECRET_KEY`, `DRONE_API_KEY`, the
+database password and the optional first-admin password are files under
+`./secrets/` (gitignored), mounted read-only at `/run/secrets`. As environment
+variables they were printed by `docker inspect` to anyone with Docker access.
+`init-secrets.sh` generates what is missing, never overwrites, and on an
+existing deployment takes the current values from `.env` so the database volume
+and every issued login keep working. `scripts/init-secrets.sh --check` verifies
+without changing anything. The backend refuses to start on a missing, short or
+publicly known secret, wherever it came from.
 
-```bash
-POSTGRES_USER, POSTGRES_PASSWORD
-SECRET_KEY=$(openssl rand -hex 32)
-DRONE_API_KEY=$(openssl rand -hex 32)
-ADMIN_USERNAME, ADMIN_PASSWORD   # optional: provisions the first admin
-```
+Running natively, without Docker, there is no `/run/secrets`: set the same names
+as environment variables or in `.env`, as before. The environment always wins
+over a file.
 
 `docker compose up` first runs a one-shot **`migrate`** job (schema migrations,
 then the optional admin) and starts the API only once it has exited 0. The API
@@ -323,6 +330,9 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `SWARMGUARD_SECRETS_DIR` | `./secrets` | Host directory holding the secret files compose mounts. Point it outside the checkout for anything real |
+| `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
+| `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
 | `REQUIRE_SCHEMA_AT_HEAD` | `true` | The API refuses to start against a database that is behind the build's migrations. A database that is *ahead* (a rollback) only warns |
 | `RUN_MIGRATIONS_ON_START` | `false` | Image only: migrate before serving, for a single container run by hand. Under compose the `migrate` job does this once |
 | `SWARMGUARD_TAG` | `local` | Tag of the backend image shared by the `migrate` job and the API |

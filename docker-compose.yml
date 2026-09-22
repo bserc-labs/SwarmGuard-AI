@@ -1,5 +1,12 @@
-# Secrets are read from a local .env file that is never committed.
-# Copy .env.example to .env and fill it in before the first `docker compose up`.
+# First run:
+#   cp .env.example .env          # settings; fill in POSTGRES_USER at least
+#   scripts/init-secrets.sh       # secrets, one file each under ./secrets/
+#   docker compose up --build -d
+#
+# Settings come from .env. Secrets do not: they are files, mounted read-only at
+# /run/secrets. As environment variables they were printed by `docker inspect`
+# to anyone with Docker access, inherited by every child process, and written
+# into crash dumps.
 
 # The one peer whose X-Forwarded-For the backend trusts: the nginx container,
 # which is given this address statically below. Anchored so the two places that
@@ -17,14 +24,31 @@ x-swarmguard:
       context: ./backend
     image: "swarmguard-backend:${SWARMGUARD_TAG:-local}"
 
+  # The compose secret is named for what it is on the host (the postgres
+  # password); the application knows it as DATABASE_PASSWORD, and the file name
+  # is what config.py matches on, hence the explicit target.
+  backend_secrets: &backend_secrets
+    - secret_key
+    - drone_api_key
+    - source: postgres_password
+      target: database_password
+
   # What both need. alembic imports the application's settings, so the migrate
   # job validates the same secrets the API does and fails on the same mistakes.
   backend_env: &backend_env
-    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-swarmguard}
+    # No password in the URL: it is the secret `database_password`, joined in
+    # memory by config.py.
+    DATABASE_URL: postgresql://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB:-swarmguard}
     REDIS_URL: redis://redis:6379
-    # Required. Startup fails on a missing, short, or publicly known value.
-    SECRET_KEY: "${SECRET_KEY:?SECRET_KEY is required - generate with openssl rand -hex 32}"
-    DRONE_API_KEY: "${DRONE_API_KEY:?DRONE_API_KEY is required - generate with openssl rand -hex 32}"
+    # Empty ON PURPOSE. .env is passed through whole by env_file, and may well
+    # still contain these from before they were files. `environment:` beats
+    # `env_file:`, and the application treats an empty value as unset, so this
+    # line is what guarantees the secret can reach the container only as a
+    # file. Startup still fails on a missing, short, or publicly known value.
+    SECRET_KEY: ""
+    DRONE_API_KEY: ""
+    DATABASE_PASSWORD: ""
+    POSTGRES_PASSWORD: ""
     ALGORITHM: ${ALGORITHM:-HS256}
     ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
 
@@ -49,8 +73,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # The image reads the password from the file itself. It refuses to start
+      # if POSTGRES_PASSWORD is set as well, so that variable must stay out.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-swarmguard}
+    secrets:
+      - postgres_password
     # Not published to the host. For a shell: docker compose exec postgres psql -U <user>
     expose:
       - "5432"
@@ -84,11 +112,19 @@ services:
     environment:
       <<: *backend_env
       # Optional: provisions the default organization and its admin. Only the
-      # job that does the provisioning is given the admin password; the
-      # long-running API never holds it.
+      # job that does the provisioning can read the admin password -- it is the
+      # secret `admin_password`, mounted here and nowhere else -- and the
+      # variable is blanked so a leftover in .env does not end up in
+      # `docker inspect` of this container, which is kept after it exits.
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD: ""
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+    secrets:
+      - secret_key
+      - drone_api_key
+      - source: postgres_password
+        target: database_password
+      - admin_password
 
   backend:
     <<: *backend_image
@@ -125,12 +161,14 @@ services:
     environment:
       <<: *backend_env
       # Blanked, not omitted: .env is passed through whole, and an empty value
-      # here is what keeps the admin password out of the API's environment.
+      # here is what keeps the admin password out of the API's environment. The
+      # admin_password secret is not mounted here either.
       ADMIN_PASSWORD: ""
       # uvicorn honours X-Forwarded-For only from this address -- the nginx
       # container, pinned below. Deliberately under `environment:` rather than
       # .env so it cannot be widened by accident.
       FORWARDED_ALLOW_IPS: *proxy_ip
+    secrets: *backend_secrets
     # Overrides the image's HEALTHCHECK, so it must not need curl either -- the
     # image no longer installs it. Python is in the image; 127.0.0.1 avoids
     # localhost resolving to [::1] against an IPv4 listener.
@@ -182,6 +220,20 @@ networks:
     ipam:
       config:
         - subnet: "${SWARMGUARD_SUBNET:-172.28.0.0/24}"
+
+# One file per secret, created by scripts/init-secrets.sh and never committed
+# (./secrets/ is gitignored). Point SWARMGUARD_SECRETS_DIR somewhere else to
+# keep them outside the checkout -- a tmpfs, or wherever your secret manager's
+# agent writes them. Rotation: docs/OPERATIONS.md.
+secrets:
+  secret_key:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key"
+  drone_api_key:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/drone_api_key"
+  postgres_password:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/postgres_password"
+  admin_password:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/admin_password"
 
 volumes:
   postgres_data:

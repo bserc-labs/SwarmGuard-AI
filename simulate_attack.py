@@ -14,8 +14,11 @@ Two things this has to get right that the previous version did not:
 Usage:
     export SWARMGUARD_USER=admin
     export SWARMGUARD_PASSWORD=...
-    export DRONE_API_KEY=...            # must match the backend's
     python simulate_attack.py
+
+The device key is taken from DRONE_API_KEY if that is set, and otherwise from
+./secrets/drone_api_key -- the same file docker-compose.yml mounts into the
+backend -- so under compose there is nothing to copy and nothing to mismatch.
 """
 
 import math
@@ -33,7 +36,23 @@ LOGIN_URL = f"{BASE_URL}/auth/login"
 
 USERNAME = os.environ.get("SWARMGUARD_USER", "admin")
 PASSWORD = os.environ.get("SWARMGUARD_PASSWORD")
-API_KEY = os.environ.get("DRONE_API_KEY")
+
+
+def _device_key() -> str | None:
+    """DRONE_API_KEY, else the secret file compose mounts into the backend."""
+    from pathlib import Path
+
+    value = os.environ.get("DRONE_API_KEY")
+    if value:
+        return value
+    secrets_dir = os.environ.get("SWARMGUARD_SECRETS_DIR") or Path(__file__).resolve().parent / "secrets"
+    try:
+        return (Path(secrets_dir) / "drone_api_key").read_text().strip() or None
+    except OSError:
+        return None
+
+
+API_KEY = _device_key()
 
 # Base coordinates around a defense sector (e.g. 34.0522, -118.2437)
 BASE_LAT = 34.0522
@@ -62,7 +81,10 @@ def authenticate() -> dict[str, str]:
     if not PASSWORD:
         sys.exit("SWARMGUARD_PASSWORD is not set. Export the operator password first.")
     if not API_KEY:
-        sys.exit("DRONE_API_KEY is not set. Export the same value the backend runs with.")
+        sys.exit(
+            "No device key: set DRONE_API_KEY, or run scripts/init-secrets.sh so that "
+            "./secrets/drone_api_key exists. It must be the value the backend runs with."
+        )
 
     try:
         # The login route is an OAuth2 password form, not a JSON body.

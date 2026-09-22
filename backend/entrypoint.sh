@@ -22,6 +22,16 @@ run_migrations() {
   # organization and its admin. Idempotent, so it is safe to leave configured.
   # It lives with the migrations because it needs the schema and, like them,
   # must happen once rather than once per replica.
+  #
+  # The password is read from its mounted secret when the variable is empty.
+  # Exporting it here puts it in this shell and bootstrap.py only; passed as a
+  # container variable it would sit in `docker inspect swarmguard-migrate` for
+  # as long as the exited container is kept.
+  ADMIN_PASSWORD_FILE="${SECRETS_DIR:-/run/secrets}/admin_password"
+  if [ -z "${ADMIN_PASSWORD:-}" ] && [ -s "$ADMIN_PASSWORD_FILE" ]; then
+    ADMIN_PASSWORD="$(cat "$ADMIN_PASSWORD_FILE")"
+    export ADMIN_PASSWORD
+  fi
   if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
     echo "[entrypoint] Provisioning admin '${ADMIN_USERNAME}'..."
     python bootstrap.py
