@@ -126,7 +126,7 @@ class TestAgainstARealDatabase:
         untouched = object()
         monkeypatch.setattr(main.app.state, "background_tasks", untouched, raising=False)
         with pytest.raises(SchemaOutOfDate):
-            asyncio.run(main.startup_event())
+            asyncio.run(main.startup())
         assert main.app.state.background_tasks is untouched, (
             "startup went on to create background tasks after the schema check failed"
         )

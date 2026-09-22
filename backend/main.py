@@ -1,5 +1,7 @@
 import logging
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI
@@ -58,7 +60,23 @@ class RedactQueryToken(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(RedactQueryToken())
 
-app = FastAPI(title="SwarmGuard AI API")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start-up and shutdown, in one place, in order.
+
+    Replaces the deprecated on_event startup/shutdown pair. The shape matters more than the deprecation: everything
+    before `yield` must succeed for the API to serve, and everything after it
+    runs on every shutdown, including the ones that used to abandon the
+    background loops mid-iteration.
+    """
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app = FastAPI(title="SwarmGuard AI API", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -181,8 +199,14 @@ async def periodic_database_cleanup():
         # Run every hour
         await asyncio.sleep(3600)
 
-@app.on_event("startup")
-async def startup_event():
+# How long shutdown waits for the background loops to acknowledge cancellation
+# before giving up on them. Each loop runs its work in a worker thread; a
+# cancellation is only observed between iterations, so this is the longest
+# single iteration we are prepared to wait for.
+SHUTDOWN_GRACE_S = 10.0
+
+
+async def startup() -> None:
     logger.info("Initializing SwarmGuard AI Backend...")
     # Migrations are applied by the migrate job, never here. Fail now, with the
     # reason, rather than on whichever request first meets a missing column.
@@ -192,31 +216,49 @@ async def startup_event():
     # Hold references: a bare create_task() result can be garbage-collected
     # while the coroutine is still running.
     app.state.background_tasks = [
-        asyncio.create_task(periodic_heartbeat_check()),
-        asyncio.create_task(periodic_database_cleanup()),
+        asyncio.create_task(periodic_heartbeat_check(), name="heartbeat-monitor"),
+        asyncio.create_task(periodic_database_cleanup(), name="telemetry-retention"),
     ]
-    
+
     # Start MAVLink receiver
     from services.mavlink_receiver import mavlink_receiver
     await mavlink_receiver.start()
-    
+
     logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")
     logger.info("Started background Data Retention Policy (prunes data older than 3 days)")
 
-@app.on_event("shutdown")
-async def shutdown_event():
+
+async def shutdown() -> None:
     logger.info("Shutting down SwarmGuard AI Backend...")
-    try:
-        await ws_manager.shutdown()
-    except Exception as e:
-        logger.error(f"Error shutting down WebSocket manager: {e}")
-    
-    # Stop MAVLink receiver
+
+    # Stop producing before closing the sockets that deliver: the loops first,
+    # then the receiver, then the WebSocket manager. They used to be left
+    # running until the event loop was torn down under them, which is why a
+    # shutdown could log a heartbeat error for a database that had already
+    # gone away.
+    tasks = list(getattr(app.state, "background_tasks", []))
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE_S)
+        for task in pending:
+            logger.error(f"Background task {task.get_name()} did not stop within {SHUTDOWN_GRACE_S}s")
+        for task in done:
+            if not task.cancelled() and task.exception() is not None:
+                logger.error(f"Background task {task.get_name()} ended with an error", exc_info=task.exception())
+    app.state.background_tasks = []
+
     try:
         from services.mavlink_receiver import mavlink_receiver
         await mavlink_receiver.stop()
     except Exception as e:
         logger.error(f"Error stopping MAVLink receiver: {e}")
+
+    try:
+        await ws_manager.shutdown()
+    except Exception as e:
+        logger.error(f"Error shutting down WebSocket manager: {e}")
+
 
 @app.get("/")
 def read_root():
