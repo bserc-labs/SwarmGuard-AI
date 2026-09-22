@@ -237,6 +237,8 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   (`backend/config.py`)
 - **CI gates** — Trivy secret scanning blocks merges; `pip-audit`, `npm audit`,
   Ruff and Mypy run on every PR
+- **Backups** — a 6-hourly `pg_dump` sidecar, a TimescaleDB-aware restore, and a
+  restore rehearsal that CI runs on every push
 
 ---
 
@@ -337,6 +339,8 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `BACKUP_INTERVAL_S` / `BACKUP_RETAIN_DAYS` | `21600` / `14` | Dump every 6 h (the RPO), keep 14 days. Restore and rehearsal: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#backups-and-restore) |
+| `SWARMGUARD_BACKUP_DIR` | `backups` volume | Where dumps go. Point it at a directory that is copied off the host |
 | `BACKEND_MEMORY_LIMIT` / `BACKEND_CPUS` | `1g` / `2.0` | Container limits. Measured: 270 MiB with the model and SHAP loaded |
 | `POSTGRES_MEMORY_LIMIT` / `POSTGRES_SHARED_BUFFERS` / `POSTGRES_EFFECTIVE_CACHE_SIZE` | `2g` / `512MB` / `1536MB` | Change together: 25% and 75% of the limit. The image tunes postgres to the *host* otherwise |
 | `REDIS_MEMORY_LIMIT` / `REDIS_MAXMEMORY` | `256m` / `192mb` | `maxmemory` stays below the limit so redis evicts rather than being OOM-killed |

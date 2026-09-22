@@ -90,6 +90,71 @@ curl -sI https://HOST/ | grep -i strict-transport-security        # present
 openssl s_client -connect HOST:443 -tls1_1 </dev/null 2>&1 | grep -c "alert"   # refused
 ```
 
+## Backups and restore
+
+The `backup` service takes a compressed `pg_dump` every 6 hours and keeps 14
+days of them on the `backups` volume. It is the same image as postgres, so
+`pg_dump` and the server are always the same version.
+
+| Commitment | Value | Where it comes from |
+|---|---|---|
+| **RPO** — most data that can be lost | 6 h (`BACKUP_INTERVAL_S`) | the dump interval |
+| **RTO** — time to be back | ~1 min at today's size (`restore` measured at 32 s including API stop/start on an 11 MB database); grows with the database | the rehearsal prints the restore time each run |
+| Retention | 14 days (`BACKUP_RETAIN_DAYS`) | prune step |
+
+**A backup on the same disk as the database survives a bad migration, not a dead
+disk.** Point `SWARMGUARD_BACKUP_DIR` at a directory that is itself copied off
+the host (rsync, restic, an object-storage sync). For minute-level RPO use WAL
+archiving (WAL-G or pgBackRest) to a bucket; that needs a bucket this project
+does not have yet, so it is the next step, not this one.
+
+```bash
+docker compose run --rm backup /scripts/check-backups.sh     # recent and complete? exit 1 if not
+docker compose run --rm backup /scripts/rehearse-restore.sh  # dump, restore to scratch, compare, drop
+docker compose run --rm backup /scripts/backup.sh --once     # a dump right now
+docker compose logs backup                                   # what the loop has been doing
+```
+
+`pg_dump` prints a warning about circular foreign keys on `continuous_agg`.
+That is TimescaleDB's own catalogue and is harmless for a full dump.
+
+### Rehearse the restore
+
+An untested backup is a hypothesis. `rehearse-restore.sh` takes a fresh dump,
+restores it into `<db>_rehearsal`, compares every table's row count with the
+live database, checks that `telemetry_logs` is still a hypertable with the same
+chunks, drops the scratch database, and prints how long the restore took. CI
+runs it on every push against the database the live security suite has just
+filled. On a busy server, rows arrive between the dump and the compare:
+`--allow-drift` reports a table that has *more* rows live than restored instead
+of failing on it. Fewer, or a missing table, still fails.
+
+### Restore for real
+
+```bash
+docker compose stop backend                       # its connections would be killed mid-request
+docker compose run --rm backup /scripts/restore.sh --yes           # newest dump
+docker compose run --rm backup /scripts/restore.sh --yes --dump /backups/swarmguard-20260921T180000Z.dump
+docker compose start backend
+```
+
+`--yes` is required for the live database; without it the script tells you to
+try `--into <scratch>` first. Every step stops on error, and `pg_restore` runs
+with `--exit-on-error`, because its default is to carry on past errors and exit
+0 with a partial database. A failed restore into a scratch database drops it; a
+failed restore of the live database keeps it and says **INCOMPLETE** loudly,
+since there may be nothing better to replace it with.
+
+Why not plain `pg_restore`: TimescaleDB needs `timescaledb_pre_restore()`
+before the data and `timescaledb_post_restore()` after it, in a fresh database
+that already has the extension. Without that the catalogue is wrong in ways
+that surface at the first chunk operation, not at restore time.
+
+Verified here, on the development stack: a live restore with the API stopped
+took 32 s end to end and every table matched afterwards; a truncated dump
+failed and was cleaned up; a `.partial` and a live restore without `--yes` were
+both refused.
+
 ## Resource limits
 
 Every container has a memory, CPU and PID limit, rotates its logs (5 × 10 MB),

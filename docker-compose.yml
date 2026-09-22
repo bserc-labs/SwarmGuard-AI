@@ -166,6 +166,55 @@ services:
       # First boot initialises the cluster before it will answer at all.
       start_period: 30s
 
+  # A compressed pg_dump every BACKUP_INTERVAL_S (6 h), pruned after
+  # BACKUP_RETAIN_DAYS (14). That interval is the RPO: at most six hours of
+  # data can be lost. Same image as postgres, so pg_dump and the server are
+  # always the same version. The restore side lives in the same container:
+  #
+  #   docker compose run --rm backup /scripts/rehearse-restore.sh
+  #   docker compose run --rm backup /scripts/restore.sh --into swarmguard_scratch
+  #   docker compose run --rm backup /scripts/check-backups.sh
+  #
+  # Dumps go to the `backups` volume by default. For anything real point
+  # SWARMGUARD_BACKUP_DIR at a directory that is itself copied off the host --
+  # a backup on the same disk as the database survives a bad migration and not
+  # a dead disk. Minute-level RPO needs WAL archiving to object storage
+  # (docs/OPERATIONS.md); this is the floor, not the ceiling.
+  backup:
+    image: timescale/timescaledb:latest-pg16
+    container_name: swarmguard-backup
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    cap_drop:
+      - ALL
+    # `command`, not `entrypoint`: the image's entrypoint execs any non-postgres
+    # command as given, and `docker compose run --rm backup /scripts/<x>.sh`
+    # must be able to replace the loop with a one-off restore or rehearsal.
+    command: ["/scripts/backup.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB:-swarmguard}
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_S: ${BACKUP_INTERVAL_S:-21600}
+      BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-14}
+    secrets:
+      - postgres_password
+    volumes:
+      - ./scripts:/scripts:ro
+      - "${SWARMGUARD_BACKUP_DIR:-backups}:/backups"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256m
+          pids: 64
+
   # Runs once per `docker compose up`, then exits. Migrations used to run from
   # the backend's entrypoint on every start, which is safe for exactly one
   # replica: two starting together ran the same DDL concurrently. A one-shot job
@@ -364,3 +413,4 @@ secrets:
 
 volumes:
   postgres_data:
+  backups:

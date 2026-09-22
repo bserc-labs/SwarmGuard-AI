@@ -29,6 +29,7 @@ Icon
 /secrets/
 /certs/
 /acme/
+/backups/
 
 # ==============================================================================
 # Python / FastAPI (Backend)

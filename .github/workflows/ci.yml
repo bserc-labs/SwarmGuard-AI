@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: warn
 
   integration-security:
-    name: Live security suite
+    name: Live security suite & restore rehearsal
     runs-on: ubuntu-latest
 
     # tests/test_sprint7_security.py drives a real server over HTTP. It has
@@ -188,6 +188,31 @@ jobs:
         # rather than skip when it cannot run, so "never executed" can no
         # longer read as green.
         run: pytest tests/test_sprint7_security.py -v
+
+      # An untested backup is a hypothesis. The suite has just filled this
+      # database with real organizations, users, drones, incidents and audit
+      # rows, so it is the right thing to dump, restore into a scratch
+      # database, and compare table by table. Run from the same image the
+      # compose stack uses for its backup service, against the service
+      # container on localhost, with the repository's own scripts mounted --
+      # so what passes here is what runs in production, not a look-alike.
+      - name: Rehearse a backup and restore
+        run: |
+          mkdir -p "${RUNNER_TEMP}/backups"
+          docker run --rm --network host \
+            -v "${PWD}/scripts:/scripts:ro" \
+            -v "${RUNNER_TEMP}/backups:/backups" \
+            -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=password \
+            -e PGDATABASE=swarmguard_integration -e BACKUP_DIR=/backups \
+            timescale/timescaledb:latest-pg16 /scripts/rehearse-restore.sh
+
+      - name: Check the backup is recent and complete
+        run: |
+          docker run --rm \
+            -v "${PWD}/scripts:/scripts:ro" \
+            -v "${RUNNER_TEMP}/backups:/backups" \
+            -e BACKUP_DIR=/backups \
+            timescale/timescaledb:latest-pg16 /scripts/check-backups.sh
 
       - name: API log
         if: always()

@@ -294,7 +294,7 @@ class TestEveryContainerIsContained:
         for name, svc in services.items():
             assert "no-new-privileges:true" in svc.get("security_opt", []), name
 
-    @pytest.mark.parametrize("name", ["backend", "migrate", "frontend"])
+    @pytest.mark.parametrize("name", ["backend", "migrate", "frontend", "backup"])
     def test_unprivileged_services_drop_every_capability(self, services, name):
         assert services[name].get("cap_drop") == ["ALL"], name
 
@@ -321,4 +321,41 @@ class TestEveryContainerIsContained:
         assert maxmemory < limit
         assert command[command.index("--maxmemory-policy") + 1] == "volatile-lru"
         assert command[command.index("--appendonly") + 1] == "no", "nothing in redis needs persistence"
+
+
+class TestBackups:
+    """A scheduled dump, restorable from the same container, on its own volume."""
+
+    @pytest.fixture(scope="class")
+    def backup(self, compose) -> dict:
+        assert "backup" in compose["services"], "there is no backup service"
+        return compose["services"]["backup"]
+
+    def test_pg_dump_is_the_same_version_as_the_server(self, backup, compose):
+        assert backup["image"] == compose["services"]["postgres"]["image"]
+
+    def test_it_runs_the_loop_as_a_command_so_run_can_replace_it(self, backup):
+        """`docker compose run --rm backup /scripts/restore.sh` must not start another loop."""
+        assert backup["command"] == ["/scripts/backup.sh"]
+        assert "entrypoint" not in backup
+
+    def test_it_reads_the_password_from_the_secret_not_the_environment(self, backup):
+        assert backup["environment"]["PGPASSWORD_FILE"] == "/run/secrets/postgres_password"
+        assert "PGPASSWORD" not in backup["environment"]
+        assert "postgres_password" in _secret_targets(backup)
+
+    def test_the_scripts_are_mounted_read_only_and_the_dumps_are_a_volume(self, backup, compose):
+        mounts = {v.split(":", 1)[1] for v in backup["volumes"]}
+        assert "/scripts:ro" in mounts
+        dumps = next(v for v in backup["volumes"] if v.endswith(":/backups"))
+        assert _default(dumps.rsplit(":", 1)[0]) == "backups"
+        assert "backups" in compose["volumes"]
+        assert "/backups/" in (ROOT / ".gitignore").read_text().splitlines()
+
+    def test_the_interval_is_the_documented_rpo(self, backup):
+        assert _default(backup["environment"]["BACKUP_INTERVAL_S"]) == "21600"
+        assert _default(backup["environment"]["BACKUP_RETAIN_DAYS"]) == "14"
+
+    def test_it_waits_for_a_healthy_database(self, backup):
+        assert backup["depends_on"]["postgres"]["condition"] == "service_healthy"
 
