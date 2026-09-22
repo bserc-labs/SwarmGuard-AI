@@ -210,7 +210,7 @@ class TestMigrationsRunOnce:
 
 
 class TestSecretsAreFilesNotVariables:
-    SECRET_VARIABLES = ("SECRET_KEY", "DRONE_API_KEY", "DATABASE_PASSWORD", "POSTGRES_PASSWORD")
+    SECRET_VARIABLES = ("SECRET_KEY", "DRONE_API_KEY", "DATABASE_PASSWORD", "POSTGRES_PASSWORD", "SENTRY_DSN")
 
     @pytest.mark.parametrize("service", ["backend", "migrate"])
     def test_every_secret_variable_is_explicitly_blank(self, compose, service):
@@ -240,6 +240,7 @@ class TestSecretsAreFilesNotVariables:
         assert _secret_targets(backend) == {
             "secret_key",
             "secret_key_previous",
+            "sentry_dsn",
             "drone_api_key",
             "database_password",
         }

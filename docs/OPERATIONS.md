@@ -142,6 +142,33 @@ worker keeps its own counters and a scrape sees one of them; that needs
 prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a
 deliberate later step.
 
+## Error tracking
+
+Unhandled exceptions become an opaque 500 and one log line. With `SENTRY_DSN`
+set they are also grouped, counted and attached to the request that raised
+them, in Sentry or anything that speaks its protocol. Unset, nothing changes.
+
+```bash
+printf '%s' 'https://<key>@<org>.ingest.sentry.io/<project>' > secrets/sentry_dsn
+chmod 444 secrets/sentry_dsn
+docker compose up -d --force-recreate backend
+```
+
+The DSN is a credential and travels like the others: a secret file, blanked in
+the container environment. `SWARMGUARD_ENV` (default `development`) tags every
+event with the deployment; `deploy.sh` sets `SWARMGUARD_RELEASE` to the image
+tag, so an issue names the commit that raised it.
+
+**What is sent.** Before an event leaves the process, `Authorization`, `Cookie`
+and `X-Drone-API-Key` headers, the `token` query parameter of the WebSocket
+handshake, and password, token and key fields anywhere in a request body are
+replaced with `[redacted]`; default PII is off. A stack trace can still carry a
+local variable, which is what the tracker's own server-side scrubbing rules are
+for: turn them on in the project settings.
+
+Not verified here against a real project, which needs a DSN this repository
+does not have. The scrubbing and the initialisation arguments are tested.
+
 ## Releases and deploys
 
 CI publishes images; a script on the host deploys them; a failed deploy rolls

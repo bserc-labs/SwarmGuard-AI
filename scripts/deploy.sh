@@ -48,6 +48,8 @@ run_stack() {
   # section; if one crept back in, building on the server is not what anyone
   # wants a deploy to do quietly.
   SWARMGUARD_TAG="$1" $COMPOSE pull --quiet
+  # The tag doubles as SWARMGUARD_RELEASE inside the containers, so an error
+  # report names the commit that raised it.
   SWARMGUARD_TAG="$1" $COMPOSE up -d --no-build --remove-orphans
 }
 

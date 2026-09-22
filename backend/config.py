@@ -201,6 +201,20 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # --- Error tracking -------------------------------------------------------
+    #
+    # Unhandled exceptions become an opaque 500 and one log line. With a DSN
+    # they are also grouped, counted and attached to the request that raised
+    # them, in Sentry or anything that speaks its protocol. Off when unset.
+    # Credentials are scrubbed before an event leaves the process
+    # (utils/error_tracking.py); turn on server-side scrubbing as well.
+    SENTRY_DSN: str | None = None
+    # Tags every event and metric with where it came from.
+    SWARMGUARD_ENV: str = "development"
+    # The image tag CI built; deploy.sh passes it through so an issue names the
+    # exact commit that raised it.
+    SWARMGUARD_RELEASE: str | None = None
+
     # --- Metrics --------------------------------------------------------------
     #
     # /metrics is the Prometheus exposition. nginx does not proxy it (404 through

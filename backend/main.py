@@ -34,6 +34,7 @@ from services.readiness import Probe, check_readiness
 from services.supervisor import Supervisor
 from services.ws_manager import ws_manager
 from utils import metrics
+from utils.error_tracking import init_error_tracking
 from utils.limiter import REDIS_URL, limiter, storage_healthy
 
 # Setup JSON logging
@@ -80,6 +81,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await shutdown()
 
+
+# Before the app is built, so the SDK's integrations wrap it.
+_settings = get_settings()
+init_error_tracking(
+    _settings.SENTRY_DSN,
+    environment=_settings.SWARMGUARD_ENV,
+    release=_settings.SWARMGUARD_RELEASE,
+    logger=logger,
+)
 
 app = FastAPI(title="SwarmGuard AI API", lifespan=lifespan)
 app.state.limiter = limiter

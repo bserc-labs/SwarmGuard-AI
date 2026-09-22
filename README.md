@@ -239,6 +239,8 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   Ruff and Mypy run on every PR
 - **Backups** — a 6-hourly `pg_dump` sidecar, a TimescaleDB-aware restore, and a
   restore rehearsal that CI runs on every push
+- **Error tracking** — optional Sentry-compatible reporting, credentials scrubbed
+  before an event leaves the process
 - **Metrics** — Prometheus exposition on `/metrics`: requests by route template,
   ingest and detection outcomes, incidents by tier, pool usage, sockets, and the
   supervised loops; `docker compose --profile observability up` adds a Prometheus
@@ -364,6 +366,8 @@ cd frontend && npm run test
 | `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
 | `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
 | `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
+| `SENTRY_DSN` | — | Error tracking. Unset, off. Under compose it is the secret file `sentry_dsn` |
+| `SWARMGUARD_ENV` / `SWARMGUARD_RELEASE` | `development` / image tag | Tags on every error and metric; `deploy.sh` sets the release |
 | `METRICS_TOKEN` | — | Bearer token required on `/metrics`. Unset, the endpoint relies on not being proxied and on the API port being loopback-only |
 | `READINESS_REQUIRES_REDIS` | `true` | `/ready` answers 503 when Redis is down. Set `false` behind a load balancer with several replicas, where a Redis outage should degrade rather than take every replica out |
 | `READINESS_TIMEOUT_S` | `3` | Per-dependency deadline for `/ready` |

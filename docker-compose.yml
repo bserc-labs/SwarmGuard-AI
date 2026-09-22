@@ -44,6 +44,8 @@ x-swarmguard:
   # is what config.py matches on, hence the explicit target.
   backend_secrets: &backend_secrets
     - secret_key
+    # Empty unless error tracking is on.
+    - sentry_dsn
     # Empty except during a key rotation -- scripts/rotate-secret-key.sh.
     - secret_key_previous
     - drone_api_key
@@ -68,6 +70,13 @@ x-swarmguard:
     DATABASE_PASSWORD: ""
     POSTGRES_PASSWORD: ""
     ALGORITHM: ${ALGORITHM:-HS256}
+    # Which deployment this is, on every error and metric. deploy.sh sets the
+    # release to the image tag it deployed.
+    SWARMGUARD_ENV: ${SWARMGUARD_ENV:-development}
+    SWARMGUARD_RELEASE: ${SWARMGUARD_TAG:-local}
+    # The DSN is a credential: it arrives as the secret file sentry_dsn, empty
+    # when error tracking is off. Blank here for the same reason as the others.
+    SENTRY_DSN: ""
     ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
 
 services:
@@ -288,6 +297,7 @@ services:
     secrets:
       - secret_key
       - secret_key_previous
+      - sentry_dsn
       - drone_api_key
       - source: postgres_password
         target: database_password
@@ -445,6 +455,8 @@ secrets:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key"
   secret_key_previous:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key_previous"
+  sentry_dsn:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/sentry_dsn"
   drone_api_key:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/drone_api_key"
   postgres_password:
