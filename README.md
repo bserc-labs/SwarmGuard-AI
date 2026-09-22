@@ -264,6 +264,9 @@ Running natively, without Docker, there is no `/run/secrets`: set the same names
 as environment variables or in `.env`, as before. The environment always wins
 over a file.
 
+Start-up order, the secret files, and how to rotate each key without an outage:
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
 `docker compose up` first runs a one-shot **`migrate`** job (schema migrations,
 then the optional admin) and starts the API only once it has exited 0. The API
 itself never migrates: it checks that the database is at the revision the build
@@ -331,6 +334,7 @@ cd frontend && npm run test
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
 | `SWARMGUARD_SECRETS_DIR` | `./secrets` | Host directory holding the secret files compose mounts. Point it outside the checkout for anything real |
+| `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
 | `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
 | `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
 | `REQUIRE_SCHEMA_AT_HEAD` | `true` | The API refuses to start against a database that is behind the build's migrations. A database that is *ahead* (a rollback) only warns |

@@ -235,7 +235,12 @@ class TestSecretsAreFilesNotVariables:
 
     def test_the_api_mounts_the_names_the_application_looks_for(self, backend):
         """config.py matches a secret to a setting by file name."""
-        assert _secret_targets(backend) == {"secret_key", "drone_api_key", "database_password"}
+        assert _secret_targets(backend) == {
+            "secret_key",
+            "secret_key_previous",
+            "drone_api_key",
+            "database_password",
+        }
 
     def test_postgres_reads_its_password_from_the_file(self, compose):
         postgres = compose["services"]["postgres"]

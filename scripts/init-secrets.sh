@@ -75,6 +75,9 @@ ensure drone_api_key     DRONE_API_KEY     yes
 ensure postgres_password POSTGRES_PASSWORD yes
 # Optional: the first admin's password. An empty file means "do not provision".
 ensure admin_password    ADMIN_PASSWORD    no
+# Empty except during a key rotation (scripts/rotate-secret-key.sh). It has to
+# exist regardless: compose refuses to start with a secret file missing.
+ensure secret_key_previous SECRET_KEY_PREVIOUS no
 
 # The application refuses secrets shorter than this; say so here rather than
 # in a container log three commands later.
@@ -94,7 +97,8 @@ fi
 # must stay world-readable: compose bind-mounts them, and the containers read
 # them as unprivileged users whose uid does not exist on the host.
 chmod 700 "$DIR"
-chmod 444 "$DIR"/secret_key "$DIR"/drone_api_key "$DIR"/postgres_password "$DIR"/admin_password
+chmod 444 "$DIR"/secret_key "$DIR"/secret_key_previous "$DIR"/drone_api_key \
+  "$DIR"/postgres_password "$DIR"/admin_password
 
 if [ -n "$created" ]; then
   printf 'Created in %s:%b\n' "$DIR" "$created"

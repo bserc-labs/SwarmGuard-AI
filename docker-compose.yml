@@ -29,6 +29,8 @@ x-swarmguard:
   # is what config.py matches on, hence the explicit target.
   backend_secrets: &backend_secrets
     - secret_key
+    # Empty except during a key rotation -- scripts/rotate-secret-key.sh.
+    - secret_key_previous
     - drone_api_key
     - source: postgres_password
       target: database_password
@@ -46,6 +48,7 @@ x-swarmguard:
     # line is what guarantees the secret can reach the container only as a
     # file. Startup still fails on a missing, short, or publicly known value.
     SECRET_KEY: ""
+    SECRET_KEY_PREVIOUS: ""
     DRONE_API_KEY: ""
     DATABASE_PASSWORD: ""
     POSTGRES_PASSWORD: ""
@@ -121,6 +124,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
     secrets:
       - secret_key
+      - secret_key_previous
       - drone_api_key
       - source: postgres_password
         target: database_password
@@ -228,6 +232,8 @@ networks:
 secrets:
   secret_key:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key"
+  secret_key_previous:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key_previous"
   drone_api_key:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/drone_api_key"
   postgres_password:

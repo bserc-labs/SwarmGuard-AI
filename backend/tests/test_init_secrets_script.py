@@ -104,7 +104,7 @@ def test_the_directory_is_private_and_the_files_are_readable_by_containers(run):
     """Containers read these as users whose uid does not exist on the host."""
     _, secrets = run()
     assert stat.S_IMODE(secrets.stat().st_mode) == 0o700
-    for name in (*REQUIRED, "admin_password"):
+    for name in (*REQUIRED, "admin_password", "secret_key_previous"):
         assert stat.S_IMODE((secrets / name).stat().st_mode) == 0o444, name
 
 

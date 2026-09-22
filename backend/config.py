@@ -98,6 +98,16 @@ class Settings(BaseSettings):
     # Under compose it arrives as the file /run/secrets/database_password.
     DATABASE_PASSWORD: str | None = None
     SECRET_KEY: str
+    # Rotation without an outage. Tokens are always *signed* with SECRET_KEY and
+    # *verified* against SECRET_KEY and then this. To rotate: move the current
+    # key here, put a new one in SECRET_KEY, restart; clear this again once
+    # ACCESS_TOKEN_EXPIRE_MINUTES have passed and every old token has expired.
+    #
+    # Without it, changing SECRET_KEY invalidates every session at the same
+    # instant, so in practice the key is never changed. If the key has actually
+    # leaked, that instant logout is exactly what you want: rotate and leave
+    # this empty (scripts/rotate-secret-key.sh --emergency).
+    SECRET_KEY_PREVIOUS: str | None = None
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
@@ -237,6 +247,14 @@ class Settings(BaseSettings):
     def _check_drone_api_key(cls, v: str) -> str:
         return _validate_secret(v, "DRONE_API_KEY")
 
+    @field_validator("SECRET_KEY_PREVIOUS", mode="before")
+    @classmethod
+    def _check_previous_secret_key(cls, v: str | None) -> str | None:
+        # Compose always mounts the file; an empty one means "not rotating".
+        if v is None or not str(v).strip():
+            return None
+        return _validate_secret(str(v).strip(), "SECRET_KEY_PREVIOUS")
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _warn_on_weak_database_password(cls, v: str) -> str:
@@ -254,6 +272,15 @@ class Settings(BaseSettings):
         """
         _warn_if_weak_db_password(_db_password(v))
         return v
+
+    @model_validator(mode="after")
+    def _previous_key_must_differ(self) -> "Settings":
+        if self.SECRET_KEY_PREVIOUS and self.SECRET_KEY_PREVIOUS == self.SECRET_KEY:
+            raise ValueError(
+                "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
+                "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
 
     @model_validator(mode="after")
     def _assemble_database_url(self) -> "Settings":
