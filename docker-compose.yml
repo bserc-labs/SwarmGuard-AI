@@ -9,6 +9,25 @@
 x-swarmguard:
   proxy_ip: &proxy_ip "${SWARMGUARD_PROXY_IP:-172.28.0.10}"
 
+  # One image, two services: `migrate` runs it once to bring the schema up to
+  # date, `backend` runs it to serve. Same build, same tag, so the code that
+  # migrated the database is byte-for-byte the code that then reads it.
+  backend_image: &backend_image
+    build:
+      context: ./backend
+    image: "swarmguard-backend:${SWARMGUARD_TAG:-local}"
+
+  # What both need. alembic imports the application's settings, so the migrate
+  # job validates the same secrets the API does and fails on the same mistakes.
+  backend_env: &backend_env
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-swarmguard}
+    REDIS_URL: redis://redis:6379
+    # Required. Startup fails on a missing, short, or publicly known value.
+    SECRET_KEY: "${SECRET_KEY:?SECRET_KEY is required - generate with openssl rand -hex 32}"
+    DRONE_API_KEY: "${DRONE_API_KEY:?DRONE_API_KEY is required - generate with openssl rand -hex 32}"
+    ALGORITHM: ${ALGORITHM:-HS256}
+    ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+
 services:
   redis:
     image: redis:7-alpine
@@ -47,9 +66,32 @@ services:
       # First boot initialises the cluster before it will answer at all.
       start_period: 30s
 
+  # Runs once per `docker compose up`, then exits. Migrations used to run from
+  # the backend's entrypoint on every start, which is safe for exactly one
+  # replica: two starting together ran the same DDL concurrently. A one-shot job
+  # is the compose spelling of an init container or a Kubernetes Job.
+  migrate:
+    <<: *backend_image
+    container_name: swarmguard-migrate
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend_env
+      # Optional: provisions the default organization and its admin. Only the
+      # job that does the provisioning is given the admin password; the
+      # long-running API never holds it.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+
   backend:
-    build:
-      context: ./backend
+    <<: *backend_image
     container_name: swarmguard-backend
     restart: unless-stopped
     # Loopback only. Published on all interfaces, this was a second ingress
@@ -61,6 +103,11 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      # Not merely started: finished, with exit code 0. If a migration fails the
+      # API does not come up at all, and the failure is the migrate container's
+      # log rather than a 500 on some later request.
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -76,17 +123,10 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-swarmguard}
-      REDIS_URL: redis://redis:6379
-      # Required. Startup fails on a missing, short, or publicly known value.
-      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY is required - generate with openssl rand -hex 32}"
-      DRONE_API_KEY: "${DRONE_API_KEY:?DRONE_API_KEY is required - generate with openssl rand -hex 32}"
-      ALGORITHM: ${ALGORITHM:-HS256}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
-      # Optional: provisions the default organization and its admin on first start.
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      <<: *backend_env
+      # Blanked, not omitted: .env is passed through whole, and an empty value
+      # here is what keeps the admin password out of the API's environment.
+      ADMIN_PASSWORD: ""
       # uvicorn honours X-Forwarded-For only from this address -- the nginx
       # container, pinned below. Deliberately under `environment:` rather than
       # .env so it cannot be widened by accident.
@@ -103,12 +143,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      # The entrypoint runs `alembic upgrade head` before serving. On a fresh
-      # volume that is eight migrations including hypertable setup; without a
-      # grace period the first probes failed, the container was marked
-      # unhealthy, and the frontend (which waits on service_healthy) never
-      # started. Docker does not restart an unhealthy container.
-      start_period: 60s
+      # Migrations no longer run here -- the migrate job has finished before
+      # this container starts -- so the grace period covers only the import of
+      # the application and its schema check. Failures during it do not count;
+      # a success ends it early.
+      start_period: 30s
 
   frontend:
     build:

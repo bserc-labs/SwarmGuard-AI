@@ -131,6 +131,18 @@ class Settings(BaseSettings):
     # 30 s default, which the client times out before and so hides the cause.
     DB_POOL_TIMEOUT: int = 10
 
+    # --- Schema guard -------------------------------------------------------
+    #
+    # Migrations run once, from a dedicated job, not from every container start
+    # (two replicas starting together ran the same DDL concurrently). The API
+    # therefore checks at startup that the database is at the revision this
+    # build ships, and refuses to serve if it is behind -- see
+    # utils/schema_check.py for why "ahead" only warns.
+    #
+    # Turn this off only to bring the API up against a database you are in the
+    # middle of repairing by hand.
+    REQUIRE_SCHEMA_AT_HEAD: bool = True
+
     # --- Tier 1: kinematic guard -------------------------------------------
     #
     # Physical limits of the airframe, with margin. These are deliberately set

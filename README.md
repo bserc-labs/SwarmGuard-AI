@@ -257,6 +257,13 @@ DRONE_API_KEY=$(openssl rand -hex 32)
 ADMIN_USERNAME, ADMIN_PASSWORD   # optional: provisions the first admin
 ```
 
+`docker compose up` first runs a one-shot **`migrate`** job (schema migrations,
+then the optional admin) and starts the API only once it has exited 0. The API
+itself never migrates: it checks that the database is at the revision the build
+ships and refuses to start if it is behind, because two replicas migrating on
+start ran the same DDL at the same time. To migrate by hand:
+`docker compose run --rm migrate`.
+
 Frontend on `:80`. The API is published on loopback only —
 `http://localhost:8000` (OpenAPI docs at `/docs`) — for the local demo and
 scripts; everything else reaches it through nginx at `/api`. Every variable in
@@ -316,6 +323,9 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `REQUIRE_SCHEMA_AT_HEAD` | `true` | The API refuses to start against a database that is behind the build's migrations. A database that is *ahead* (a rollback) only warns |
+| `RUN_MIGRATIONS_ON_START` | `false` | Image only: migrate before serving, for a single container run by hand. Under compose the `migrate` job does this once |
+| `SWARMGUARD_TAG` | `local` | Tag of the backend image shared by the `migrate` job and the API |
 | `FORWARDED_ALLOW_IPS` | nginx container (compose) / `127.0.0.1` (image) | Peers whose `X-Forwarded-For` uvicorn honours. Set by compose; not overridable from `.env` |
 | `SWARMGUARD_SUBNET` / `SWARMGUARD_PROXY_IP` | `172.28.0.0/24` / `172.28.0.10` | Compose network and the frontend's static address. Change only on a subnet collision, then `docker compose down` once |
 

@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import models
-from database import SessionLocal
+from config import get_settings
+from database import SessionLocal, engine
 from routers import (
     ai,
     ai_explain,
@@ -29,6 +30,7 @@ from utils.limiter import limiter, storage_healthy
 
 # Setup JSON logging
 from utils.logger import logger
+from utils.schema_check import assert_schema_current
 
 
 class RedactQueryToken(logging.Filter):
@@ -163,7 +165,11 @@ async def periodic_database_cleanup():
 @app.on_event("startup")
 async def startup_event():
     logger.info("Initializing SwarmGuard AI Backend...")
-    # Alembic handles migrations and hypertable initialization in production.
+    # Migrations are applied by the migrate job, never here. Fail now, with the
+    # reason, rather than on whichever request first meets a missing column.
+    # In a worker thread: it is a blocking database call on the event loop.
+    if get_settings().REQUIRE_SCHEMA_AT_HEAD:
+        await asyncio.to_thread(assert_schema_current, engine, logger)
     # Hold references: a bare create_task() result can be garbage-collected
     # while the coroutine is still running.
     app.state.background_tasks = [

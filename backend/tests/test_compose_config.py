@@ -7,6 +7,8 @@ pinned here. Each of these regressions shipped once:
 - tuning variables set in .env never reaching the container (no env_file);
 - healthchecks with no start_period, so a slow first migration marked the
   backend unhealthy and the frontend never started.
+- migrations run from the backend entrypoint on every start, so two replicas
+  starting together ran the same DDL against the same database at once.
 
 The file is read as YAML rather than through ``docker compose config`` so the
 check needs no Docker in CI. PyYAML is installed by uvicorn[standard].
@@ -144,3 +146,48 @@ class TestHealthchecks:
         test = compose["services"]["postgres"]["healthcheck"]["test"]
         command = " ".join(test) if isinstance(test, list) else str(test)
         assert "pg_isready" in command and "-h 127.0.0.1" in command, command
+
+
+class TestMigrationsRunOnce:
+    """Migrations are a one-shot job the API waits for, not something it does."""
+
+    @pytest.fixture(scope="class")
+    def migrate(self, compose) -> dict:
+        assert "migrate" in compose["services"], "there must be a dedicated migrate job"
+        return compose["services"]["migrate"]
+
+    def test_the_job_migrates_and_is_never_restarted(self, migrate):
+        assert migrate["command"] == ["migrate"]
+        # `restart: unless-stopped` would re-run a *failed* migration in a loop,
+        # and re-run a successful one on every daemon restart.
+        assert str(migrate.get("restart")) == "no"
+        assert "ports" not in migrate and "healthcheck" not in migrate
+
+    def test_it_is_the_same_image_as_the_api(self, migrate, backend):
+        """The code that migrates the schema must be the code that then reads it."""
+        assert migrate["image"] == backend["image"]
+        assert migrate["build"] == backend["build"]
+
+    def test_the_api_waits_for_it_to_succeed(self, backend):
+        condition = backend["depends_on"]["migrate"]["condition"]
+        assert condition == "service_completed_successfully", (
+            "service_started would let the API come up beside a failing migration"
+        )
+
+    def test_it_waits_for_a_database_that_is_ready(self, migrate):
+        assert migrate["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+    def test_it_validates_the_same_settings_the_api_does(self, migrate, backend):
+        """alembic imports the application's settings; a missing key must fail here too."""
+        for key in ("DATABASE_URL", "SECRET_KEY", "DRONE_API_KEY"):
+            assert migrate["environment"][key] == backend["environment"][key], key
+
+    def test_only_the_job_that_provisions_the_admin_holds_its_password(self, migrate, backend):
+        assert "ADMIN_PASSWORD" in migrate["environment"]
+        # Blank rather than absent: .env is passed through whole by env_file,
+        # and only an explicit empty value under `environment:` overrides it.
+        assert backend["environment"].get("ADMIN_PASSWORD") == ""
+
+    def test_the_entrypoint_does_not_migrate_when_serving_by_default(self):
+        source = ENTRYPOINT.read_text()
+        assert '"${RUN_MIGRATIONS_ON_START:-false}" = "true"' in source
