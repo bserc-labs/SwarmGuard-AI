@@ -337,6 +337,10 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `BACKEND_MEMORY_LIMIT` / `BACKEND_CPUS` | `1g` / `2.0` | Container limits. Measured: 270 MiB with the model and SHAP loaded |
+| `POSTGRES_MEMORY_LIMIT` / `POSTGRES_SHARED_BUFFERS` / `POSTGRES_EFFECTIVE_CACHE_SIZE` | `2g` / `512MB` / `1536MB` | Change together: 25% and 75% of the limit. The image tunes postgres to the *host* otherwise |
+| `REDIS_MEMORY_LIMIT` / `REDIS_MAXMEMORY` | `256m` / `192mb` | `maxmemory` stays below the limit so redis evicts rather than being OOM-killed |
+| `FRONTEND_MEMORY_LIMIT` | `128m` | nginx |
 | `SWARMGUARD_CERTS_DIR` | `./certs` | Host directory with `tls.crt` and `tls.key`. Empty means a self-signed certificate is generated at start |
 | `SWARMGUARD_HOSTNAME` | `localhost` | Subject of the self-signed fallback only |
 | `SWARMGUARD_ACME_DIR` | `./acme` | Let's Encrypt HTTP-01 webroot, served over plain HTTP on port 80 |

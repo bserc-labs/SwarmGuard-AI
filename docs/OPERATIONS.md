@@ -90,6 +90,38 @@ curl -sI https://HOST/ | grep -i strict-transport-security        # present
 openssl s_client -connect HOST:443 -tls1_1 </dev/null 2>&1 | grep -c "alert"   # refused
 ```
 
+## Resource limits
+
+Every container has a memory, CPU and PID limit, rotates its logs (5 × 10 MB),
+runs with `no-new-privileges`, and the three that run unprivileged drop every
+capability. Without limits one runaway container takes the host down, and the
+database with it; with them, Docker restarts just that container.
+
+| Service | Memory | CPUs | Basis |
+|---|---|---|---|
+| backend | 1 GiB | 2 | measured 206 MiB idle, 270 MiB with the ML model and SHAP loaded; detections and the 60-connection pool need headroom |
+| postgres | 2 GiB | 2 | `shared_buffers` 512 MB and `effective_cache_size` 1.5 GB are passed on the command line and **must move with the limit** (25% / 75%) |
+| redis | 256 MiB | 0.5 | `maxmemory 192mb`, `volatile-lru`: evicts expiring rate-limit keys itself rather than being OOM-killed, which would drop every live socket |
+| frontend | 128 MiB | 0.5 | nginx |
+| migrate | 512 MiB | 1 | one-shot |
+
+**Why postgres needs the command-line settings.** The TimescaleDB image runs
+`timescaledb-tune` when it first initialises a volume and sizes postgres to the
+memory it can see, which is the *host's*: on an 8 GB machine that was
+`shared_buffers = 1984MB`. Put a 2 GB limit on a database configured like that
+and it grows into its buffers until the kernel kills it. Settings on the command
+line override `postgresql.conf`, so they hold for old volumes and new ones alike.
+Every value is overridable from `.env` (`POSTGRES_MEMORY_LIMIT`,
+`POSTGRES_SHARED_BUFFERS`, …); raise them together.
+
+Check what is enforced:
+
+```bash
+docker inspect swarmguard-backend --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}'
+docker compose exec postgres psql -U "$POSTGRES_USER" -c "SHOW shared_buffers"    # 512MB, source: command line
+docker stats --no-stream
+```
+
 ## Secrets
 
 Secrets are files, one per value, in `./secrets/` on the host (gitignored; move it

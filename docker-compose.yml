@@ -16,6 +16,21 @@
 x-swarmguard:
   proxy_ip: &proxy_ip "${SWARMGUARD_PROXY_IP:-172.28.0.10}"
 
+  # Every container's stdout is kept by Docker as a JSON file with, by default,
+  # no size limit at all. A chatty service fills the disk, and a full disk takes
+  # postgres down with it. 5 x 10 MB per service is plenty to debug with.
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+  # A process in the container can never gain privileges it did not start with
+  # (setuid binaries, file capabilities). Costs nothing; applied everywhere.
+  hardening: &hardening
+    security_opt:
+      - "no-new-privileges:true"
+
   # One image, two services: `migrate` runs it once to bring the schema up to
   # date, `backend` runs it to serve. Same build, same tag, so the code that
   # migrated the database is byte-for-byte the code that then reads it.
@@ -60,6 +75,29 @@ services:
     image: redis:7-alpine
     container_name: swarmguard-redis
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # Rate-limit counters and pub/sub fan-out: nothing here needs to survive a
+    # restart, so persistence is off -- no disk writes, and no fork that briefly
+    # doubles memory. maxmemory sits below the container limit so redis sheds
+    # expiring keys (the counters) itself rather than being OOM-killed, which
+    # would drop every live WebSocket subscription at once.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "${REDIS_MAXMEMORY:-192mb}"
+      - --maxmemory-policy
+      - volatile-lru
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPUS:-0.50}"
+          memory: "${REDIS_MEMORY_LIMIT:-256m}"
+          pids: 64
     # Not published to the host: the backend reaches it over the compose network.
     expose:
       - "6379"
@@ -74,6 +112,37 @@ services:
     image: timescale/timescaledb:latest-pg16
     container_name: swarmguard-db
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # The memory limit and these settings are one decision and must be changed
+    # together. The image runs timescaledb-tune when it first initialises a
+    # volume and sizes postgres to whatever memory it sees: on the 7.75 GiB
+    # development host that was shared_buffers = 1984MB. Put a 2 GiB limit on a
+    # database configured like that and it grows into its buffers until the
+    # kernel kills it. Settings given on the command line override
+    # postgresql.conf, so they hold for a volume that was tuned long ago as well
+    # as for a new one. Rule of thumb: shared_buffers = 25% of the limit,
+    # effective_cache_size = 75%.
+    command:
+      - postgres
+      - -c
+      - "shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}"
+      - -c
+      - "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}"
+      - -c
+      - "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}"
+      - -c
+      - "work_mem=${POSTGRES_WORK_MEM:-8MB}"
+    # Parallel queries allocate in /dev/shm, which Docker caps at 64 MB: past
+    # that, postgres fails the query with "could not resize shared memory
+    # segment" rather than slowing down.
+    shm_size: "${POSTGRES_SHM_SIZE:-256m}"
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPUS:-2.0}"
+          memory: "${POSTGRES_MEMORY_LIMIT:-2g}"
+          pids: 512
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       # The image reads the password from the file itself. It refuses to start
@@ -102,10 +171,19 @@ services:
   # replica: two starting together ran the same DDL concurrently. A one-shot job
   # is the compose spelling of an init container or a Kubernetes Job.
   migrate:
-    <<: *backend_image
+    <<: [*backend_image, *hardening]
     container_name: swarmguard-migrate
     command: ["migrate"]
     restart: "no"
+    logging: *logging
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+          pids: 128
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,9 +209,24 @@ services:
       - admin_password
 
   backend:
-    <<: *backend_image
+    <<: [*backend_image, *hardening]
     container_name: swarmguard-backend
     restart: unless-stopped
+    logging: *logging
+    # Unprivileged user, high port, no raw sockets: it needs no capability.
+    cap_drop:
+      - ALL
+    # Measured: 206 MiB idle, 270 MiB with the RandomForest and SHAP loaded.
+    # The limit is about four times that, because a detection builds a pandas
+    # frame per packet and the pool holds up to 60 connections. Without one, a
+    # leak or a pathological request takes the host -- and the database on it
+    # -- down instead of just this container, which Docker would restart.
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACKEND_CPUS:-2.0}"
+          memory: "${BACKEND_MEMORY_LIMIT:-1g}"
+          pids: 512
     # Loopback only. Published on all interfaces, this was a second ingress
     # that skipped nginx entirely, and uvicorn trusted X-Forwarded-For from
     # whoever reached it -- so a client could pick its own address for the
@@ -196,6 +289,18 @@ services:
       context: ./frontend
     container_name: swarmguard-frontend
     restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    # nginx runs unprivileged and binds 80/443 because Docker lowers
+    # net.ipv4.ip_unprivileged_port_start to 0, not through CAP_NET_BIND_SERVICE.
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPUS:-0.50}"
+          memory: "${FRONTEND_MEMORY_LIMIT:-128m}"
+          pids: 128
     # 443 is the application. 80 answers a health probe and the ACME challenge
     # and redirects everything else; nothing is served over it.
     ports:

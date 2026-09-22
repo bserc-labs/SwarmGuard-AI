@@ -11,6 +11,8 @@ pinned here. Each of these regressions shipped once:
   starting together ran the same DDL against the same database at once.
 - SECRET_KEY, DRONE_API_KEY and the database password passed as environment
   variables, where `docker inspect` prints them to anyone with Docker access.
+- no resource limits anywhere, so one runaway container could take the host and
+  the database on it down; and container logs that grew without bound.
 
 The file is read as YAML rather than through ``docker compose config`` so the
 check needs no Docker in CI. PyYAML is installed by uvicorn[standard].
@@ -261,4 +263,62 @@ class TestSecretsAreFilesNotVariables:
         for name, spec in declared.items():
             assert _default(spec["file"].rsplit("/", 1)[0]) == "./secrets", (name, spec)
         assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def _bytes(value: str) -> int:
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    text = _default(value).lower().rstrip("b")
+    return int(float(text[:-1]) * units[text[-1]]) if text[-1] in units else int(text)
+
+
+class TestEveryContainerIsContained:
+    """A limit on every service, sized from measurement, plus log rotation."""
+
+    @pytest.fixture(scope="class")
+    def services(self, compose) -> dict:
+        return compose["services"]
+
+    def test_every_service_has_memory_cpu_and_pid_limits(self, services):
+        for name, svc in services.items():
+            limits = svc.get("deploy", {}).get("resources", {}).get("limits", {})
+            for key in ("memory", "cpus", "pids"):
+                assert key in limits, f"{name} has no {key} limit"
+            assert _bytes(limits["memory"]) >= 64 * 1024**2, f"{name}: implausibly small"
+
+    def test_every_service_rotates_its_logs(self, services):
+        for name, svc in services.items():
+            options = svc.get("logging", {}).get("options", {})
+            assert "max-size" in options and "max-file" in options, f"{name} logs without bound"
+
+    def test_every_service_forbids_privilege_escalation(self, services):
+        for name, svc in services.items():
+            assert "no-new-privileges:true" in svc.get("security_opt", []), name
+
+    @pytest.mark.parametrize("name", ["backend", "migrate", "frontend"])
+    def test_unprivileged_services_drop_every_capability(self, services, name):
+        assert services[name].get("cap_drop") == ["ALL"], name
+
+    def test_the_backend_limit_clears_its_measured_footprint_with_room(self, backend):
+        """270 MiB with the model and SHAP loaded; detections and the pool need headroom."""
+        assert _bytes(backend["deploy"]["resources"]["limits"]["memory"]) >= 768 * 1024**2
+
+    def test_postgres_memory_settings_fit_inside_its_limit(self, services):
+        """timescaledb-tune sizes postgres to the HOST; the limit must win."""
+        postgres = services["postgres"]
+        limit = _bytes(postgres["deploy"]["resources"]["limits"]["memory"])
+        command = " ".join(postgres["command"])
+        shared = _bytes(re.search(r"shared_buffers=([^\s\"]+)", command).group(1))
+        cache = _bytes(re.search(r"effective_cache_size=([^\s\"]+)", command).group(1))
+        assert shared <= limit // 3, "shared_buffers must leave room for connections and work_mem"
+        assert cache <= limit, "effective_cache_size beyond the limit misleads the planner"
+        assert "shm_size" in postgres, "parallel queries need more than Docker's 64 MB /dev/shm"
+
+    def test_redis_sheds_keys_before_it_can_be_oom_killed(self, services):
+        redis = services["redis"]
+        command = redis["command"]
+        limit = _bytes(redis["deploy"]["resources"]["limits"]["memory"])
+        maxmemory = _bytes(command[command.index("--maxmemory") + 1])
+        assert maxmemory < limit
+        assert command[command.index("--maxmemory-policy") + 1] == "volatile-lru"
+        assert command[command.index("--appendonly") + 1] == "no", "nothing in redis needs persistence"
 
