@@ -336,6 +336,7 @@ services:
   frontend:
     build:
       context: ./frontend
+    image: "swarmguard-frontend:${SWARMGUARD_TAG:-local}"
     container_name: swarmguard-frontend
     restart: unless-stopped
     <<: *hardening

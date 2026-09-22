@@ -359,3 +359,38 @@ class TestBackups:
     def test_it_waits_for_a_healthy_database(self, backup):
         assert backup["depends_on"]["postgres"]["condition"] == "service_healthy"
 
+
+class TestProductionOverride:
+    """docker-compose.prod.yml: published images, immutable tags, no building."""
+
+    @pytest.fixture(scope="class")
+    def prod(self) -> dict:
+        path = ROOT / "docker-compose.prod.yml"
+        assert path.exists()
+        with path.open() as fh:
+            # A SafeLoader that additionally knows compose's `!reset` tag.
+            return yaml.load(fh, Loader=_ResetTolerantLoader)  # noqa: S506
+
+    def test_every_built_service_is_overridden(self, compose, prod):
+        built = {name for name, svc in compose["services"].items() if "build" in svc}
+        assert set(prod["services"]) == built
+
+    def test_the_tag_is_required_and_the_build_is_removed(self, prod):
+        for name, svc in prod["services"].items():
+            assert "${SWARMGUARD_TAG:?" in svc["image"], f"{name}: a default tag would deploy something unintended"
+            assert svc["build"] is None, f"{name}: build must be reset, or compose prefers building to pulling"
+            assert svc["pull_policy"] == "missing"
+
+    def test_migrate_and_api_run_the_same_image(self, prod):
+        assert prod["services"]["migrate"]["image"] == prod["services"]["backend"]["image"]
+
+    def test_deploy_state_is_ignored(self):
+        assert "/.deploy/" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+class _ResetTolerantLoader(yaml.SafeLoader):
+    """`build: !reset null` is compose syntax PyYAML does not know."""
+
+
+_ResetTolerantLoader.add_constructor("!reset", lambda loader, node: None)
+

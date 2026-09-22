@@ -89,3 +89,50 @@ class TestTheSwitch:
         monkeypatch.setenv(FLAG, value)
         with pytest.raises(pytest.skip.Exception):
             live_suite._did_not_run("no server")
+
+
+class TestTheReleaseJob:
+    """build -> scan -> push, on main only, after everything else is green."""
+
+    @pytest.fixture(scope="class")
+    def release(self, jobs) -> dict:
+        assert "release" in jobs, "CI publishes nothing: there is nothing to deploy or roll back to"
+        return jobs["release"]
+
+    def test_it_runs_only_for_a_push_to_main(self, release):
+        condition = release["if"]
+        assert "github.event_name == 'push'" in condition
+        assert "github.ref == 'refs/heads/main'" in condition
+
+    def test_it_waits_for_every_other_job(self, jobs, release):
+        assert set(release["needs"]) == set(jobs) - {"release"}
+
+    def test_it_may_write_packages_and_nothing_else(self, release):
+        assert release["permissions"] == {"contents": "read", "packages": "write"}
+
+    def test_images_are_scanned_before_they_are_pushed_and_the_scan_blocks(self, release):
+        names = [step.get("name", "") for step in release["steps"]]
+        scans = [i for i, n in enumerate(names) if n.startswith("Scan")]
+        push = names.index("Push")
+        assert len(scans) == 2 and all(i < push for i in scans)
+        for i in scans:
+            step = release["steps"][i]
+            assert step["with"]["scan-type"] == "image"
+            assert str(step["with"]["exit-code"]) == "1"
+            assert "continue-on-error" not in step
+
+    def test_the_sha_tag_is_the_full_commit(self, release):
+        names_step = next(s for s in release["steps"] if s.get("id") == "names")
+        assert "sha-${{ github.sha }}" in names_step["run"]
+
+    def test_both_images_are_pushed_under_the_sha_tag(self, release):
+        push = next(s for s in release["steps"] if s.get("name") == "Push")["run"]
+        assert "steps.names.outputs.backend" in push and "steps.names.outputs.frontend" in push
+        assert "docker push \"$image:${{ steps.names.outputs.sha_tag }}\"" in push
+
+    def test_the_moving_tags_are_pushed_too_but_are_not_what_deploys(self, release):
+        push = next(s for s in release["steps"] if s.get("name") == "Push")["run"]
+        assert '"$image:main"' in push and '"$image:latest"' in push
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+        assert "sha-*)" in deploy, "deploy.sh must accept sha tags only"
+

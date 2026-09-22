@@ -1,0 +1,26 @@
+# Production override: run the images CI published instead of building.
+#
+#   SWARMGUARD_TAG=sha-<commit> docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# scripts/deploy.sh wraps that with a smoke test and an automatic rollback.
+#
+# SWARMGUARD_TAG is required and is a commit SHA tag (`sha-<40 hex>`): an
+# immutable name, so "what is running" always maps to exactly one commit and a
+# rollback is just the previous tag. `main` and `latest` are also pushed, for
+# looking around, and must not be deployed: they move.
+#
+# `build: !reset null` removes the build section from the base file; without it
+# compose would prefer building over pulling.
+services:
+  migrate:
+    image: "${SWARMGUARD_IMAGE_PREFIX:-ghcr.io/bserc-labs}/swarmguard-backend:${SWARMGUARD_TAG:?SWARMGUARD_TAG is required - a sha-<commit> tag from CI}"
+    build: !reset null
+    pull_policy: missing
+  backend:
+    image: "${SWARMGUARD_IMAGE_PREFIX:-ghcr.io/bserc-labs}/swarmguard-backend:${SWARMGUARD_TAG:?SWARMGUARD_TAG is required - a sha-<commit> tag from CI}"
+    build: !reset null
+    pull_policy: missing
+  frontend:
+    image: "${SWARMGUARD_IMAGE_PREFIX:-ghcr.io/bserc-labs}/swarmguard-frontend:${SWARMGUARD_TAG:?SWARMGUARD_TAG is required - a sha-<commit> tag from CI}"
+    build: !reset null
+    pull_policy: missing

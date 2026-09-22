@@ -37,6 +37,76 @@ schema back. So a migration must stay compatible with the *previous* release:
 add columns as nullable or with a default, and remove a column only in the
 release *after* the code stopped using it (expand, then contract).
 
+## Releases and deploys
+
+CI publishes images; a script on the host deploys them; a failed deploy rolls
+itself back.
+
+### What CI publishes
+
+On every push to `main`, once every other job is green, the `release` job
+builds both images, scans them with Trivy, and pushes them to the GitHub
+container registry:
+
+```
+ghcr.io/bserc-labs/swarmguard-backend:sha-<full commit sha>
+ghcr.io/bserc-labs/swarmguard-frontend:sha-<full commit sha>
+```
+
+The `sha-` tag is **immutable**: it names exactly one commit, so "what is
+running" is never in doubt and a rollback is the previous tag. `main` and
+`latest` are pushed too, for looking around; `deploy.sh` refuses them.
+
+The scan is the gate: a CRITICAL or HIGH finding with a fix available means
+nothing is published from that commit. It scans the built image, so it sees the
+base layers and the virtualenv, which the filesystem scan in the other job
+cannot. The first run of it found two HIGH findings, both in copies of
+`msgpack` and `setuptools` that pip vendors for its own use; the runtime image
+no longer ships pip at all.
+
+### Deploying
+
+```bash
+scripts/deploy.sh sha-<commit>     # the release job prints this in its summary
+scripts/deploy.sh --status         # what is running, and what was before it
+scripts/deploy.sh --rollback       # go back one release
+```
+
+`deploy.sh` runs on the host next to `docker-compose.yml`, using
+`docker-compose.prod.yml` to replace every `build:` with the published image.
+In order it:
+
+1. pulls the three images for the tag, so a tag that does not exist fails
+   before anything running is touched;
+2. brings the stack up with `--no-build`: the `migrate` job runs, the API starts
+   only if it succeeded, nginx last;
+3. smoke-tests `http://localhost/healthz` and `https://localhost/api/health`
+   for up to two minutes (`SWARMGUARD_SMOKE_TIMEOUT_S`);
+4. on success records the tag; on failure redeploys the previous tag,
+   smoke-tests that, prints each service's status and log tail, and **exits 1
+   either way** — a deploy that failed is never reported as anything else, even
+   after a rollback that worked.
+
+Measured on the development host against a throwaway registry: a good tag
+deploys and passes; a release whose frontend image was not nginx failed its
+smoke test, was rolled back, the site answered 200 afterwards, and the bad tag
+was never recorded as current.
+
+For a self-signed development certificate set `SWARMGUARD_SMOKE_INSECURE=1`;
+leave it unset on a server. To deploy from a different registry set
+`SWARMGUARD_IMAGE_PREFIX`.
+
+**Rollback and the schema.** Rolling an image back does not roll the schema
+back. The previous release then starts against a newer schema, sees a revision
+it does not know, warns, and serves. That is safe only because of the rule in
+*Start-up order* above: a migration must stay compatible with the previous
+release for one release.
+
+**Not yet:** there is no server to deploy *to*, so the last hop is this script
+run on the host rather than a job that runs it. When there is one, the natural
+next step is a `deploy` workflow with an environment approval that runs
+`deploy.sh` over SSH.
+
 ## TLS
 
 nginx serves the application on **443** only. Port 80 answers a health probe

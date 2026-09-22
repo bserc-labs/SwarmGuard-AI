@@ -239,6 +239,9 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   Ruff and Mypy run on every PR
 - **Backups** — a 6-hourly `pg_dump` sidecar, a TimescaleDB-aware restore, and a
   restore rehearsal that CI runs on every push
+- **Releases** — every push to `main` builds, scans and publishes images tagged
+  with the commit SHA; `scripts/deploy.sh` deploys one, smoke-tests it, and rolls
+  back by itself if that fails
 
 ---
 
@@ -339,6 +342,7 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `SWARMGUARD_TAG` / `SWARMGUARD_IMAGE_PREFIX` | — / `ghcr.io/bserc-labs` | With `docker-compose.prod.yml`: which published image to run. `scripts/deploy.sh` sets the tag; see [`docs/OPERATIONS.md`](docs/OPERATIONS.md#releases-and-deploys) |
 | `BACKUP_INTERVAL_S` / `BACKUP_RETAIN_DAYS` | `21600` / `14` | Dump every 6 h (the RPO), keep 14 days. Restore and rehearsal: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#backups-and-restore) |
 | `SWARMGUARD_BACKUP_DIR` | `backups` volume | Where dumps go. Point it at a directory that is copied off the host |
 | `BACKEND_MEMORY_LIMIT` / `BACKEND_CPUS` | `1g` / `2.0` | Container limits. Measured: 270 MiB with the model and SHAP loaded |
