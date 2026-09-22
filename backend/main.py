@@ -5,10 +5,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
@@ -33,6 +33,7 @@ from services.heartbeat_service import check_drone_heartbeats
 from services.readiness import Probe, check_readiness
 from services.supervisor import Supervisor
 from services.ws_manager import ws_manager
+from utils import metrics
 from utils.limiter import REDIS_URL, limiter, storage_healthy
 
 # Setup JSON logging
@@ -137,6 +138,12 @@ app.include_router(commands.router)
 app.include_router(settings.router)
 app.include_router(geofence.router)
 
+# Outermost, so it also times the CORS layer and counts what it rejects. Added
+# after the routers exist: it needs the endpoint -> template map, and Starlette
+# records only the endpoint on the scope.
+app.add_middleware(metrics.MetricsMiddleware, route_of_endpoint=metrics.route_templates(app))
+metrics.register_collector("db-pool", metrics.PoolCollector(engine))
+
 
 # The loops below are single passes; the Supervisor runs each on its interval,
 # restarts it with backoff when it raises, brings the task back if it ever
@@ -206,6 +213,7 @@ async def retention_pass() -> None:
 # of them is declared silent, as before.
 supervisor.register("heartbeat-monitor", heartbeat_pass, HEARTBEAT_INTERVAL_S, run_first=False)
 supervisor.register("telemetry-retention", retention_pass, RETENTION_INTERVAL_S)
+metrics.register_collector("supervisor", metrics.SupervisorCollector(supervisor))
 
 
 # How long shutdown waits for the background loops to acknowledge cancellation
@@ -263,6 +271,23 @@ def read_root():
 def health_check():
     """Liveness: the process is up and serving. Nothing more -- see /ready."""
     return {"status": "ok", "service": "SentinelAI"}
+
+
+@app.get("/metrics")
+def metrics_endpoint(request: Request):
+    """Prometheus exposition. See utils/metrics.py for what is measured and why.
+
+    Not proxied by nginx; loopback-only on the host; optionally token-gated
+    (METRICS_TOKEN). Scrape it from inside the compose network:
+    http://backend:8000/metrics.
+    """
+    token = get_settings().METRICS_TOKEN
+    if token:
+        presented = request.headers.get("authorization", "")
+        if presented != f"Bearer {token}":
+            return JSONResponse(status_code=401, content={"error": "HTTP Exception", "detail": "Not authenticated"})
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/ready")

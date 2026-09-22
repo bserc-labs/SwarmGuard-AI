@@ -25,6 +25,7 @@ from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.limiter import limiter
 from utils.logger import logger
+from utils.metrics import INGEST
 
 settings = get_settings()
 EXPECTED_DRONE_API_KEY = settings.DRONE_API_KEY
@@ -63,6 +64,7 @@ def ingest_telemetry(
             ip_address=request.client.host if request.client else None,
             commit=True,
         )
+        INGEST.labels("rejected_device_key").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Device Authentication Failed: Invalid or missing API Key for drone '{packet.drone_id}'"
@@ -98,10 +100,13 @@ def ingest_telemetry(
         # every packet. What is audited instead is the security-relevant subset:
         # a rejected device key (above) and a drone seen for the first time
         # (inside process_telemetry, in the same transaction as the drone row).
+        INGEST.labels("accepted").inc()
         return {"status": "success", "data": processed_data}
     except ValueError as e:
+        INGEST.labels("rejected_bad_request").inc()
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
+        INGEST.labels("error").inc()
         logger.error(f"Failed to process telemetry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error") from e
 

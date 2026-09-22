@@ -100,6 +100,41 @@ monitor that is the difference between "no drone is jammed" and "nobody is
 looking", which used to be indistinguishable: it ran as a bare task, and a task
 that dies is simply gone.
 
+## Metrics
+
+`GET /metrics` is a Prometheus exposition. It is not proxied by nginx (404
+through the public front) and the API port is loopback-only, so scrape it from
+inside the compose network at `http://backend:8000/metrics`; set `METRICS_TOKEN`
+to require a bearer token on top.
+
+| Series | Answers |
+|---|---|
+| `swarmguard_http_requests_total{method,route,status}`, `swarmguard_http_request_duration_seconds` | request rate, error rate and latency per route *template* (`/incidents/{id}`, never a raw path) |
+| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as bad requests, or errored |
+| `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
+| `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
+| `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
+| `swarmguard_websocket_connections`, `swarmguard_websocket_broadcasts_total{path}`, `swarmguard_websocket_broadcast_duration_seconds` | live sockets, and how messages reached them (published via Redis, local, or fallback after a failed publish) |
+| `swarmguard_background_loop_ticks_total{loop}`, `_failures_total`, `_restarts_total`, `_seconds_since_tick`, `_stalled`, `_alive` | the supervised loops; alert on `stalled == 1` or `alive == 0` |
+
+Labels are bounded on purpose: no drone id, no organization id, no path. A
+label per drone is a time series per drone, and the fleet is the one thing
+that grows without bound.
+
+Alerts worth writing first:
+
+```
+swarmguard_background_loop_stalled == 1                      # heartbeat monitor is not looking
+swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
+rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
+```
+
+**Single process.** uvicorn runs one worker here. With `--workers N` each
+worker keeps its own counters and a scrape sees one of them; that needs
+prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a
+deliberate later step.
+
 ## Releases and deploys
 
 CI publishes images; a script on the host deploys them; a failed deploy rolls

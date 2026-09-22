@@ -19,6 +19,7 @@ itself for delivery. This mirrors the heartbeat monitor in main.py.
 """
 
 import asyncio
+import time
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,7 @@ from services.incident_engine import incident_engine
 from services.kinematic_guard import kinematic_guard
 from services.ws_manager import ws_manager
 from utils.logger import logger
+from utils.metrics import DETECTION_LATENCY, DETECTION_RUNS, INCIDENTS, detection_tier
 
 settings = get_settings()
 
@@ -181,14 +183,17 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
     time a background task runs.
     """
     db = SessionLocal()
+    started = time.perf_counter()
     try:
         history = _load_history(db, drone_id, organization_id)
         if len(history) < MIN_HISTORY_PACKETS:
             # Normal for a drone that just came online, not an error.
+            DETECTION_RUNS.labels("insufficient_history").inc()
             return None
 
         detection = _run_detectors(drone_id, history, db, organization_id)
         if detection is None:
+            DETECTION_RUNS.labels("no_incident").inc()
             return None
 
         outcome = incident_engine.record_detection(
@@ -197,7 +202,11 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
         incident = outcome.incident
         if incident is None:
             # A repeat of a live incident that this reading did not worsen.
+            DETECTION_RUNS.labels("suppressed").inc()
             return None
+        DETECTION_RUNS.labels("incident_created" if outcome.created else "incident_escalated").inc()
+        if outcome.created:
+            INCIDENTS.labels(detection_tier(detection), incident.severity, incident.attack_type).inc()
 
         # Field names follow the frontend's DetectionResult interface
         # (frontend/src/services/api.ts) so the existing alert path renders
@@ -242,6 +251,7 @@ def _detect_sync(drone_id: str, organization_id: int) -> dict | None:
             "model_version": incident.model_version,
         }
     finally:
+        DETECTION_LATENCY.observe(time.perf_counter() - started)
         db.close()
 
 
@@ -255,6 +265,7 @@ async def run_detection(drone_id: str, organization_id: int) -> None:
     try:
         payload = await asyncio.to_thread(_detect_sync, drone_id, organization_id)
     except Exception as e:
+        DETECTION_RUNS.labels("error").inc()
         logger.error(f"Detection pipeline failed for {drone_id}: {e}", exc_info=True)
         return
 

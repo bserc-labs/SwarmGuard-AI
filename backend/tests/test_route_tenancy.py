@@ -129,6 +129,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # postgres and Redis, returns 503 when one is down. Reports dependency
     # state and nothing tenant-owned.
     ("GET", "/ready"): PUBLIC,
+    # Prometheus exposition. Counters and gauges, no tenant rows. nginx
+    # answers 404 for it and the API port is loopback-only; METRICS_TOKEN adds
+    # a bearer check on top for anything else.
+    ("GET", "/metrics"): PUBLIC,
     ("GET", "/system/health"): TENANT_DATA,
 
     # --- websocket ----------------------------------------------------------
@@ -277,6 +281,7 @@ def test_public_routes_are_few_and_deliberate():
         ("GET", "/"),
         ("GET", "/health"),
         ("GET", "/ready"),
+        ("GET", "/metrics"),
         ("POST", "/auth/login"),
         ("GET", "/telemetry/health/status"),
     }, (

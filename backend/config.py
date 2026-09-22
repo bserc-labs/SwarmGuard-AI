@@ -201,6 +201,15 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # --- Metrics --------------------------------------------------------------
+    #
+    # /metrics is the Prometheus exposition. nginx does not proxy it (404 through
+    # the public front), and the API port is loopback-only, so by default it is
+    # reachable only from inside the compose network and the host. Set a token
+    # to require `Authorization: Bearer <token>` as well -- for a scraper that
+    # is not on the same network, or a host with other users.
+    METRICS_TOKEN: str | None = None
+
     # --- Readiness ------------------------------------------------------------
     #
     # /ready probes the database and Redis and answers 503 when one that
