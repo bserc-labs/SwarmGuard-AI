@@ -28,8 +28,9 @@ from routers import (
     users,
     websocket,
 )
+from services.readiness import check_readiness
 from services.ws_manager import ws_manager
-from utils.limiter import limiter, storage_healthy
+from utils.limiter import REDIS_URL, limiter, storage_healthy
 
 # Setup JSON logging
 from utils.logger import logger
@@ -266,7 +267,28 @@ def read_root():
 
 @app.get("/health")
 def health_check():
+    """Liveness: the process is up and serving. Nothing more -- see /ready."""
     return {"status": "ok", "service": "SentinelAI"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness: the database and Redis answer, so requests will succeed.
+
+    Unauthenticated and cheap, because it is what the container health check
+    and an orchestrator ask every few seconds. 503 when a required dependency
+    is down; the body says which. Verified by experiment: with postgres
+    stopped, /health kept answering 200 and the container stayed healthy for
+    as long as anyone watched. This is the signal that was missing.
+    """
+    settings = get_settings()
+    readiness = await check_readiness(
+        engine,
+        REDIS_URL,
+        redis_required=settings.READINESS_REQUIRES_REDIS,
+        timeout_s=settings.READINESS_TIMEOUT_S,
+    )
+    return JSONResponse(status_code=200 if readiness.ready else 503, content=readiness.as_dict())
 
 from database import get_db
 from middleware.auth_middleware import TenantContext, get_tenant_context

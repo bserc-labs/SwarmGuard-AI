@@ -37,6 +37,51 @@ schema back. So a migration must stay compatible with the *previous* release:
 add columns as nullable or with a default, and remove a column only in the
 release *after* the code stopped using it (expand, then contract).
 
+## Health and readiness
+
+Two questions, two endpoints, on purpose:
+
+| Endpoint | Question | Touches | Used by |
+|---|---|---|---|
+| `GET /health` | Is the process up? | nothing | a liveness probe: restart on failure |
+| `GET /ready` | Can it do useful work right now? | postgres (`SELECT 1`), redis (`PING`), each with a 3 s deadline | the compose health check, the deploy smoke test, a load balancer or orchestrator readiness probe |
+
+`/ready` answers **503** with the failing check named when a required dependency
+is down, 200 otherwise. It needs no token: an orchestrator asks it every few
+seconds. Through nginx it is `/api/ready`.
+
+```json
+{"status": "not_ready", "checks": {"database": {"ok": false, "required": true, "detail": "postgres unreachable: OperationalError"}, "redis": {"ok": true, "required": true, "detail": "redis"}}}
+```
+
+Why the split matters: Docker restarts a container whose *health check* fails.
+Point that at a probe which also fails when the database is down, and a
+database outage becomes a restart storm on every API replica. So the compose
+health check uses `/ready` (it marks the container unhealthy, which
+`depends_on` and `docker ps` see, and does **not** restart it), while a
+Kubernetes-style setup should use `/health` for liveness and `/ready` for
+readiness.
+
+**Redis is a judgement call.** Without it, live alerts do not reach an
+operator's screen and the login rate limiter falls back to per-process memory,
+so by default a Redis outage makes the instance not ready
+(`READINESS_REQUIRES_REDIS=true`). With several replicas behind a load balancer
+that turns a partial outage into a total one; set it `false` there and the
+check is reported as a warning instead.
+
+Measured on the development stack, postgres stopped under an already-healthy
+container (compose probes every 10 s, three failures make it unhealthy):
+
+| Moment | `/health` | `/ready` | container |
+|---|---|---|---|
+| postgres stopped, +5 s | 200 | **503** `postgres unreachable` | healthy |
+| +30 s | 200 | 503 | **unhealthy** |
+| postgres started, +5 s | 200 | 200 | unhealthy |
+| +10 s | 200 | 200 | healthy |
+
+The backend's restart count stayed at 0 throughout: the outage was visible
+without becoming a restart loop.
+
 ## Releases and deploys
 
 CI publishes images; a script on the host deploys them; a failed deploy rolls

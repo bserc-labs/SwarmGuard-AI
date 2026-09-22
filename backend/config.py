@@ -201,6 +201,19 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # --- Readiness ------------------------------------------------------------
+    #
+    # /ready probes the database and Redis and answers 503 when one that
+    # matters is down; /health stays a bare liveness answer. Redis down means no
+    # live alerts and a weaker login rate limit, so by default it makes the
+    # instance not ready. Set this false when several replicas sit behind a
+    # load balancer and a Redis outage should degrade rather than take every
+    # replica out at once.
+    READINESS_REQUIRES_REDIS: bool = True
+    # Per-probe deadline. An orchestrator asks every few seconds; a probe that
+    # hangs is itself reported as not ready when this passes.
+    READINESS_TIMEOUT_S: float = 3.0
+
     # --- Schema guard -------------------------------------------------------
     #
     # Migrations run once, from a dedicated job, not from every container start

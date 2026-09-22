@@ -15,7 +15,7 @@
 #      before anything running is touched)
 #   2. `up -d --no-build`: the migrate job runs against the new code, the API
 #      starts only if it succeeded, nginx last
-#   3. smoke test: /healthz on port 80, then /api/health over HTTPS through
+#   3. smoke test: /healthz on port 80, then /api/ready over HTTPS through
 #      nginx, until SMOKE_TIMEOUT_S passes
 #   4. on success: record the tag; on failure: redeploy the previous tag, smoke
 #      test that, and exit non-zero either way -- a failed deploy is never
@@ -30,7 +30,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="${SWARMGUARD_DEPLOY_STATE:-$ROOT/.deploy}"
-SMOKE_URL="${SWARMGUARD_SMOKE_URL:-https://localhost/api/health}"
+SMOKE_URL="${SWARMGUARD_SMOKE_URL:-https://localhost/api/ready}"
 PROBE_URL="${SWARMGUARD_PROBE_URL:-http://localhost/healthz}"
 SMOKE_TIMEOUT_S="${SWARMGUARD_SMOKE_TIMEOUT_S:-120}"
 # -k only for a self-signed development certificate. Leave unset on a server.

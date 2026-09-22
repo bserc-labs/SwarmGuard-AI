@@ -125,6 +125,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # --- system -------------------------------------------------------------
     ("GET", "/"): PUBLIC,
     ("GET", "/health"): PUBLIC,
+    # Readiness for the container health check and orchestrators: probes
+    # postgres and Redis, returns 503 when one is down. Reports dependency
+    # state and nothing tenant-owned.
+    ("GET", "/ready"): PUBLIC,
     ("GET", "/system/health"): TENANT_DATA,
 
     # --- websocket ----------------------------------------------------------
@@ -272,6 +276,7 @@ def test_public_routes_are_few_and_deliberate():
     assert public == {
         ("GET", "/"),
         ("GET", "/health"),
+        ("GET", "/ready"),
         ("POST", "/auth/login"),
         ("GET", "/telemetry/health/status"),
     }, (

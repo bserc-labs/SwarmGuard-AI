@@ -43,6 +43,6 @@ USER appuser
 # 127.0.0.1 rather than localhost: localhost can resolve to [::1] first, and the
 # server binds IPv4, so the check would fail against a healthy container.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+  CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).status == 200 else 1)"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
