@@ -82,6 +82,25 @@ What Phase 1 commits to: RPO 6 h, RTO about a minute at today's size. What it
 does not pretend to: a real certificate (needs a domain), a server to deploy to
 (the last hop is a script on the host), minute-level RPO (needs a bucket).
 
+**Phase 2 is done** — branch `feat/phase2-observability`, one commit per item.
+Gates: **ruff clean, mypy clean, 752 passed** (from 684 at the end of Phase 1),
+frontend 107/107.
+
+| Item | Status |
+|---|---|
+| 3.3 Deprecated `on_event` hooks | ✅ lifespan; shutdown cancels and awaits the loops, measured: container stops in 1 s, exit 0 |
+| 2.2 `/health` lied about the database | ✅ `/ready` probes postgres, Redis and the loops with deadlines; repeated the experiment: 503 within 5 s of stopping postgres, container **unhealthy** at 30 s, back within 10 s, **0 restarts** |
+| 2.3 Bare background tasks | ✅ supervisor: restart with backoff, recreate on any exit, tick timestamps; a stalled loop is a 503 on `/ready` |
+| 2.1 Nothing measured | ✅ `/metrics`: requests by route template, ingest and detection outcomes, incidents by tier, pool, sockets, loops; the first live scrape caught a labelling bug the unit test had passed |
+| 2.1 Nothing to scrape it | ✅ `--profile observability` Prometheus with seven alert rules, each with a next step; target up and rules loaded, verified live |
+| 2.4 Errors vanish into a 500 | ✅ optional Sentry with credentials scrubbed before send; not verified against a real project (needs a DSN) |
+| 2.4 Audit table grows forever | ✅ daily `audit-retention` loop through the append-only table's maintenance flag, one statement, `SET LOCAL` |
+
+What Phase 2 does not pretend to: a Sentry project (needs a DSN), multi-worker
+metrics (`PROMETHEUS_MULTIPROC_DIR` is a deliberate later step), and an
+alerting *receiver* -- the rules fire inside Prometheus; where they go (email,
+chat, pager) is the operator's choice and configuration.
+
 Two results worth more than the green: the concurrency test was run with the
 lock disabled and produced **2 rows instead of 1**, so it has teeth; and
 `EXPLAIN` shows the planner doing an **Index Scan on the new composite index**
@@ -422,7 +441,10 @@ with an immutable tag → deploy → smoke-test → automatic rollback.
 
 ---
 
-## Phase 2 — Observability (1 week)
+## Phase 2 — Observability (✅ done)
+
+The descriptions below are kept as the record of what was missing; status and
+evidence are in the Phase 2 table near the top.
 
 Zero hits for `prometheus`, `opentelemetry`, or `statsd` in the backend. Logging
 is structured JSON (good), but that is the whole of it. Today you would learn the
@@ -634,10 +656,10 @@ Production-ready when every box is ticked:
 - [x] Deploy pipeline with immutable tags and rollback
 
 **Observability**
-- [ ] Metrics on ingest, detection, incidents, pool, sockets
-- [ ] `/ready` separate from `/health`, returning non-2xx when degraded
-- [ ] Background tasks supervised and alerting
-- [ ] Error tracking wired up
+- [x] Metrics on ingest, detection, incidents, pool, sockets
+- [x] `/ready` separate from `/health`, returning non-2xx when degraded
+- [x] Background tasks supervised and alerting
+- [x] Error tracking wired up
 
 **Operations**
 - [ ] Load test at the documented ingest rate
