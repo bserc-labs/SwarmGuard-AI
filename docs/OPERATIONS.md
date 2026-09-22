@@ -130,6 +130,13 @@ rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
 ```
 
+**A Prometheus to look at them.** `docker compose --profile observability up -d`
+adds one, loopback-only at `http://localhost:9090`, scraping the API inside the
+compose network every 15 s and evaluating `deploy/alerts.yml`. It is behind a
+profile so the default stack is unchanged. A real deployment points its own
+Prometheus at `http://backend:8000/metrics` and copies the rules file; the
+alerts there are the ones above, each with a next step in its description.
+
 **Single process.** uvicorn runs one worker here. With `--workers N` each
 worker keeps its own counters and a scrape sees one of them; that needs
 prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a

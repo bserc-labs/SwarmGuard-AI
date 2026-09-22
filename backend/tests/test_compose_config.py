@@ -80,7 +80,7 @@ class TestIngress:
 
     def test_only_the_frontend_and_the_loopback_api_publish_ports(self, compose):
         publishers = {name for name, svc in compose["services"].items() if "ports" in svc}
-        assert publishers == {"backend", "frontend"}, publishers
+        assert publishers == {"backend", "frontend", "prometheus"}, publishers
 
 
 class TestForwardedHeaders:
@@ -321,6 +321,51 @@ class TestEveryContainerIsContained:
         assert maxmemory < limit
         assert command[command.index("--maxmemory-policy") + 1] == "volatile-lru"
         assert command[command.index("--appendonly") + 1] == "no", "nothing in redis needs persistence"
+
+
+class TestObservabilityProfile:
+    """Prometheus is opt-in, loopback-only, and validates the alert rules."""
+
+    @pytest.fixture(scope="class")
+    def prometheus(self, compose) -> dict:
+        assert "prometheus" in compose["services"]
+        return compose["services"]["prometheus"]
+
+    def test_it_is_behind_a_profile_so_the_default_stack_is_unchanged(self, prometheus):
+        assert prometheus["profiles"] == ["observability"]
+
+    def test_it_publishes_on_loopback_only(self, prometheus):
+        for entry in prometheus["ports"]:
+            assert str(entry).startswith("127.0.0.1:"), entry
+
+    def test_it_scrapes_the_api_inside_the_network(self):
+        with (ROOT / "deploy" / "prometheus.yml").open() as fh:
+            config = yaml.safe_load(fh)
+        targets = [t for job in config["scrape_configs"] for sc in job["static_configs"] for t in sc["targets"]]
+        assert "backend:8000" in targets
+        assert "/etc/prometheus/alerts.yml" in config["rule_files"]
+
+    def test_every_alert_names_a_next_step(self):
+        with (ROOT / "deploy" / "alerts.yml").open() as fh:
+            rules = [r for g in yaml.safe_load(fh)["groups"] for r in g["rules"]]
+        assert len(rules) >= 5
+        for rule in rules:
+            assert rule["annotations"].get("description"), f"{rule['alert']} has no next step"
+            assert rule["labels"]["severity"] in {"critical", "warning"}
+
+    def test_the_alert_expressions_refer_to_series_the_app_exports(self):
+        from utils import metrics as m
+
+        exported = {
+            c.describe()[0].name if hasattr(c, "describe") else ""
+            for c in (m.HTTP_REQUESTS, m.INGEST, m.DETECTION_RUNS)
+        }
+        with (ROOT / "deploy" / "alerts.yml").open() as fh:
+            text = fh.read()
+        for name in ("swarmguard_background_loop_stalled", "swarmguard_db_pool_checked_out",
+                     "swarmguard_http_requests_total", "swarmguard_telemetry_ingest_total"):
+            assert name in text
+        assert exported  # the app-side names above are the real ones, not a typo in the rules
 
 
 class TestBackups:

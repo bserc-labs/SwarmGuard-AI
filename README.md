@@ -241,7 +241,8 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   restore rehearsal that CI runs on every push
 - **Metrics** — Prometheus exposition on `/metrics`: requests by route template,
   ingest and detection outcomes, incidents by tier, pool usage, sockets, and the
-  supervised loops ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#metrics))
+  supervised loops; `docker compose --profile observability up` adds a Prometheus
+  with the first alert rules ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#metrics))
 - **Readiness** — `/ready` probes postgres, Redis and the two supervised background
   loops and answers 503 when one is down or stalled; the container health check and
   the deploy smoke test use it, `/health` stays a bare liveness answer
