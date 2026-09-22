@@ -1,0 +1,78 @@
+# Alerts worth having before any others. Each one names a failure that has
+# either happened in this project or was found by reasoning about it, and says
+# what to do -- an alert without a next step is noise.
+groups:
+  - name: swarmguard
+    rules:
+      - alert: HeartbeatMonitorStalled
+        expr: swarmguard_background_loop_stalled{loop="heartbeat-monitor"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The silent-drone monitor has stopped ticking"
+          description: >
+            No successful heartbeat pass for three intervals. A jammed drone
+            would go unreported. Check `docker compose logs backend` for the
+            loop's last error; /ready is answering 503 for the same reason.
+
+      - alert: BackgroundLoopDead
+        expr: swarmguard_background_loop_alive == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Background loop {{ $labels.loop }} is not running"
+          description: "The supervisor should have restarted it; if it has not, the API needs a restart."
+
+      - alert: ApiNotReady
+        expr: up{job="swarmguard-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The API is not answering its scrape"
+          description: "Either the process is down or the compose network is broken. `docker compose ps`."
+
+      - alert: DatabasePoolNearlyExhausted
+        expr: swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 80% of database connections are in use"
+          description: >
+            The pool was sized for 50 packets/s. Either ingest is above that or
+            detections are holding connections longer than expected. Raise
+            DB_POOL_SIZE / DB_MAX_OVERFLOW together with postgres max_connections,
+            or find the slow query.
+
+      - alert: ServerErrors
+        expr: sum(rate(swarmguard_http_requests_total{status=~"5.."}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The API is returning 5xx"
+          description: "`docker compose logs backend | grep Unhandled`. Sentry, if configured, has the grouped tracebacks."
+
+      - alert: DeviceKeyRejections
+        expr: sum(rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telemetry is being rejected for a bad device key"
+          description: >
+            A device with a stale key after a rotation, or someone probing
+            ingest with a valid operator token and the wrong key. The audit
+            log has the drone id and source address for each rejection.
+
+      - alert: DetectionErrors
+        expr: sum(rate(swarmguard_detection_runs_total{outcome="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Detection cycles are failing"
+          description: "Packets are still accepted, but nothing is being judged. `docker compose logs backend | grep 'Detection pipeline failed'`."

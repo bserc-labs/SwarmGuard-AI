@@ -201,6 +201,51 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # --- Audit retention --------------------------------------------------------
+    #
+    # audit_logs is append-only at the database level; a table that can only
+    # grow is its own outage. Rows older than this are deleted once a day by a
+    # supervised loop, through the maintenance flag the trigger requires. 0
+    # keeps everything -- for a deployment whose retention is set by regulation
+    # rather than disk, say so here and archive elsewhere.
+    AUDIT_RETENTION_DAYS: int = 365
+
+    # --- Error tracking -------------------------------------------------------
+    #
+    # Unhandled exceptions become an opaque 500 and one log line. With a DSN
+    # they are also grouped, counted and attached to the request that raised
+    # them, in Sentry or anything that speaks its protocol. Off when unset.
+    # Credentials are scrubbed before an event leaves the process
+    # (utils/error_tracking.py); turn on server-side scrubbing as well.
+    SENTRY_DSN: str | None = None
+    # Tags every event and metric with where it came from.
+    SWARMGUARD_ENV: str = "development"
+    # The image tag CI built; deploy.sh passes it through so an issue names the
+    # exact commit that raised it.
+    SWARMGUARD_RELEASE: str | None = None
+
+    # --- Metrics --------------------------------------------------------------
+    #
+    # /metrics is the Prometheus exposition. nginx does not proxy it (404 through
+    # the public front), and the API port is loopback-only, so by default it is
+    # reachable only from inside the compose network and the host. Set a token
+    # to require `Authorization: Bearer <token>` as well -- for a scraper that
+    # is not on the same network, or a host with other users.
+    METRICS_TOKEN: str | None = None
+
+    # --- Readiness ------------------------------------------------------------
+    #
+    # /ready probes the database and Redis and answers 503 when one that
+    # matters is down; /health stays a bare liveness answer. Redis down means no
+    # live alerts and a weaker login rate limit, so by default it makes the
+    # instance not ready. Set this false when several replicas sit behind a
+    # load balancer and a Redis outage should degrade rather than take every
+    # replica out at once.
+    READINESS_REQUIRES_REDIS: bool = True
+    # Per-probe deadline. An orchestrator asks every few seconds; a probe that
+    # hangs is itself reported as not ready when this passes.
+    READINESS_TIMEOUT_S: float = 3.0
+
     # --- Schema guard -------------------------------------------------------
     #
     # Migrations run once, from a dedicated job, not from every container start

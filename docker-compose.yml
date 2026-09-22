@@ -44,6 +44,8 @@ x-swarmguard:
   # is what config.py matches on, hence the explicit target.
   backend_secrets: &backend_secrets
     - secret_key
+    # Empty unless error tracking is on.
+    - sentry_dsn
     # Empty except during a key rotation -- scripts/rotate-secret-key.sh.
     - secret_key_previous
     - drone_api_key
@@ -68,6 +70,13 @@ x-swarmguard:
     DATABASE_PASSWORD: ""
     POSTGRES_PASSWORD: ""
     ALGORITHM: ${ALGORITHM:-HS256}
+    # Which deployment this is, on every error and metric. deploy.sh sets the
+    # release to the image tag it deployed.
+    SWARMGUARD_ENV: ${SWARMGUARD_ENV:-development}
+    SWARMGUARD_RELEASE: ${SWARMGUARD_TAG:-local}
+    # The DSN is a credential: it arrives as the secret file sentry_dsn, empty
+    # when error tracking is off. Blank here for the same reason as the others.
+    SENTRY_DSN: ""
     ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
 
 services:
@@ -215,6 +224,42 @@ services:
           memory: 256m
           pids: 64
 
+  # Optional: `docker compose --profile observability up -d`. A Prometheus that
+  # scrapes the API inside the compose network and evaluates deploy/alerts.yml.
+  # Loopback-only on 9090; nothing here is reachable from outside the host. A
+  # real deployment points its own Prometheus at http://backend:8000/metrics
+  # and copies the alert rules; this is here so the metrics are usable on day
+  # one and so the rules file is validated by something.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: swarmguard-prometheus
+    profiles: ["observability"]
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    cap_drop:
+      - ALL
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512m
+          pids: 128
+
   # Runs once per `docker compose up`, then exits. Migrations used to run from
   # the backend's entrypoint on every start, which is safe for exactly one
   # replica: two starting together ran the same DDL concurrently. A one-shot job
@@ -252,6 +297,7 @@ services:
     secrets:
       - secret_key
       - secret_key_previous
+      - sentry_dsn
       - drone_api_key
       - source: postgres_password
         target: database_password
@@ -318,12 +364,16 @@ services:
     # Overrides the image's HEALTHCHECK, so it must not need curl either -- the
     # image no longer installs it. Python is in the image; 127.0.0.1 avoids
     # localhost resolving to [::1] against an IPv4 listener.
+    #
+    # /ready, not /health: /health answers 200 with the database down, so the
+    # container stayed "healthy" through a total outage. /ready is 503 then,
+    # the frontend's depends_on sees it, and `docker ps` says unhealthy.
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=4).status == 200 else 1)"
       interval: 10s
       timeout: 5s
       retries: 3
@@ -405,6 +455,8 @@ secrets:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key"
   secret_key_previous:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/secret_key_previous"
+  sentry_dsn:
+    file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/sentry_dsn"
   drone_api_key:
     file: "${SWARMGUARD_SECRETS_DIR:-./secrets}/drone_api_key"
   postgres_password:
@@ -415,3 +467,4 @@ secrets:
 volumes:
   postgres_data:
   backups:
+  prometheus_data:

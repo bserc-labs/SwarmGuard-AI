@@ -37,6 +37,140 @@ schema back. So a migration must stay compatible with the *previous* release:
 add columns as nullable or with a default, and remove a column only in the
 release *after* the code stopped using it (expand, then contract).
 
+## Health and readiness
+
+Two questions, two endpoints, on purpose:
+
+| Endpoint | Question | Touches | Used by |
+|---|---|---|---|
+| `GET /health` | Is the process up? | nothing | a liveness probe: restart on failure |
+| `GET /ready` | Can it do useful work right now? | postgres (`SELECT 1`), redis (`PING`), each with a 3 s deadline | the compose health check, the deploy smoke test, a load balancer or orchestrator readiness probe |
+
+`/ready` answers **503** with the failing check named when a required dependency
+is down, 200 otherwise. It needs no token: an orchestrator asks it every few
+seconds. Through nginx it is `/api/ready`.
+
+```json
+{"status": "not_ready", "checks": {"database": {"ok": false, "required": true, "detail": "postgres unreachable: OperationalError"}, "redis": {"ok": true, "required": true, "detail": "redis"}}}
+```
+
+Why the split matters: Docker restarts a container whose *health check* fails.
+Point that at a probe which also fails when the database is down, and a
+database outage becomes a restart storm on every API replica. So the compose
+health check uses `/ready` (it marks the container unhealthy, which
+`depends_on` and `docker ps` see, and does **not** restart it), while a
+Kubernetes-style setup should use `/health` for liveness and `/ready` for
+readiness.
+
+**Redis is a judgement call.** Without it, live alerts do not reach an
+operator's screen and the login rate limiter falls back to per-process memory,
+so by default a Redis outage makes the instance not ready
+(`READINESS_REQUIRES_REDIS=true`). With several replicas behind a load balancer
+that turns a partial outage into a total one; set it `false` there and the
+check is reported as a warning instead.
+
+Measured on the development stack, postgres stopped under an already-healthy
+container (compose probes every 10 s, three failures make it unhealthy):
+
+| Moment | `/health` | `/ready` | container |
+|---|---|---|---|
+| postgres stopped, +5 s | 200 | **503** `postgres unreachable` | healthy |
+| +30 s | 200 | 503 | **unhealthy** |
+| postgres started, +5 s | 200 | 200 | unhealthy |
+| +10 s | 200 | 200 | healthy |
+
+The backend's restart count stayed at 0 throughout: the outage was visible
+without becoming a restart loop.
+
+### Background loops
+
+Three loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
+detects a jammed, silent drone), **telemetry retention** (hourly, three days)
+and **audit retention** (daily, `AUDIT_RETENTION_DAYS`, default a year; `0`
+keeps everything). All run
+under a supervisor that restarts a loop with backoff when its pass raises,
+brings the task back if it ever ends for any other reason, and records the time
+of each successful pass. `/ready` reports them:
+
+```json
+"background": {"heartbeat-monitor": {"interval_s": 10.0, "ticks": 42, "failures": 0, "restarts": 0, "seconds_since_tick": 3.1, "stalled": false, "last_error": null, "alive": true}, ...}
+```
+
+A loop that has not ticked for three intervals plus 30 s is **stalled**, and a
+stalled loop makes `/ready` answer 503 (`checks.background`). For the heartbeat
+monitor that is the difference between "no drone is jammed" and "nobody is
+looking", which used to be indistinguishable: it ran as a bare task, and a task
+that dies is simply gone.
+
+## Metrics
+
+`GET /metrics` is a Prometheus exposition. It is not proxied by nginx (404
+through the public front) and the API port is loopback-only, so scrape it from
+inside the compose network at `http://backend:8000/metrics`; set `METRICS_TOKEN`
+to require a bearer token on top.
+
+| Series | Answers |
+|---|---|
+| `swarmguard_http_requests_total{method,route,status}`, `swarmguard_http_request_duration_seconds` | request rate, error rate and latency per route *template* (`/incidents/{id}`, never a raw path) |
+| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as bad requests, or errored |
+| `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
+| `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
+| `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
+| `swarmguard_websocket_connections`, `swarmguard_websocket_broadcasts_total{path}`, `swarmguard_websocket_broadcast_duration_seconds` | live sockets, and how messages reached them (published via Redis, local, or fallback after a failed publish) |
+| `swarmguard_background_loop_ticks_total{loop}`, `_failures_total`, `_restarts_total`, `_seconds_since_tick`, `_stalled`, `_alive` | the supervised loops; alert on `stalled == 1` or `alive == 0` |
+
+Labels are bounded on purpose: no drone id, no organization id, no path. A
+label per drone is a time series per drone, and the fleet is the one thing
+that grows without bound.
+
+Alerts worth writing first:
+
+```
+swarmguard_background_loop_stalled == 1                      # heartbeat monitor is not looking
+swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
+rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
+```
+
+**A Prometheus to look at them.** `docker compose --profile observability up -d`
+adds one, loopback-only at `http://localhost:9090`, scraping the API inside the
+compose network every 15 s and evaluating `deploy/alerts.yml`. It is behind a
+profile so the default stack is unchanged. A real deployment points its own
+Prometheus at `http://backend:8000/metrics` and copies the rules file; the
+alerts there are the ones above, each with a next step in its description.
+
+**Single process.** uvicorn runs one worker here. With `--workers N` each
+worker keeps its own counters and a scrape sees one of them; that needs
+prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a
+deliberate later step.
+
+## Error tracking
+
+Unhandled exceptions become an opaque 500 and one log line. With `SENTRY_DSN`
+set they are also grouped, counted and attached to the request that raised
+them, in Sentry or anything that speaks its protocol. Unset, nothing changes.
+
+```bash
+printf '%s' 'https://<key>@<org>.ingest.sentry.io/<project>' > secrets/sentry_dsn
+chmod 444 secrets/sentry_dsn
+docker compose up -d --force-recreate backend
+```
+
+The DSN is a credential and travels like the others: a secret file, blanked in
+the container environment. `SWARMGUARD_ENV` (default `development`) tags every
+event with the deployment; `deploy.sh` sets `SWARMGUARD_RELEASE` to the image
+tag, so an issue names the commit that raised it.
+
+**What is sent.** Before an event leaves the process, `Authorization`, `Cookie`
+and `X-Drone-API-Key` headers, the `token` query parameter of the WebSocket
+handshake, and password, token and key fields anywhere in a request body are
+replaced with `[redacted]`; default PII is off. A stack trace can still carry a
+local variable, which is what the tracker's own server-side scrubbing rules are
+for: turn them on in the project settings.
+
+Not verified here against a real project, which needs a DSN this repository
+does not have. The scrubbing and the initialisation arguments are tested.
+
 ## Releases and deploys
 
 CI publishes images; a script on the host deploys them; a failed deploy rolls
@@ -80,8 +214,9 @@ In order it:
    before anything running is touched;
 2. brings the stack up with `--no-build`: the `migrate` job runs, the API starts
    only if it succeeded, nginx last;
-3. smoke-tests `http://localhost/healthz` and `https://localhost/api/health`
-   for up to two minutes (`SWARMGUARD_SMOKE_TIMEOUT_S`);
+3. smoke-tests `http://localhost/healthz` and `https://localhost/api/ready`
+   for up to two minutes (`SWARMGUARD_SMOKE_TIMEOUT_S`) — readiness, so a
+   release whose API comes up but cannot reach its database is a failed deploy;
 4. on success records the tag; on failure redeploys the previous tag,
    smoke-tests that, prints each service's status and log tail, and **exits 1
    either way** — a deploy that failed is never reported as anything else, even

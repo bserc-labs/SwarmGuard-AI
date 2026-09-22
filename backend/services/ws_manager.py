@@ -10,6 +10,7 @@ from broadcaster import Broadcast, Event
 from fastapi import WebSocket
 
 from utils.logger import logger
+from utils.metrics import WS_BROADCAST_LATENCY, WS_BROADCASTS, WS_CONNECTIONS
 
 # memory:// keeps the pub/sub working for a single-process dev run. In a
 # multi-worker deployment REDIS_URL must be set, otherwise each worker only
@@ -61,6 +62,7 @@ class ConnectionManager:
         async with self._lock:
             self._connections[organization_id].add(websocket)
             first_for_org = organization_id not in self._listeners
+            WS_CONNECTIONS.set(sum(len(c) for c in self._connections.values()))
 
         await self._ensure_broadcaster()
 
@@ -78,6 +80,7 @@ class ConnectionManager:
         async with self._lock:
             self._connections[organization_id].discard(websocket)
             empty = not self._connections[organization_id]
+            WS_CONNECTIONS.set(sum(len(c) for c in self._connections.values()))
             if empty:
                 self._connections.pop(organization_id, None)
                 task = self._listeners.pop(organization_id, None)
@@ -117,11 +120,12 @@ class ConnectionManager:
             targets = list(self._connections.get(organization_id, ()))
 
         dead: list[WebSocket] = []
-        for connection in targets:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                dead.append(connection)
+        with WS_BROADCAST_LATENCY.time():
+            for connection in targets:
+                try:
+                    await connection.send_json(message)
+                except Exception:
+                    dead.append(connection)
 
         for connection in dead:
             await self.disconnect(connection, organization_id)
@@ -144,9 +148,13 @@ class ConnectionManager:
                 await broadcast_client.publish(
                     channel_for(organization_id), json.dumps(message, default=str)
                 )
+                WS_BROADCASTS.labels("published").inc()
                 return
             except Exception as exc:
+                WS_BROADCASTS.labels("fallback").inc()
                 logger.error(f"Publish failed, falling back to local delivery: {exc}")
+        else:
+            WS_BROADCASTS.labels("local").inc()
 
         await self._send_local(organization_id, message)
 

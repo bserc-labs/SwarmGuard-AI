@@ -1,12 +1,33 @@
 import logging
 import uuid
+from datetime import datetime, timedelta
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from middleware.auth_middleware import TenantContext
 from models import AuditLog
 
 logger = logging.getLogger(__name__)
+
+def purge_expired_audit_logs(db: Session, retention_days: int) -> int:
+    """Delete audit rows older than `retention_days`; return how many.
+
+    audit_logs rejects DELETE unless the session has announced a maintenance
+    pass (migration e5f6a7b8c9d0), so this is the one place in the application
+    that announces one, and it announces it for exactly one statement. A
+    retention of 0 means keep everything and deletes nothing.
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    db.execute(text("SET LOCAL swarmguard.audit_maintenance = 'on'"))
+    result = db.execute(
+        text("DELETE FROM audit_logs WHERE created_at < :cutoff"), {"cutoff": cutoff}
+    )
+    db.commit()
+    return int(getattr(result, "rowcount", 0) or 0)
+
 
 class AuditService:
     def log(

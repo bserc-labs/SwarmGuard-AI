@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import models
 from services.incident_engine import THREAT_LEVEL_ORDINALS
 from utils.logger import logger
+from utils.metrics import INCIDENTS
 
 SILENCE_THRESHOLD_SECONDS = 30
 
@@ -59,6 +60,7 @@ def check_drone_heartbeats(db: Session) -> list[tuple[int, dict]]:
             ),
         )
         db.add(incident)
+        INCIDENTS.labels("heartbeat", "CRITICAL", "SIGNAL_LOSS_JAMMING").inc()
 
         if drone.organization_id is None:
             # Nothing to scope the broadcast to; the incident is still recorded.

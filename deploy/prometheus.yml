@@ -1,0 +1,29 @@
+# Prometheus for the SwarmGuard compose stack (profile: observability).
+#
+#   docker compose --profile observability up -d
+#   http://localhost:9090            (loopback only)
+#
+# It scrapes the API inside the compose network. Nothing here is reachable
+# from outside the host; a real deployment points its own Prometheus at
+# http://backend:8000/metrics (with METRICS_TOKEN as a bearer if set) and copies
+# alerts.yml.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: swarmguard-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+    # If METRICS_TOKEN is set in the stack, uncomment and mount the same value:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /run/secrets/metrics_token
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

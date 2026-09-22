@@ -115,7 +115,7 @@ class TestFingerprint:
 
     def test_the_schema_and_docs_are_not_reachable_through_the_proxy(self, servers):
         locations = dict(_blocks(servers["443"], "location"))
-        for path in ("/api/docs", "/api/redoc", "/api/openapi.json"):
+        for path in ("/api/docs", "/api/redoc", "/api/openapi.json", "/api/metrics"):
             body = locations.get(f"location = {path}")
             assert body and "return 404;" in body, f"{path} is exposed through the public proxy"
 

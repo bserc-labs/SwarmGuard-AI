@@ -123,10 +123,8 @@ class TestAgainstARealDatabase:
         """The guard is wired into startup, and fires before anything is started."""
         _stamp(scratch_engine, FIRST_REVISION)
         monkeypatch.setattr(main, "engine", scratch_engine)
-        untouched = object()
-        monkeypatch.setattr(main.app.state, "background_tasks", untouched, raising=False)
+        started = []
+        monkeypatch.setattr(main.supervisor, "start", lambda: started.append(True))
         with pytest.raises(SchemaOutOfDate):
-            asyncio.run(main.startup_event())
-        assert main.app.state.background_tasks is untouched, (
-            "startup went on to create background tasks after the schema check failed"
-        )
+            asyncio.run(main.startup())
+        assert not started, "startup went on to start the background loops after the schema check failed"
