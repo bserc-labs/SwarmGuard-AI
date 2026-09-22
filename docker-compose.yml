@@ -196,8 +196,23 @@ services:
       context: ./frontend
     container_name: swarmguard-frontend
     restart: unless-stopped
+    # 443 is the application. 80 answers a health probe and the ACME challenge
+    # and redirects everything else; nothing is served over it.
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # tls.crt + tls.key. Read-only, and never baked into the image: a
+      # certificate in an image is a certificate in every registry it is pushed
+      # to. With nothing here the container generates a self-signed one and
+      # says so loudly -- fine on a laptop, not on a server.
+      - "${SWARMGUARD_CERTS_DIR:-./certs}:/etc/nginx/certs:ro"
+      # Let's Encrypt HTTP-01 webroot, written by certbot on the host.
+      - "${SWARMGUARD_ACME_DIR:-./acme}:/var/www/acme:ro"
+    environment:
+      # Subject of the self-signed fallback only; ignored once a real
+      # certificate is mounted.
+      TLS_SELF_SIGNED_CN: ${SWARMGUARD_HOSTNAME:-localhost}
     depends_on:
       backend:
         condition: service_healthy
@@ -209,7 +224,8 @@ services:
         # ignored.
         ipv4_address: *proxy_ip
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      # Answered on port 80 without a redirect; see frontend/nginx.conf.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

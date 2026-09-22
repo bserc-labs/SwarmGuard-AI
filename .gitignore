@@ -28,6 +28,7 @@ Icon
 # material. Never committed; CI's secret scan is the backstop, not the plan.
 /secrets/
 /certs/
+/acme/
 
 # ==============================================================================
 # Python / FastAPI (Backend)

@@ -1,12 +1,12 @@
 # Operations guide
 
-How to run SwarmGuard AI on a server: start-up order, secrets, rotation. Each
+How to run SwarmGuard AI on a server: start-up order, TLS, secrets, rotation. Each
 procedure here was executed against a running stack before it was written down.
 
 ## Start-up order
 
 ```
-postgres ─healthy─▶ migrate ─exit 0─▶ backend ─healthy─▶ frontend (nginx)
+postgres ─healthy─▶ migrate ─exit 0─▶ backend ─healthy─▶ frontend (nginx, :443)
 redis ────healthy───────────────────▶
 ```
 
@@ -36,6 +36,59 @@ docker compose logs migrate                     # why did the API not start?
 schema back. So a migration must stay compatible with the *previous* release:
 add columns as nullable or with a default, and remove a column only in the
 release *after* the code stopped using it (expand, then contract).
+
+## TLS
+
+nginx serves the application on **443** only. Port 80 answers a health probe
+(`/healthz`), the Let's Encrypt challenge path, and redirects everything else —
+including `/api` — so nothing is ever served in clear text. TLS 1.2 and 1.3
+only; HSTS for one year.
+
+The certificate is **mounted, never baked into the image**: put `tls.crt` (the
+full chain) and `tls.key` in `./certs/`, or point `SWARMGUARD_CERTS_DIR` at them.
+
+| `./certs` contains | nginx does |
+|---|---|
+| `tls.crt` and `tls.key` | uses them (linked, not copied) |
+| nothing | generates a **self-signed** certificate at start and warns loudly — fine on a laptop, never on a server |
+| only one of the two, or an empty file | **refuses to start** with a clear error |
+
+The last row is deliberate. Falling back to self-signed when half a pair is
+installed would bring the site up looking fine while everyone believes the real
+certificate is in use.
+
+The key must be readable by the unprivileged nginx user, whose uid does not
+exist on the host: `chmod 700 certs && chmod 444 certs/tls.key`, the same
+arrangement as `./secrets`.
+
+**Local development.** `scripts/make-dev-cert.sh` writes a self-signed pair to
+`./certs` so the certificate is stable across container recreations and the
+browser warning only has to be accepted once.
+
+**Let's Encrypt.** Needs a public DNS name pointing at the host and port 80
+reachable from the internet:
+
+```bash
+certbot certonly --webroot -w ./acme -d swarmguard.example.org
+cp /etc/letsencrypt/live/swarmguard.example.org/fullchain.pem certs/tls.crt
+cp /etc/letsencrypt/live/swarmguard.example.org/privkey.pem   certs/tls.key
+chmod 444 certs/tls.crt certs/tls.key
+docker compose exec frontend nginx -s reload     # no restart, no dropped sockets
+```
+
+Put the last three lines in certbot's `--deploy-hook` so renewals apply
+themselves. Verified here: a file written under `./acme/.well-known/acme-challenge/`
+is served over plain HTTP with a 200 while every other path is redirected. Not
+verified here: issuance against the real CA, which needs a domain this project
+does not have yet.
+
+Check a deployment from outside:
+
+```bash
+curl -sI http://HOST/ | head -1                                  # 301
+curl -sI https://HOST/ | grep -i strict-transport-security        # present
+openssl s_client -connect HOST:443 -tls1_1 </dev/null 2>&1 | grep -c "alert"   # refused
+```
 
 ## Secrets
 

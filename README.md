@@ -274,7 +274,11 @@ ships and refuses to start if it is behind, because two replicas migrating on
 start ran the same DDL at the same time. To migrate by hand:
 `docker compose run --rm migrate`.
 
-Frontend on `:80`. The API is published on loopback only —
+The application is served over **HTTPS on `:443`** (`https://localhost`). Port 80
+only redirects. With no certificate in `./certs` the container generates a
+self-signed one, so expect a browser warning locally; `scripts/make-dev-cert.sh`
+makes that certificate stable, and a real deployment mounts its own
+([`docs/OPERATIONS.md`](docs/OPERATIONS.md#tls)). The API is published on loopback only —
 `http://localhost:8000` (OpenAPI docs at `/docs`) — for the local demo and
 scripts; everything else reaches it through nginx at `/api`. Every variable in
 `.env` is passed to the backend container; the compose file overrides
@@ -333,6 +337,10 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `SWARMGUARD_CERTS_DIR` | `./certs` | Host directory with `tls.crt` and `tls.key`. Empty means a self-signed certificate is generated at start |
+| `SWARMGUARD_HOSTNAME` | `localhost` | Subject of the self-signed fallback only |
+| `SWARMGUARD_ACME_DIR` | `./acme` | Let's Encrypt HTTP-01 webroot, served over plain HTTP on port 80 |
+| `CORS_ALLOWED_ORIGINS` | localhost, http and https | Comma-separated browser origins allowed to call the API with credentials. The deployed frontend is same-origin and needs no entry. `*` is refused |
 | `SWARMGUARD_SECRETS_DIR` | `./secrets` | Host directory holding the secret files compose mounts. Point it outside the checkout for anything real |
 | `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
 | `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |

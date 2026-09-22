@@ -15,7 +15,16 @@ RUN npm run build
 # Stage 2: Serve with nginx
 FROM nginx:alpine
 
+# openssl is here for one job: 40-tls.sh generates a self-signed certificate
+# when none is mounted, so a laptop still gets HTTPS. nginx itself links
+# libssl and does not need the command-line tool.
+RUN apk add --no-cache openssl
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
+# The base image's entrypoint runs every executable in this directory, in name
+# order, before starting nginx.
+COPY --chmod=0755 nginx/40-tls.sh /docker-entrypoint.d/40-tls.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Run as an unprivileged user.
@@ -34,11 +43,14 @@ RUN adduser -D -H -u 1000 -s /bin/sh nginxuser && \
              /var/cache/nginx/fastcgi_temp \
              /var/cache/nginx/uwsgi_temp \
              /var/cache/nginx/scgi_temp \
-             /var/log/nginx && \
+             /var/log/nginx \
+             /etc/nginx/tls \
+             /var/www/acme && \
     touch /run/nginx.pid && \
     chown -R nginxuser:nginxuser \
              /usr/share/nginx/html \
              /etc/nginx/conf.d \
+             /etc/nginx/tls \
              /var/cache/nginx \
              /var/log/nginx \
              /run/nginx.pid && \
@@ -48,14 +60,18 @@ RUN adduser -D -H -u 1000 -s /bin/sh nginxuser && \
 
 USER nginxuser
 
-# Binding 80 as non-root works because Docker sets
+# Binding 80 and 443 as non-root works because Docker sets
 # net.ipv4.ip_unprivileged_port_start=0 by default. On a host that overrides
-# that, publish a high port and map it instead.
-EXPOSE 80
+# that, publish high ports and map them instead.
+EXPOSE 80 443
 
+# /healthz is answered on port 80 without a redirect. Probing / would now get a
+# 301 to https, and following it means trusting a possibly self-signed
+# certificate from inside the container.
+#
 # 127.0.0.1 rather than localhost: the latter resolves to [::1] first inside the
 # container, which fails unless nginx is also listening on IPv6.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

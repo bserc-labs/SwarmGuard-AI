@@ -181,6 +181,26 @@ class Settings(BaseSettings):
     # 30 s default, which the client times out before and so hides the cause.
     DB_POOL_TIMEOUT: int = 10
 
+    # --- CORS ----------------------------------------------------------------
+    #
+    # Comma-separated origins allowed to call the API from a browser with
+    # credentials. The deployed frontend does not need to be listed: nginx
+    # serves the page and proxies /api on one origin, so those requests are
+    # same-origin and CORS never applies. This is for a page served from
+    # somewhere else -- in practice the Vite dev server -- and for the API
+    # reached directly on the loopback port.
+    #
+    # Never "*": with credentials allowed that would let any site a logged-in
+    # operator visits drive the API as them.
+    CORS_ALLOWED_ORIGINS: str = (
+        "http://localhost:5173,https://localhost,https://127.0.0.1,"
+        "http://localhost,http://127.0.0.1"
+    )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
     # --- Schema guard -------------------------------------------------------
     #
     # Migrations run once, from a dedicated job, not from every container start
@@ -271,6 +291,16 @@ class Settings(BaseSettings):
         Escalate this to a failure once deployment sets its own credentials.
         """
         _warn_if_weak_db_password(_db_password(v))
+        return v
+
+    @field_validator("CORS_ALLOWED_ORIGINS")
+    @classmethod
+    def _no_wildcard_origin(cls, v: str) -> str:
+        if any(origin.strip() == "*" for origin in v.split(",")):
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must not contain '*': the API allows credentials, so a "
+                "wildcard would let any website act as a signed-in operator. List origins."
+            )
         return v
 
     @model_validator(mode="after")
