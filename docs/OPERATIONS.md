@@ -82,6 +82,24 @@ container (compose probes every 10 s, three failures make it unhealthy):
 The backend's restart count stayed at 0 throughout: the outage was visible
 without becoming a restart loop.
 
+### Background loops
+
+Two loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
+detects a jammed, silent drone) and **telemetry retention** (hourly). Both run
+under a supervisor that restarts a loop with backoff when its pass raises,
+brings the task back if it ever ends for any other reason, and records the time
+of each successful pass. `/ready` reports them:
+
+```json
+"background": {"heartbeat-monitor": {"interval_s": 10.0, "ticks": 42, "failures": 0, "restarts": 0, "seconds_since_tick": 3.1, "stalled": false, "last_error": null, "alive": true}, ...}
+```
+
+A loop that has not ticked for three intervals plus 30 s is **stalled**, and a
+stalled loop makes `/ready` answer 503 (`checks.background`). For the heartbeat
+monitor that is the difference between "no drone is jammed" and "nobody is
+looking", which used to be indistinguishable: it ran as a bare task, and a task
+that dies is simply gone.
+
 ## Releases and deploys
 
 CI publishes images; a script on the host deploys them; a failed deploy rolls
@@ -125,8 +143,9 @@ In order it:
    before anything running is touched;
 2. brings the stack up with `--no-build`: the `migrate` job runs, the API starts
    only if it succeeded, nginx last;
-3. smoke-tests `http://localhost/healthz` and `https://localhost/api/health`
-   for up to two minutes (`SWARMGUARD_SMOKE_TIMEOUT_S`);
+3. smoke-tests `http://localhost/healthz` and `https://localhost/api/ready`
+   for up to two minutes (`SWARMGUARD_SMOKE_TIMEOUT_S`) — readiness, so a
+   release whose API comes up but cannot reach its database is a failed deploy;
 4. on success records the tag; on failure redeploys the previous tag,
    smoke-tests that, prints each service's status and log tail, and **exits 1
    either way** — a deploy that failed is never reported as anything else, even

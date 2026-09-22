@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
@@ -28,7 +29,9 @@ from routers import (
     users,
     websocket,
 )
-from services.readiness import check_readiness
+from services.heartbeat_service import check_drone_heartbeats
+from services.readiness import Probe, check_readiness
+from services.supervisor import Supervisor
 from services.ws_manager import ws_manager
 from utils.limiter import REDIS_URL, limiter, storage_healthy
 
@@ -134,71 +137,76 @@ app.include_router(commands.router)
 app.include_router(settings.router)
 app.include_router(geofence.router)
 
-import asyncio
 
-from services.heartbeat_service import check_drone_heartbeats
+# The loops below are single passes; the Supervisor runs each on its interval,
+# restarts it with backoff when it raises, brings the task back if it ever
+# ends for any other reason, and records the time of the last successful pass.
+# A bare asyncio task offered none of that: the heartbeat monitor -- the thing
+# that notices a jammed, silent drone -- could die quietly, and "monitor dead"
+# looked exactly like "no drone is jammed".
+supervisor = Supervisor(logger)
+
+HEARTBEAT_INTERVAL_S = 10.0
+RETENTION_INTERVAL_S = 3600.0
 
 
-async def periodic_heartbeat_check():
-    while True:
-        await asyncio.sleep(10)
-
-        def run_sync_heartbeat():
-            db = SessionLocal()
-            try:
-                return check_drone_heartbeats(db)
-            finally:
-                db.close()
-
+async def heartbeat_pass() -> None:
+    def run_sync_heartbeat():
+        db = SessionLocal()
         try:
-            alerts = await asyncio.to_thread(run_sync_heartbeat)
-        except Exception as e:
-            logger.error(f"Heartbeat detection failed: {e}", exc_info=True)
-            continue
+            return check_drone_heartbeats(db)
+        finally:
+            db.close()
 
-        # Broadcast on the main event loop, which owns the sockets. The
-        # detection itself runs in a worker thread; the delivery must not.
-        #
-        # This called ws_manager.broadcast_secure(), which does not exist --
-        # ConnectionManager defines connect/disconnect/broadcast/_send_local and
-        # nothing else. Every iteration therefore raised AttributeError, and the
-        # bare `except Exception` around the whole block swallowed it. Silent
-        # drones were detected, CRITICAL SIGNAL_LOSS_JAMMING incidents were
-        # written and committed by check_drone_heartbeats, and then no operator
-        # was ever told: the alert reached the database and never the screen.
-        #
-        # Each organization is delivered independently so one failed send does
-        # not suppress every later tenant's alert, and exc_info is on because a
-        # missing attribute is a programming error, not a transient broker
-        # hiccup, and the two must not look alike in the log again.
-        for organization_id, payload in alerts:
-            try:
-                await ws_manager.broadcast(payload, organization_id)
-            except Exception as e:
-                logger.error(
-                    f"Heartbeat alert broadcast failed for org {organization_id}: {e}",
-                    exc_info=True,
-                )
+    alerts = await asyncio.to_thread(run_sync_heartbeat)
 
-async def periodic_database_cleanup():
-    """Data Retention Policy: Deletes telemetry older than 3 days every hour."""
-    while True:
-        def run_sync_cleanup():
-            db = SessionLocal()
-            try:
-                cutoff = datetime.utcnow() - timedelta(days=3)
-                deleted = db.query(models.TelemetryLog).filter(models.TelemetryLog.created_at < cutoff).delete()
-                db.commit()
-                if deleted > 0:
-                    logger.info(f"Data Retention Policy executed: Pruned {deleted} old telemetry rows.")
-            finally:
-                db.close()
+    # Broadcast on the main event loop, which owns the sockets. The detection
+    # itself runs in a worker thread; the delivery must not.
+    #
+    # This called ws_manager.broadcast_secure(), which does not exist --
+    # ConnectionManager defines connect/disconnect/broadcast/_send_local and
+    # nothing else. Every iteration therefore raised AttributeError, and the
+    # bare `except Exception` around the whole block swallowed it. Silent
+    # drones were detected, CRITICAL SIGNAL_LOSS_JAMMING incidents were written
+    # and committed by check_drone_heartbeats, and then no operator was ever
+    # told: the alert reached the database and never the screen.
+    #
+    # Each organization is delivered independently so one failed send does not
+    # suppress every later tenant's alert, and exc_info is on because a missing
+    # attribute is a programming error, not a transient broker hiccup, and the
+    # two must not look alike in the log again.
+    for organization_id, payload in alerts:
         try:
-            await asyncio.to_thread(run_sync_cleanup)
+            await ws_manager.broadcast(payload, organization_id)
         except Exception as e:
-            logger.error(f"Error in database cleanup loop: {e}")
-        # Run every hour
-        await asyncio.sleep(3600)
+            logger.error(
+                f"Heartbeat alert broadcast failed for org {organization_id}: {e}",
+                exc_info=True,
+            )
+
+
+async def retention_pass() -> None:
+    """Data Retention Policy: deletes telemetry older than 3 days."""
+
+    def run_sync_cleanup():
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=3)
+            deleted = db.query(models.TelemetryLog).filter(models.TelemetryLog.created_at < cutoff).delete()
+            db.commit()
+            if deleted > 0:
+                logger.info(f"Data Retention Policy executed: Pruned {deleted} old telemetry rows.")
+        finally:
+            db.close()
+
+    await asyncio.to_thread(run_sync_cleanup)
+
+
+# run_first=False: drones get one interval to report after a start before any
+# of them is declared silent, as before.
+supervisor.register("heartbeat-monitor", heartbeat_pass, HEARTBEAT_INTERVAL_S, run_first=False)
+supervisor.register("telemetry-retention", retention_pass, RETENTION_INTERVAL_S)
+
 
 # How long shutdown waits for the background loops to acknowledge cancellation
 # before giving up on them. Each loop runs its work in a worker thread; a
@@ -214,12 +222,7 @@ async def startup() -> None:
     # In a worker thread: it is a blocking database call on the event loop.
     if get_settings().REQUIRE_SCHEMA_AT_HEAD:
         await asyncio.to_thread(assert_schema_current, engine, logger)
-    # Hold references: a bare create_task() result can be garbage-collected
-    # while the coroutine is still running.
-    app.state.background_tasks = [
-        asyncio.create_task(periodic_heartbeat_check(), name="heartbeat-monitor"),
-        asyncio.create_task(periodic_database_cleanup(), name="telemetry-retention"),
-    ]
+    supervisor.start()
 
     # Start MAVLink receiver
     from services.mavlink_receiver import mavlink_receiver
@@ -237,17 +240,8 @@ async def shutdown() -> None:
     # running until the event loop was torn down under them, which is why a
     # shutdown could log a heartbeat error for a database that had already
     # gone away.
-    tasks = list(getattr(app.state, "background_tasks", []))
-    for task in tasks:
-        task.cancel()
-    if tasks:
-        done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE_S)
-        for task in pending:
-            logger.error(f"Background task {task.get_name()} did not stop within {SHUTDOWN_GRACE_S}s")
-        for task in done:
-            if not task.cancelled() and task.exception() is not None:
-                logger.error(f"Background task {task.get_name()} ended with an error", exc_info=task.exception())
-    app.state.background_tasks = []
+    for name in await supervisor.stop(SHUTDOWN_GRACE_S):
+        logger.error(f"Background loop {name!r} did not stop within {SHUTDOWN_GRACE_S}s")
 
     try:
         from services.mavlink_receiver import mavlink_receiver
@@ -288,7 +282,17 @@ async def readiness_check():
         redis_required=settings.READINESS_REQUIRES_REDIS,
         timeout_s=settings.READINESS_TIMEOUT_S,
     )
-    return JSONResponse(status_code=200 if readiness.ready else 503, content=readiness.as_dict())
+    # A loop that has stopped ticking is a dependency that is down. For the
+    # heartbeat monitor it is the difference between "no drone is jammed" and
+    # "nobody is looking".
+    stalled = supervisor.stalled()
+    readiness.checks["background"] = Probe(
+        not stalled,
+        "loops ticking" if not stalled else f"stalled: {', '.join(stalled)}",
+    )
+    body = readiness.as_dict()
+    body["background"] = supervisor.status()
+    return JSONResponse(status_code=200 if readiness.ready else 503, content=body)
 
 from database import get_db
 from middleware.auth_middleware import TenantContext, get_tenant_context

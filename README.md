@@ -239,9 +239,9 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   Ruff and Mypy run on every PR
 - **Backups** — a 6-hourly `pg_dump` sidecar, a TimescaleDB-aware restore, and a
   restore rehearsal that CI runs on every push
-- **Readiness** — `/ready` probes postgres and Redis and answers 503 when one is
-  down; the container health check and the deploy smoke test use it, `/health`
-  stays a bare liveness answer
+- **Readiness** — `/ready` probes postgres, Redis and the two supervised background
+  loops and answers 503 when one is down or stalled; the container health check and
+  the deploy smoke test use it, `/health` stays a bare liveness answer
 - **Releases** — every push to `main` builds, scans and publishes images tagged
   with the commit SHA; `scripts/deploy.sh` deploys one, smoke-tests it, and rolls
   back by itself if that fails
