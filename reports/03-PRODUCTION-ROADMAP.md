@@ -58,6 +58,30 @@ the order of work.
 | 0b.5g Unbounded `/latest` sort; `/stats` in Python | ✅ composite index + LATERAL; SQL aggregates, byte-identical JSON |
 | 0b.5h `/ai/explain` attributed from NaN | ✅ refuses undefined vectors; `timestamp` now reaches the feature engineer |
 
+**Phase 1 is done** — branch `feat/phase1-deployment-foundation`, one commit per
+item, every procedure executed on the running stack before being written down.
+Gates: **ruff clean, mypy clean, 679 passed / 48 skipped** (from 506).
+
+| Item | Status |
+|---|---|
+| 1.4 Migrations raced across replicas | ✅ one-shot `migrate` job; advisory lock in Alembic (3 concurrent migrators: 1 survivor before, 3 after); API refuses a schema that is behind, warns on one that is ahead |
+| 1.2 Secrets in the environment | ✅ files at `/run/secrets`; compose blanks the variables so `.env` leftovers cannot leak; `docker inspect` shows every secret EMPTY |
+| 1.2 Key rotation | ✅ `SECRET_KEY_PREVIOUS`; a session from before a rotation stayed 200 until `--finish`, then 401 |
+| 1.1 Plaintext everywhere | ✅ HTTPS only, TLS 1.2/1.3, HSTS; port 80 redirects; found and fixed: static assets were served with **no** security headers |
+| 1.5 No resource limits | ✅ memory/CPU/pids on every service, sized from measurement; postgres settings pinned so `timescaledb-tune` cannot size it to the host |
+| 1.3 No backups | ✅ 6-hourly `pg_dump` sidecar; TimescaleDB-aware restore; rehearsal compares every table and CI runs it on every push; live restore measured at 32 s |
+| 1.5 Nothing published | ✅ `release` job: build → Trivy image scan (blocking) → GHCR, `sha-<commit>` tags; `deploy.sh` with smoke test and automatic rollback, proven against a broken release |
+
+Two results worth more than the green: the image scan, run before it was made
+a gate, found two HIGH findings in pip's vendored `msgpack` and `setuptools`,
+so the runtime image no longer ships pip; and the first deploy proof used port
+5000, which macOS AirPlay holds, so compose found the images locally and the
+pull path went untested until the registry was moved.
+
+What Phase 1 commits to: RPO 6 h, RTO about a minute at today's size. What it
+does not pretend to: a real certificate (needs a domain), a server to deploy to
+(the last hop is a script on the host), minute-level RPO (needs a bucket).
+
 Two results worth more than the green: the concurrency test was run with the
 lock disabled and produced **2 rows instead of 1**, so it has teeth; and
 `EXPLAIN` shows the planner doing an **Index Scan on the new composite index**
@@ -335,9 +359,13 @@ to live statuses; broadcast on severity change.
 
 ---
 
-## Phase 1 — Deployment foundation (1.5–2 weeks)
+## Phase 1 — Deployment foundation (✅ done)
 
-Nothing here exists today. I grepped the whole repository for each.
+Nothing here existed when this was written; the descriptions below are kept as
+the record of what was missing. Status, evidence and what was found on the way
+are in the Phase 1 table near the top of this document and in
+`05-PHASE1-3-EXECUTION-PLAN.md`; the operating procedures are in
+`docs/OPERATIONS.md`.
 
 ### 1.1 — TLS everywhere ⛔
 
@@ -598,12 +626,12 @@ Production-ready when every box is ticked:
 - [ ] Audit table: immutability enforced (or claim withdrawn), duplicate index dropped
 
 **Infrastructure**
-- [ ] TLS end to end; HTTP redirects; HSTS
-- [ ] Secrets in a manager, with a documented rotation procedure
-- [ ] Automated backups with a **rehearsed** restore
-- [ ] Migrations run once, not per replica
-- [ ] Resource limits on every container
-- [ ] Deploy pipeline with immutable tags and rollback
+- [x] TLS end to end; HTTP redirects; HSTS
+- [x] Secrets in a manager, with a documented rotation procedure
+- [x] Automated backups with a **rehearsed** restore
+- [x] Migrations run once, not per replica
+- [x] Resource limits on every container
+- [x] Deploy pipeline with immutable tags and rollback
 
 **Observability**
 - [ ] Metrics on ingest, detection, incidents, pool, sockets

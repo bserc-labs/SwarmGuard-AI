@@ -16,7 +16,10 @@ this was written. Where the roadmap was incomplete, the difference is marked
 
 ---
 
-## Phase 1 — Deployment foundation
+## Phase 1 — Deployment foundation ✅
+
+Done. Each item below keeps its original wording as the record of the problem;
+the measured results are in the roadmap's Phase 1 table.
 
 ### 1.1 TLS everywhere
 
@@ -270,7 +273,7 @@ Three pull requests, one per phase, each a series of small commits.
 
 | PR | Commits, in order |
 |---|---|
-| **Phase 1** | plan + roadmap correction → 1.4 migrations → 1.2 secrets → 1.2 key rotation → 1.1 TLS → 1.5 limits → 1.3 backups → 1.3 restore rehearsal in CI → 1.5 release pipeline → 1.5 deploy + rollback → operations guide |
+| **Phase 1** ✅ | plan + roadmap correction → 1.4 migrations → 1.2 secrets → 1.2 key rotation → 1.1 TLS → 1.5 limits → 1.3 backups + rehearsal in CI → 1.5 release + deploy with rollback → status. The operations guide was written alongside each item, not at the end, so every procedure in it had been run once |
 | **Phase 2** | 3.3 lifespan → 2.2 `/ready` → 2.3 supervisor → 2.1 metrics (core, then pool/socket/task gauges) → 2.4 Sentry → 2.4 audit retention |
 | **Phase 3** | 3.1 retention → 3.2 device credentials (schema, API, ingest) → 3.6 CI gates → 3.5 load test → 3.4 timestamptz |
 
