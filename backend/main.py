@@ -29,6 +29,7 @@ from routers import (
     users,
     websocket,
 )
+from services.audit_service import purge_expired_audit_logs
 from services.heartbeat_service import check_drone_heartbeats
 from services.readiness import Probe, check_readiness
 from services.supervisor import Supervisor
@@ -165,6 +166,7 @@ supervisor = Supervisor(logger)
 
 HEARTBEAT_INTERVAL_S = 10.0
 RETENTION_INTERVAL_S = 3600.0
+AUDIT_RETENTION_INTERVAL_S = 86400.0
 
 
 async def heartbeat_pass() -> None:
@@ -219,10 +221,27 @@ async def retention_pass() -> None:
     await asyncio.to_thread(run_sync_cleanup)
 
 
+async def audit_retention_pass() -> None:
+    """Audit retention: deletes audit rows older than AUDIT_RETENTION_DAYS."""
+
+    def run_sync() -> int:
+        db = SessionLocal()
+        try:
+            return purge_expired_audit_logs(db, get_settings().AUDIT_RETENTION_DAYS)
+        finally:
+            db.close()
+
+    deleted = await asyncio.to_thread(run_sync)
+    if deleted:
+        logger.info(f"Audit retention: removed {deleted} audit rows older than "
+                    f"{get_settings().AUDIT_RETENTION_DAYS} days.")
+
+
 # run_first=False: drones get one interval to report after a start before any
 # of them is declared silent, as before.
 supervisor.register("heartbeat-monitor", heartbeat_pass, HEARTBEAT_INTERVAL_S, run_first=False)
 supervisor.register("telemetry-retention", retention_pass, RETENTION_INTERVAL_S)
+supervisor.register("audit-retention", audit_retention_pass, AUDIT_RETENTION_INTERVAL_S)
 metrics.register_collector("supervisor", metrics.SupervisorCollector(supervisor))
 
 

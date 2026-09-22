@@ -201,6 +201,15 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # --- Audit retention --------------------------------------------------------
+    #
+    # audit_logs is append-only at the database level; a table that can only
+    # grow is its own outage. Rows older than this are deleted once a day by a
+    # supervised loop, through the maintenance flag the trigger requires. 0
+    # keeps everything -- for a deployment whose retention is set by regulation
+    # rather than disk, say so here and archive elsewhere.
+    AUDIT_RETENTION_DAYS: int = 365
+
     # --- Error tracking -------------------------------------------------------
     #
     # Unhandled exceptions become an opaque 500 and one log line. With a DSN

@@ -84,8 +84,10 @@ without becoming a restart loop.
 
 ### Background loops
 
-Two loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
-detects a jammed, silent drone) and **telemetry retention** (hourly). Both run
+Three loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
+detects a jammed, silent drone), **telemetry retention** (hourly, three days)
+and **audit retention** (daily, `AUDIT_RETENTION_DAYS`, default a year; `0`
+keeps everything). All run
 under a supervisor that restarts a loop with backoff when its pass raises,
 brings the task back if it ever ends for any other reason, and records the time
 of each successful pass. `/ready` reports them:

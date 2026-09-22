@@ -17,6 +17,7 @@ def test_both_loops_are_registered_with_their_intervals():
     status = main.supervisor.status()
     assert status["heartbeat-monitor"]["interval_s"] == 10.0
     assert status["telemetry-retention"]["interval_s"] == 3600.0
+    assert status["audit-retention"]["interval_s"] == 86400.0
 
 
 def test_the_heartbeat_monitor_gives_drones_one_interval_before_judging_them():
@@ -40,7 +41,7 @@ def test_ready_reports_each_loop_when_nothing_is_stalled():
     monkeypatched = main.supervisor.stalled()  # whatever the real state is
     res = client.get("/ready")
     body = res.json()
-    assert set(body["background"]) == {"heartbeat-monitor", "telemetry-retention"}
+    assert set(body["background"]) == {"heartbeat-monitor", "telemetry-retention", "audit-retention"}
     if not monkeypatched:
         assert body["checks"]["background"]["ok"]
 

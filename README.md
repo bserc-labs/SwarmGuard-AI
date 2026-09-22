@@ -366,6 +366,7 @@ cd frontend && npm run test
 | `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
 | `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
 | `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
+| `AUDIT_RETENTION_DAYS` | `365` | Audit rows older than this are deleted daily through the append-only table's maintenance flag. `0` keeps everything |
 | `SENTRY_DSN` | — | Error tracking. Unset, off. Under compose it is the secret file `sentry_dsn` |
 | `SWARMGUARD_ENV` / `SWARMGUARD_RELEASE` | `development` / image tag | Tags on every error and metric; `deploy.sh` sets the release |
 | `METRICS_TOKEN` | — | Bearer token required on `/metrics`. Unset, the endpoint relies on not being proxied and on the API port being loopback-only |
