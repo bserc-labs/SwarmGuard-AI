@@ -243,6 +243,18 @@ cannot. The first run of it found two HIGH findings, both in copies of
 `msgpack` and `setuptools` that pip vendors for its own use; the runtime image
 no longer ships pip at all.
 
+### Dependency audits
+
+`pip-audit` (backend) and `npm audit --audit-level=high` (frontend) run on every
+push and pull request and **fail the build**. When one turns red: upgrade if a
+fix exists. If none does and the vulnerable code is unreachable here, ignore
+exactly that advisory ID in `.github/workflows/ci.yml` with a comment saying why
+and until when -- never turn the step back into an advisory. The first triage
+replaced python-jose with PyJWT (its `ecdsa` dependency has an advisory with no
+fix) and took patch-level fixes for two npm packages. Two moderate npm findings
+remain in `vitest`, the test runner: below the threshold, and never in the
+built bundle.
+
 ### Deploying
 
 ```bash

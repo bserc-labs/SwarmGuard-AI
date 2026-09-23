@@ -149,3 +149,26 @@ class TestConcurrency:
         assert "github.event_name == 'push' && github.sha" in group
         assert "github.ref" in group, "pull requests still group by ref"
 
+
+class TestDependencyAudits:
+    """An advisory security gate is a gate nobody reads."""
+
+    @pytest.fixture(scope="class")
+    def steps(self, jobs) -> dict:
+        return {step.get("name", ""): step for step in jobs["security-scan"]["steps"]}
+
+    @pytest.mark.parametrize("name", ["Audit Python dependencies (blocking)", "Audit npm dependencies (blocking)"])
+    def test_each_audit_blocks(self, steps, name):
+        assert name in steps, f"{name!r} is missing from the security-scan job"
+        assert "continue-on-error" not in steps[name], f"{name} must fail the build"
+
+    def test_the_python_audit_covers_the_requirements(self, steps):
+        assert "pip-audit -r requirements.txt" in steps["Audit Python dependencies (blocking)"]["run"]
+
+    def test_the_npm_audit_threshold_is_high(self, steps):
+        assert "--audit-level=high" in steps["Audit npm dependencies (blocking)"]["run"]
+
+    def test_the_vulnerable_jwt_dependency_does_not_come_back(self):
+        requirements = (ROOT / "backend" / "requirements.txt").read_text().lower()
+        assert "python-jose" not in requirements and "ecdsa" not in requirements
+
