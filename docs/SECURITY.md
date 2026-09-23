@@ -28,7 +28,7 @@ SwarmGuard AI enforces a 4-tier Role-Based Access Control matrix to enforce prin
 
 | Identified Threat Vector | Risk Level | Applied Defense-in-Depth Control |
 |:---|:---:|:---|
-| **Rogue Drone Telemetry Spoofing** | HIGH | Device Authentication via `x-drone-api-key` header verification. Invalid keys rejected with `403 Forbidden`. |
+| **Rogue Drone Telemetry Spoofing** | HIGH | Device authentication via the `x-drone-api-key` header: a per-drone key bound to one drone id and organization, stored as a SHA-256 digest and individually revocable; the shared fleet key can be disabled. Invalid keys rejected with `403 Forbidden`, the reason recorded in the audit log. |
 | **API Brute-Force Attacks** | HIGH | `slowapi` IP-based rate limiting (`5/minute` on `/auth/login`, `50/second` on `/telemetry/ingest`). |
 | **Clickjacking / UI Redirection** | MEDIUM | Nginx `X-Frame-Options: DENY` header. |
 | **MIME Sniffing Attacks** | MEDIUM | Nginx `X-Content-Type-Options: nosniff` header. |

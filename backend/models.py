@@ -229,3 +229,26 @@ class GeofenceZone(Base):
     severity: Mapped[str] = mapped_column(String, default="CRITICAL", nullable=True)  # WARNING, CRITICAL
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+
+
+class DeviceCredential(Base):
+    """One drone's ingest key, stored as a SHA-256 digest. See services/device_credentials.py."""
+
+    __tablename__ = "device_credentials"
+    __table_args__ = (
+        Index("ux_device_credentials_key_hash", "key_hash", unique=True),
+        Index("ix_device_credentials_org_drone", "organization_id", "drone_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizations.id"), nullable=False)
+    drone_id: Mapped[str] = mapped_column(String, nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    label: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String, nullable=True)
+

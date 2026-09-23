@@ -231,7 +231,8 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   compared per request, so a password or role change invalidates every
   outstanding session with a single `UPDATE`
 - **Device authentication** — `/telemetry/ingest` requires both an operator
-  bearer token and a device API key
+  bearer token and a device key: one per drone, stored as a digest, revocable on
+  its own; the shared fleet key can be switched off once no drone uses it
 - **Secrets as files** — mounted at `/run/secrets`, never container environment
   variables; startup fails on absent, short, or publicly-known secrets
   (`backend/config.py`)
@@ -368,6 +369,7 @@ cd frontend && npm run test
 | `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
 | telemetry retention | 3 days | A TimescaleDB policy on one-day chunks, not a setting: change it with `alter_job` ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#telemetry-retention)) |
 | `AUDIT_RETENTION_DAYS` | `365` | Audit rows older than this are deleted daily through the append-only table's maintenance flag. `0` keeps everything |
+| `DEVICE_SHARED_KEY_ENABLED` | `true` | Accept the shared `DRONE_API_KEY` on ingest alongside per-device keys. Turn off once `swarmguard_device_auth_total{method="shared_key"}` stops moving ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#device-credentials-and-retiring-drone_api_key)) |
 | `SENTRY_DSN` | — | Error tracking. Unset, off. Under compose it is the secret file `sentry_dsn` |
 | `SWARMGUARD_ENV` / `SWARMGUARD_RELEASE` | `development` / image tag | Tags on every error and metric; `deploy.sh` sets the release |
 | `METRICS_TOKEN` | — | Bearer token required on `/metrics`. Unset, the endpoint relies on not being proxied and on the API port being loopback-only |

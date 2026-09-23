@@ -134,6 +134,11 @@ class Settings(BaseSettings):
     # Device authentication for /telemetry/ingest. No default: a shared secret
     # that ships in the image authenticates an attacker as readily as a drone.
     DRONE_API_KEY: str
+    # Accept DRONE_API_KEY on ingest as well as per-device keys. On by default so
+    # an upgrade breaks nothing; turn it off once swarmguard_device_auth_total
+    # shows no more shared_key traffic, and a lost airframe stops being a lost
+    # fleet. See docs/OPERATIONS.md, "Device credentials".
+    DEVICE_SHARED_KEY_ENABLED: bool = True
 
     # MAVLink Configurations.
     #

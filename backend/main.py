@@ -22,6 +22,7 @@ from routers import (
     ai_explain,
     auth,
     commands,
+    devices,
     geofence,
     incidents,
     settings,
@@ -147,6 +148,7 @@ app.include_router(websocket.router)
 app.include_router(ai.router)
 app.include_router(ai_explain.router)
 app.include_router(commands.router)
+app.include_router(devices.router)
 app.include_router(settings.router)
 app.include_router(geofence.router)
 

@@ -101,6 +101,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/drones/{drone_id}/command"): TENANT_DATA,
     ("POST", "/drones/{drone_id}/command/{command_id}/approve"): TENANT_DATA,
     ("GET", "/drones/{drone_id}/commands"): TENANT_DATA,
+    ("POST", "/drones/{drone_id}/credentials"): TENANT_DATA,
+    ("GET", "/drones/{drone_id}/credentials"): TENANT_DATA,
+    ("DELETE", "/drones/{drone_id}/credentials/{credential_id}"): TENANT_DATA,
 
     # --- geofence -----------------------------------------------------------
     ("GET", "/geofence/zones"): TENANT_DATA,

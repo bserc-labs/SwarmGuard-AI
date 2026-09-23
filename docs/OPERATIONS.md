@@ -521,10 +521,40 @@ Measured: in the right order the API reconnects at once. With the file changed
 and the role not, the API **does not start** — its start-up schema check cannot
 connect — which is a clearer failure than a running API answering 500.
 
-### `DRONE_API_KEY`
+### Device credentials (and retiring `DRONE_API_KEY`)
 
-One key is shared by the whole fleet, so rotating it means re-keying every
-aircraft at the same moment. There is no graceful version of that, which is why
-per-device credentials are on the roadmap (`reports/03-PRODUCTION-ROADMAP.md`,
-item 3.2). Until then: replace `secrets/drone_api_key`, restart the API, and
-update every device.
+Every drone used to present the one shared `DRONE_API_KEY`: one lost airframe
+was the whole fleet's key. Each drone can now hold its own, which an admin
+issues, lists and revokes:
+
+```bash
+TOKEN=...   # an admin's access token
+curl -sk -X POST https://HOST/api/drones/ALPHA-07/credentials \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"label": "airframe 7"}'
+# -> {"id": 12, "key": "sgd_...", "key_prefix": "sgd_Ab3dE6gH", ...}
+#    The key is in this response and nowhere else. Load it into the drone now.
+curl -sk https://HOST/api/drones/ALPHA-07/credentials -H "Authorization: Bearer $TOKEN"
+curl -sk -X DELETE https://HOST/api/drones/ALPHA-07/credentials/12 -H "Authorization: Bearer $TOKEN"
+```
+
+The drone sends it in `X-Drone-API-Key` exactly as it sent the shared key. A key
+works only for its own drone id in its own organization; the database keeps its
+SHA-256, never the key. Revocation takes effect on the next packet and leaves
+the drone's other keys alone, so **rotation** is: issue a new key, load it,
+revoke the old one. Every issue, revoke and rejection is in the audit log with
+its reason; the HTTP answer to a rejected key is the same whatever the reason.
+
+**Moving the fleet off the shared key.** The shared key keeps working while
+`DEVICE_SHARED_KEY_ENABLED=true` (the default), so an upgrade breaks nothing.
+
+1. Issue a key per drone and load it.
+2. Watch `swarmguard_device_auth_total{method="shared_key"}`. When it stops
+   increasing, no drone uses the shared key any more.
+3. Set `DEVICE_SHARED_KEY_ENABLED=false` and restart the API. A drone still on
+   the shared key is now rejected with reason `shared_key_disabled` in the
+   audit log.
+
+Until then, rotating the shared key itself is still the old procedure: replace
+`secrets/drone_api_key`, restart the API, and update every device still using
+it. Mutual TLS for airborne assets remains the longer-term answer.

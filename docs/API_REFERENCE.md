@@ -52,6 +52,10 @@ routes above were read off the router.
 ### `POST /telemetry/ingest`
 - **Headers:** `Authorization: Bearer <token>` (needs the `telemetry:ingest`
   permission) **and** `x-drone-api-key: <KEY>`. Missing or wrong key → `403`.
+  `<KEY>` is the drone's own key (`sgd_...`, issued by
+  `POST /drones/{drone_id}/credentials`, admin only), or the shared
+  `DRONE_API_KEY` while `DEVICE_SHARED_KEY_ENABLED` is on. A drone's key is
+  valid only for that `drone_id` in that organization.
 - **Note:** `packet_sequence` is **required**. Omitting it yields a `422` whose
   body names the field but is easy to miss.
 - **Optional:** `sample_time_ms` — the device's own sample clock in

@@ -54,6 +54,13 @@ INGEST = Counter(
     ["outcome"],
 )
 
+DEVICE_AUTH = Counter(
+    "swarmguard_device_auth_total",
+    "Accepted ingest device authentications, by method: device_key or shared_key. "
+    "When shared_key stops moving, the fleet has migrated and the shared key can be turned off.",
+    ["method"],
+)
+
 # --- detection ----------------------------------------------------------------------------------
 DETECTION_RUNS = Counter(
     "swarmguard_detection_runs_total",
