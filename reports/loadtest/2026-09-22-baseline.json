@@ -1,0 +1,129 @@
+{
+  "drones": 20,
+  "listeners": 10,
+  "phases": [
+    {
+      "name": "warm-up",
+      "offered_per_s": 10.0,
+      "seconds": 10.0,
+      "sent": 100,
+      "statuses": {
+        "200": 100
+      },
+      "accepted_per_s": 10.0,
+      "latency_ms": {
+        "p50": 18.5,
+        "p95": 26.3,
+        "p99": 31.8,
+        "max": 34.1
+      },
+      "detection_runs": {
+        "insufficient_history": 20,
+        "no_incident": 80
+      },
+      "detection_mean_ms": 3.2,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 1000,
+      "ws_expected": 1000,
+      "ws_delivery_ms": {
+        "p50": 19.8,
+        "p95": 27.5,
+        "max": 34.3
+      },
+      "backend_memory_mib_max": 204.3
+    },
+    {
+      "name": "under-cap",
+      "offered_per_s": 40.0,
+      "seconds": 60.0,
+      "sent": 2400,
+      "statuses": {
+        "200": 2400
+      },
+      "accepted_per_s": 40.0,
+      "latency_ms": {
+        "p50": 7.2,
+        "p95": 10.8,
+        "p99": 16.5,
+        "max": 89.5
+      },
+      "detection_runs": {
+        "no_incident": 2400
+      },
+      "detection_mean_ms": 1.9,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 24000,
+      "ws_expected": 24000,
+      "ws_delivery_ms": {
+        "p50": 7.7,
+        "p95": 11.6,
+        "max": 94.7
+      },
+      "backend_memory_mib_max": 205.5
+    },
+    {
+      "name": "at-cap",
+      "offered_per_s": 50.0,
+      "seconds": 60.0,
+      "sent": 3000,
+      "statuses": {
+        "200": 2959,
+        "429": 41
+      },
+      "accepted_per_s": 49.3,
+      "latency_ms": {
+        "p50": 6.3,
+        "p95": 9.3,
+        "p99": 13.6,
+        "max": 54.8
+      },
+      "detection_runs": {
+        "no_incident": 2959
+      },
+      "detection_mean_ms": 1.7,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 29590,
+      "ws_expected": 29590,
+      "ws_delivery_ms": {
+        "p50": 6.8,
+        "p95": 10.0,
+        "max": 55.4
+      },
+      "backend_memory_mib_max": 205.4
+    },
+    {
+      "name": "over-cap",
+      "offered_per_s": 100.0,
+      "seconds": 20.0,
+      "sent": 2000,
+      "statuses": {
+        "200": 1000,
+        "429": 1000
+      },
+      "accepted_per_s": 50.0,
+      "latency_ms": {
+        "p50": 4.9,
+        "p95": 7.8,
+        "p99": 14.1,
+        "max": 32.8
+      },
+      "detection_runs": {
+        "no_incident": 1000
+      },
+      "detection_mean_ms": 1.4,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 10000,
+      "ws_expected": 10000,
+      "ws_delivery_ms": {
+        "p50": 5.4,
+        "p95": 9.6,
+        "max": 34.9
+      },
+      "backend_memory_mib_max": 205.9
+    }
+  ]
+}

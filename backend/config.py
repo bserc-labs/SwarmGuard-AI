@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # looks like protection.
     LOGIN_RATE_LIMIT: str = "5/minute"
 
+    # Telemetry ingest per client address. Measured (reports/06-LOAD-TEST-
+    # RESULTS.md): precise at the limit, and the limiter -- not the pool or the
+    # CPU -- is what caps throughput. Keyed by client address, so every drone
+    # behind one ground-station uplink shares it: 20 drones get 2.5 Hz each.
+    # Raise it for a larger fleet behind one uplink, or for a capacity test.
+    INGEST_RATE_LIMIT: str = "50/second"
+
     # AI models & thresholds (for future use)
     THREAT_ANOMALY_THRESHOLD: float = 0.8
     THREAT_CRITICAL_THRESHOLD: float = 85.0

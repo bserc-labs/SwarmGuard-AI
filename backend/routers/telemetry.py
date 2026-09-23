@@ -29,11 +29,13 @@ from utils.logger import logger
 from utils.metrics import DEVICE_AUTH, INGEST
 
 settings = get_settings()
+# See Settings.INGEST_RATE_LIMIT: measured, and keyed per client address.
+INGEST_RATE_LIMIT = settings.INGEST_RATE_LIMIT
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 @router.post("/ingest")
-@limiter.limit("50/second")
+@limiter.limit(INGEST_RATE_LIMIT)
 def ingest_telemetry(
     request: Request,
     packet: schemas.TelemetryPacket, 
