@@ -85,9 +85,9 @@ without becoming a restart loop.
 ### Background loops
 
 Three loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
-detects a jammed, silent drone), **telemetry retention** (hourly, three days)
-and **audit retention** (daily, `AUDIT_RETENTION_DAYS`, default a year; `0`
-keeps everything). All run
+detects a jammed, silent drone), a **telemetry retention check** (hourly; the
+retention itself is a database policy, see below) and **audit retention**
+(daily, `AUDIT_RETENTION_DAYS`, default a year; `0` keeps everything). All run
 under a supervisor that restarts a loop with backoff when its pass raises,
 brings the task back if it ever ends for any other reason, and records the time
 of each successful pass. `/ready` reports them:
@@ -101,6 +101,48 @@ stalled loop makes `/ready` answer 503 (`checks.background`). For the heartbeat
 monitor that is the difference between "no drone is jammed" and "nobody is
 looking", which used to be indistinguishable: it ran as a bare task, and a task
 that dies is simply gone.
+
+### Telemetry retention
+
+Telemetry older than three days is dropped by a **TimescaleDB retention policy**
+on `telemetry_logs`, not by the application: whole chunks go at once, a metadata
+operation with no dead rows to vacuum. Chunks are one day wide, so the window
+is three to four days. (On the default seven-day chunks, "three days" would
+have kept up to ten: a chunk is dropped only when all of it has aged out.)
+
+```bash
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+  "SELECT j.job_id, j.config->>'drop_after' AS drop_after, s.last_run_status, s.last_successful_finish
+     FROM timescaledb_information.jobs j LEFT JOIN timescaledb_information.job_stats s USING (job_id)
+    WHERE j.proc_name = 'policy_retention'"
+```
+
+To keep telemetry longer, change the policy, not the code:
+
+```sql
+SELECT alter_job(<job_id>, config => jsonb_set(config, '{drop_after}', '"7 days"'));
+```
+
+The hourly `telemetry-retention` loop only checks that the policy exists and
+that its last run succeeded. If someone removes it, or a database is restored
+from a dump that predates it, the loop's pass fails: the failure shows in
+`/ready` (`background.telemetry-retention.last_error`) and in
+`swarmguard_background_loop_failures_total`, with the `add_retention_policy`
+call to run in the message.
+
+Compression is deliberately off: with three days of retention the saving is
+small, and a compressed hypertable restricts later schema changes.
+
+The policy is part of the database, so it travels with a backup: restored with
+`scripts/restore.sh` into a scratch database, the copy had the job, the
+three-day cutoff, one-day chunks and the schedule active.
+
+**A long read delays retention.** Dropping a chunk takes an exclusive lock on
+it, so the policy waits behind any transaction still reading that chunk -- an
+analyst's open `psql` session, a report query left in a transaction. It
+resumes when the reader finishes; nothing is lost, but nothing is dropped
+either. Look for `idle in transaction` in `pg_stat_activity` if
+`last_successful_finish` stops advancing.
 
 ## Metrics
 

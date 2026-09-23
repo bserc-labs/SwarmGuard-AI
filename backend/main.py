@@ -3,7 +3,7 @@ import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -32,6 +32,7 @@ from routers import (
 from services.audit_service import purge_expired_audit_logs
 from services.heartbeat_service import check_drone_heartbeats
 from services.readiness import Probe, check_readiness
+from services.retention import check_retention_policy
 from services.supervisor import Supervisor
 from services.ws_manager import ws_manager
 from utils import metrics
@@ -205,20 +206,25 @@ async def heartbeat_pass() -> None:
 
 
 async def retention_pass() -> None:
-    """Data Retention Policy: deletes telemetry older than 3 days."""
+    """Telemetry retention is TimescaleDB's job now (migration k1f2a3b4c5d6).
 
-    def run_sync_cleanup():
+    This used to be the retention: one unbatched DELETE an hour over a
+    hypertable holding up to ~13 million rows -- a long transaction, locks, and
+    millions of dead tuples for autovacuum. The database drops whole chunks
+    instead, and this pass only asks whether that policy is there and healthy.
+    It raises when it is not, so the supervisor records a failure, /ready
+    carries the error, and a metric moves -- rather than the table quietly
+    growing until the disk fills.
+    """
+
+    def run_sync():
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(days=3)
-            deleted = db.query(models.TelemetryLog).filter(models.TelemetryLog.created_at < cutoff).delete()
-            db.commit()
-            if deleted > 0:
-                logger.info(f"Data Retention Policy executed: Pruned {deleted} old telemetry rows.")
+            return check_retention_policy(db)
         finally:
             db.close()
 
-    await asyncio.to_thread(run_sync_cleanup)
+    await asyncio.to_thread(run_sync)
 
 
 async def audit_retention_pass() -> None:
@@ -266,7 +272,7 @@ async def startup() -> None:
     await mavlink_receiver.start()
 
     logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")
-    logger.info("Started background Data Retention Policy (prunes data older than 3 days)")
+    logger.info("Started background retention-policy check (TimescaleDB drops chunks older than 3 days)")
 
 
 async def shutdown() -> None:

@@ -7,8 +7,8 @@ organizations and assert the responses are the ones the old code produced --
 for /latest, literally, by running the old DISTINCT ON statement as the oracle.
 
 Telemetry is seeded relative to *now*, never a fixed date. The `client` fixture
-runs the application's startup, which starts the retention sweep (main.py
-periodic_database_cleanup); it deletes telemetry older than three days, and
+runs the application's startup. Retention is a TimescaleDB policy now
+(migration k1f2a3b4c5d6) that drops chunks older than three days, and
 would silently empty a test seeded in the past. Seeded drones keep the default
 last_seen, so the heartbeat loop the same fixture starts never turns them into
 incidents.
