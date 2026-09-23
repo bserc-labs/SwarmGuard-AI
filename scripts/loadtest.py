@@ -139,6 +139,8 @@ class PhaseResult:
     memory_mib_max: float = 0.0
     detection_before: dict[str, float] = field(default_factory=dict)
     detection_after: dict[str, float] = field(default_factory=dict)
+    declined_before: dict[str, float] = field(default_factory=dict)
+    declined_after: dict[str, float] = field(default_factory=dict)
     detection_sum_before: float = 0.0
     detection_count_before: float = 0.0
     detection_sum_after: float = 0.0
@@ -146,13 +148,19 @@ class PhaseResult:
 
 
 def parse_metrics(text: str) -> dict:
-    out: dict = {"detection": {}}
+    out: dict = {"detection": {}, "declined": {}}
     for line in text.splitlines():
         if line.startswith("#"):
             continue
         m = re.match(r'swarmguard_detection_runs_total\{outcome="([^"]+)"\} ([0-9.e+]+)', line)
         if m:
             out["detection"][m.group(1)] = float(m.group(2))
+            continue
+        # Cycles the kinematic guard could not rate at all. Under a backlog this
+        # is the detector saying so rather than filing a false CRITICAL.
+        m = re.match(r'swarmguard_guard_declined_total\{reason="([^"]+)"\} ([0-9.e+]+)', line)
+        if m:
+            out["declined"][m.group(1)] = float(m.group(2))
             continue
         for name in ("swarmguard_db_pool_checked_out", "swarmguard_db_pool_overflow", "swarmguard_db_pool_max",
                      "swarmguard_detection_duration_seconds_sum", "swarmguard_detection_duration_seconds_count",
@@ -254,6 +262,12 @@ async def run(args) -> dict:
 
     async def send_one(r: PhaseResult, drone: Drone) -> None:
         packet = drone.packet(time.monotonic())
+        # A congested link delivers some packets long after they were sampled,
+        # which is what scrambles the stored window. Overload produces this by
+        # accident and not reliably; --late-fraction produces it on purpose, so
+        # the detector's behaviour under it can be tested rather than waited for.
+        if args.late_fraction and (drone.seq % max(1, round(1 / args.late_fraction))) == 0:
+            await asyncio.sleep(args.late_by)
         t = time.monotonic()
         sent_at[(drone.drone_id, packet["packet_sequence"])] = t
         try:
@@ -275,6 +289,7 @@ async def run(args) -> dict:
         current.append(r)
         m = parse_metrics((await client.get(args.metrics_url)).text)
         r.detection_before = m["detection"]
+        r.declined_before = m["declined"]
         r.detection_sum_before = m.get("swarmguard_detection_duration_seconds_sum", 0)
         r.detection_count_before = m.get("swarmguard_detection_duration_seconds_count", 0)
         print(f"phase {phase.name}: {phase.rate:g}/s for {phase.seconds:g}s", flush=True)
@@ -307,6 +322,7 @@ async def run(args) -> dict:
         r.ended = time.monotonic()
         m = parse_metrics((await client.get(args.metrics_url)).text)
         r.detection_after = m["detection"]
+        r.declined_after = m["declined"]
         r.detection_sum_after = m.get("swarmguard_detection_duration_seconds_sum", 0)
         r.detection_count_after = m.get("swarmguard_detection_duration_seconds_count", 0)
         results.append(r)
@@ -343,6 +359,9 @@ async def run(args) -> dict:
             "latency_ms": {"p50": pct(r.latencies, 0.50), "p95": pct(r.latencies, 0.95),
                            "p99": pct(r.latencies, 0.99), "max": pct(r.latencies, 1.0)},
             "detection_runs": {k: int(v) for k, v in sorted(det.items()) if v},
+            "guard_declined": {k: int(r.declined_after.get(k, 0) - r.declined_before.get(k, 0))
+                               for k in r.declined_after
+                               if r.declined_after.get(k, 0) - r.declined_before.get(k, 0)},
             "detection_mean_ms": round(det_mean * 1000, 1) if det_mean is not None else None,
             "pool_checked_out_max": r.pool_checked_out_max, "pool_overflow_max": r.pool_overflow_max,
             "ws_delivered": len(r.delivered), "ws_expected": expected_deliveries,
@@ -362,6 +381,9 @@ def main() -> None:
     ap.add_argument("--listeners", type=int, default=10)
     ap.add_argument("--connections", type=int, default=100, help="connections across the fleet, split evenly per drone")
     ap.add_argument("--container", default="swarmguard-backend", help="docker container to sample memory from; '' to skip")
+    ap.add_argument("--late-fraction", type=float, default=0.0,
+                    help="fraction of packets held back, simulating a congested link (0.05 = one in twenty)")
+    ap.add_argument("--late-by", type=float, default=30.0, help="how long a held-back packet waits, in seconds")
     ap.add_argument("--insecure", action="store_true", help="skip TLS verification (self-signed development certificate)")
     ap.add_argument("--out", default="")
     args = ap.parse_args()

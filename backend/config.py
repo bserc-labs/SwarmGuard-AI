@@ -320,6 +320,13 @@ class Settings(BaseSettings):
     # wrap (rated on arrival time). Resets step back by the whole uptime;
     # overloaded delivery steps back by queueing delay.
     GUARD_DEVICE_CLOCK_MAX_REORDER_S: float = 10.0
+    # The shortest arrival gap that could contain a device-clock reset. When the
+    # device clock disagrees with arrival time, the reason to trust arrival time
+    # instead is a reboot or a counter wrap -- and a reset takes time. Two
+    # packets delivered closer together than this did not have one between them:
+    # one of them is simply late, arrival spacing is queueing rather than
+    # flight, and the guard declines to rate rather than divide by milliseconds.
+    GUARD_MIN_RESET_GAP_S: float = 1.0
 
     # --- Tier 2: ML anomaly layer ------------------------------------------
     #

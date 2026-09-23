@@ -159,6 +159,7 @@ to require a bearer token on top.
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
 | `swarmguard_http_in_flight`, `swarmguard_http_admission_rejected_total` | requests inside the API against `HTTP_MAX_IN_FLIGHT`, and how many were turned away with 503 (see Admission, below) |
+| `swarmguard_guard_declined_total{reason}` | cycles where the kinematic guard had no interval it could trust. `arrival_gap_too_small_to_rate` means packets are arriving so late that the clocks disagree and arrival spacing is queueing rather than flight: **the detector is degraded, not quiet**, and the fix is less load per process or a better link, not a wider tolerance |
 | `swarmguard_websocket_connections`, `swarmguard_websocket_broadcasts_total{path}`, `swarmguard_websocket_broadcast_duration_seconds` | live sockets, and how messages reached them (published via Redis, local, or fallback after a failed publish) |
 | `swarmguard_background_loop_ticks_total{loop}`, `_failures_total`, `_restarts_total`, `_seconds_since_tick`, `_stalled`, `_alive` | the supervised loops; alert on `stalled == 1` or `alive == 0` |
 
@@ -174,6 +175,7 @@ swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
 rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
 rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
+rate(swarmguard_guard_declined_total[5m]) > 0               # the detector cannot rate what it is being sent
 ```
 
 **Admission.** At most `HTTP_MAX_IN_FLIGHT` (40) requests are inside the API at

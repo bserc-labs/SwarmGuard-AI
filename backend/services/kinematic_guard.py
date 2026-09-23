@@ -54,6 +54,18 @@ _TIME_BASE_LABELS = {
 # device clock, not the packet stored just before it. See KinematicGuard._pair.
 NOTE_REORDERED = "device_clock_reordered"
 
+# The device clock could not be used, and the packets arrived too close together
+# for arrival time to stand in for it. No interval, so no verdict. See
+# KinematicGuard._pair.
+NOTE_ARRIVAL_UNUSABLE = "arrival_gap_too_small_to_rate"
+
+# The notes that mean "the two clocks disagree about this pair". Missing device
+# time is not one of them: there arrival time is all there has ever been, and
+# the rates computed from it are the ones this detector shipped with.
+_CLOCKS_DISAGREE = frozenset(
+    {"device_clock_not_monotonic", "device_interval_exceeds_arrival"}
+)
+
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in metres between two fixes."""
@@ -204,6 +216,7 @@ class KinematicGuard:
         self.min_satellites = settings.GUARD_MIN_SATELLITES
         self.device_clock_max_lead_s = settings.GUARD_DEVICE_CLOCK_MAX_LEAD_S
         self.device_clock_max_reorder_s = settings.GUARD_DEVICE_CLOCK_MAX_REORDER_S
+        self.min_reset_gap_s = settings.GUARD_MIN_RESET_GAP_S
 
     def evaluate(self, history: list[dict[str, Any]]) -> GuardVerdict:
         """Check the most recent packet against its nearest neighbour in time.
@@ -396,7 +409,24 @@ class KinematicGuard:
                 return curr, successor, step, TIME_BASE_DEVICE, NOTE_REORDERED
 
         partner = predecessor if predecessor is not None else stored_prev
-        return (partner, curr, *self._interval_seconds(partner, curr))
+        dt, time_base, note = self._interval_seconds(partner, curr)
+
+        # Falling back to arrival time assumes the packets arrived far enough
+        # apart for that spacing to mean something. When the clocks disagree
+        # because one packet was simply delivered very late, they did not: it
+        # arrives in the same breath as the packets that overtook it, and
+        # dividing real motion by milliseconds implies hundreds of metres per
+        # second. Measured: one packet in ten held back 60 s produced 40 false
+        # CRITICAL spoof alerts against drones flying clean circles.
+        #
+        # The reason to trust arrival time here was a reset -- a reboot or a
+        # counter wrap. A reset takes time. No flight controller reboots in the
+        # gap between two packets delivered milliseconds apart, so below
+        # GUARD_MIN_RESET_GAP_S this is a late packet, there is no interval
+        # worth dividing by, and the honest answer is no verdict at all.
+        if note in _CLOCKS_DISAGREE and (dt is None or dt < self.min_reset_gap_s):
+            return partner, curr, None, None, NOTE_ARRIVAL_UNUSABLE
+        return partner, curr, dt, time_base, note
 
     def _interval_seconds(
         self, prev: dict, curr: dict

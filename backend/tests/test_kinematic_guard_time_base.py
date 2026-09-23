@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from services.kinematic_guard import (
+    NOTE_ARRIVAL_UNUSABLE,
     NOTE_REORDERED,
     TIME_BASE_ARRIVAL,
     TIME_BASE_DEVICE,
@@ -210,9 +211,11 @@ def load_packet(sample_s, *, arrival_s, lat=None):
 
 def as_before(rows):
     """What the guard did before it looked past the packet stored last: rate
-    the last two stored packets, and read any backwards clock as a reset."""
+    the last two stored packets, read any backwards clock as a reset, and divide
+    by arrival time however close together the packets arrived."""
     old = KinematicGuard()
     old.device_clock_max_reorder_s = 0.0
+    old.min_reset_gap_s = 0.0
     return old.evaluate(rows[-2:])
 
 
@@ -282,10 +285,11 @@ class TestDeliveredOutOfOrder:
         assert verdict.interval_note == NOTE_REORDERED
 
     def test_the_reorder_bound_is_what_separates_late_from_reset(self):
-        # 15 s behind the window: past the default 10 s, so a reset.
+        # 15 s behind the window, and 5 s between the two packets arriving --
+        # long enough to contain a reboot. Past the 10 s bound, so a reset.
         rows = [
             load_packet(20.0, arrival_s=0.0),
-            load_packet(5.0, arrival_s=0.5),
+            load_packet(5.0, arrival_s=5.0),
         ]
         verdict = kinematic_guard.evaluate(rows)
         assert verdict.time_base == TIME_BASE_ARRIVAL
@@ -341,6 +345,100 @@ class TestDeliveredOutOfOrder:
         assert meta["time_base"] == "device"
         assert meta["interval_note"] == NOTE_REORDERED
         assert detection["explanation"]["summary"]["Time Base"] == "device clock"
+
+
+class TestAPacketTooLateToRate:
+    """A packet delivered long after it was sampled gets no verdict, not a spoof.
+
+    Falling back to arrival time assumes the two packets arrived far enough
+    apart for that spacing to mean something. A late packet arrives in the same
+    breath as the packets that overtook it. Measured against this code: one
+    packet in ten held back 60 s produced **40 false CRITICAL spoof alerts**
+    against drones flying clean circles, every one of them rated on arrival
+    time after the device clock appeared to step back.
+    """
+
+    def _overtaken(self, lat=None, arrival_gap=0.01):
+        # Sampled 60 s ago, delivered now: older than everything in the window,
+        # so no neighbour on the device clock either side of it.
+        rows = [load_packet(60.0 + s / 10, arrival_s=s / 100) for s in range(5)]
+        rows.append(load_packet(0.0, arrival_s=0.04 + arrival_gap, lat=lat))
+        return rows
+
+    def test_a_late_packet_gets_no_verdict_instead_of_a_spoof(self):
+        rows = self._overtaken()
+        # What this code did before: divide 900 m of real flight by 10 ms.
+        credulous = KinematicGuard()
+        credulous.min_reset_gap_s = 0.0
+        fired = credulous.evaluate(rows)
+        assert fired.triggered is True
+        assert fired.attack_type == "GPS_SPOOFING"
+        assert fired.time_base == TIME_BASE_ARRIVAL
+
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base is None
+        assert verdict.interval_s is None
+        assert verdict.interval_note == NOTE_ARRIVAL_UNUSABLE
+
+    def test_a_reset_takes_time_and_still_uses_arrival(self):
+        # 45 s between the last packet before the reboot and the first after it:
+        # long enough to contain a reboot, so arrival time is still the fallback.
+        rows = [
+            packet(LAT, arrival_s=0.0, sample_ms=599_800),
+            packet(LAT, arrival_s=0.1, sample_ms=599_900),
+            packet(LAT, arrival_s=0.2, sample_ms=600_000),
+            packet(LAT, arrival_s=45.0, sample_ms=500),
+        ]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+        assert verdict.interval_note == "device_clock_not_monotonic"
+        assert verdict.interval_s == pytest.approx(44.8)
+
+    def test_a_usable_device_clock_still_fires_however_late_the_window_is(self):
+        # This does not disarm the detector. The device clock is what it rates
+        # on, and being delivered late does not change what the device sampled.
+        rows = [load_packet(s / 10, arrival_s=s / 100) for s in range(5)]
+        rows.append(load_packet(0.5, arrival_s=0.05, lat=LAT + JUMP))
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is True
+        assert verdict.attack_type == "GPS_SPOOFING"
+        assert verdict.time_base == TIME_BASE_DEVICE
+
+    def test_a_mis_scaled_clock_is_still_caught(self):
+        # The other reason to disbelieve the device clock: it claims 1000 s
+        # between packets that arrived 1.5 s apart. That gap is long enough to
+        # be meaningful, so arrival time still stands in and the jump fires.
+        rows = [
+            packet(LAT, arrival_s=0.0, sample_ms=0),
+            packet(LAT + JUMP, arrival_s=1.5, sample_ms=1_000_000),
+        ]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is True
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+
+    def test_declining_is_counted_so_a_degraded_detector_is_visible(self, monkeypatch):
+        # A guard that has gone quiet under load must not look like a quiet sky.
+        from services import detection_pipeline
+        from utils.metrics import GUARD_DECLINED
+
+        monkeypatch.setattr(detection_pipeline.geofence_engine, "evaluate", lambda *a, **k: None)
+        before = GUARD_DECLINED.labels(NOTE_ARRIVAL_UNUSABLE)._value.get()
+        detection = detection_pipeline._run_detectors(
+            "D1", self._overtaken(LAT + JUMP), db=None, organization_id=1
+        )
+        assert detection is None, "a packet too late to rate must not produce a detection"
+        assert GUARD_DECLINED.labels(NOTE_ARRIVAL_UNUSABLE)._value.get() == before + 1
+
+    def test_the_bound_is_a_setting(self):
+        # Widen what counts as long enough for a reset and the same rows are
+        # rated on arrival time again.
+        rows = self._overtaken(arrival_gap=2.0)
+        assert kinematic_guard.evaluate(rows).time_base == TIME_BASE_ARRIVAL
+
+        strict = KinematicGuard()
+        strict.min_reset_gap_s = 5.0
+        assert strict.evaluate(rows).interval_note == NOTE_ARRIVAL_UNUSABLE
 
 
 class TestDeclines:

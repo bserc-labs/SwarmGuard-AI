@@ -32,7 +32,13 @@ from services.incident_engine import incident_engine
 from services.kinematic_guard import kinematic_guard
 from services.ws_manager import ws_manager
 from utils.logger import logger
-from utils.metrics import DETECTION_LATENCY, DETECTION_RUNS, INCIDENTS, detection_tier
+from utils.metrics import (
+    DETECTION_LATENCY,
+    DETECTION_RUNS,
+    GUARD_DECLINED,
+    INCIDENTS,
+    detection_tier,
+)
 
 settings = get_settings()
 
@@ -126,6 +132,11 @@ def _run_detectors(
     """
     if settings.GUARD_ENABLED:
         verdict = kinematic_guard.evaluate(history)
+        # No interval it could trust, so no verdict either way. Counted because
+        # a detector that has gone quiet under load must not look like a quiet
+        # sky: swarmguard_guard_declined_total is what says which it is.
+        if verdict.time_base is None and verdict.interval_note is not None:
+            GUARD_DECLINED.labels(verdict.interval_note).inc()
         if verdict.triggered:
             logger.info(
                 f"Kinematic guard fired for {drone_id}: {verdict.attack_type} "

@@ -123,15 +123,15 @@ frontend 107/107, single alembic head `m3b4c5d6e7f8`.
 | 3.4 Naive timestamps in a forensic system | ✅ all 17 columns `timestamptz`, converted in place — no table rewritten, 122k-row hypertable keeps its chunks and policy — and the naive-datetime lint rules are on |
 | 3.5 Assumptions never measured | ✅ measured end to end ([`06-LOAD-TEST-RESULTS.md`](06-LOAD-TEST-RESULTS.md)); the limiter is exact, the pool was never the constraint, and the test found two real defects |
 | 3.6 Advisory security gates | ✅ `pip-audit` and `npm audit` block; PyJWT replaces python-jose, whose `ecdsa` dependency has no fixed release |
-| **New:** 200 false CRITICAL spoof alerts under load | ✅ out-of-order packets sent the guard to its arrival-time fallback; it now rates a late packet against its neighbour on the device clock |
+| **New:** 200 false CRITICAL spoof alerts under load | ✅ out-of-order packets sent the guard to its arrival-time fallback; it now rates a late packet against its neighbour on the device clock, and where no neighbour remains it declines rather than dividing by the milliseconds between two packets flushed from one queue. Reproduced deliberately (one packet in ten held 60 s): **40 false alerts before, 0 after** |
 | **New:** the API deadlocked on its own pool at 100 packets/s | ✅ requests held connections across worker-thread hops while the threads waited for connections; admission bounds how many can, and the budget is checked at startup |
 
 What Phase 3 does not pretend to: **200 packets/second per process is the
-edge**, not headroom — beyond it the queue grows, and at 800/s (16× the ingest
-limit) packets arrive 40–80 s late and 23 false incidents remain, because
-delivery skew that large is indistinguishable from a broken device clock. The
-answer is shedding earlier or more workers, both recorded as recommendations,
-not a wider tolerance. Also unproven here: mTLS for airborne assets, which
+edge**, not headroom. Beyond it the queue grows, packets arrive tens of seconds
+late, and the guard stops rating the pairs it cannot time — no longer filing
+false alerts over them, but detection is degraded exactly when it matters, and
+`swarmguard_guard_declined_total` is what says so. The answer is shedding
+earlier or more workers, both recorded as recommendations. Also unproven here: mTLS for airborne assets, which
 remains the right long-term answer to 3.2.
 
 The descriptions below are kept as the record of what was missing.

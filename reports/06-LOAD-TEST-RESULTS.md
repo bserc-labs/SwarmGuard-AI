@@ -170,6 +170,7 @@ Raw results: `reports/loadtest/2026-09-22-capacity-rerun.json`.
 answered.** The 40 unexplained 500s of section 2 were the deadlock below.
 
 **False spoofing incidents fell from 200 to 23, and none at all below 800/s.**
+(Section 6 is what happened to the 23.)
 The 23 that remain are all the large-skew kind: 19 report 10 s or more of
 flight between their two samples, 4 carry only the speed mismatch. The swapped
 neighbours and the seconds-late stragglers — 117 of the original 200 — are
@@ -207,14 +208,53 @@ clean 20 s at 200/s in section 2 was a burst, not capacity. One process on two
 cores handles roughly 200 packets/second, which is four times the configured
 ingest limit.
 
-### What is still open
+## 6. The last 23, and what they turned out to be
 
-At 800/s the backlog reaches 40–80 s, and delivery skew that large is beyond
-what the guard can tell from a broken clock: its tolerance is 10 s either way
-(`GUARD_DEVICE_CLOCK_MAX_LEAD_S`, `GUARD_DEVICE_CLOCK_MAX_REORDER_S`). That is
-where the 23 remaining false incidents come from. It is 16 times the configured
-per-uplink limit, and the answer is not a wider tolerance — it is not letting
-the queue grow that far. See the recommendations.
+The 23 that survived section 5 were packets stored so long after they were
+sampled that no neighbour on the device clock remained in the window. The guard
+then fell back to arrival time, which for a packet arriving among the packets
+that overtook it is milliseconds.
+
+**Overload produces that by accident and not reliably.** Three further runs —
+800/s twice and 1,600/s once, the last with a two-minute backlog — produced
+**zero** false incidents without any change to the guard. That is not a fix, it
+is a measurement that failed to reproduce, and the difference between the two
+is the whole reason this report exists.
+
+So the tool learned to produce it on purpose. `--late-fraction 0.1 --late-by 60`
+holds one packet in ten for a minute, which is what a congested link does. At
+an unremarkable 100 packets/second:
+
+| | before | after |
+|---|---|---|
+| false GPS_SPOOFING incidents | **40** | **0** |
+| guard alerts | 40 | 0 |
+| cycles the guard declined to rate | 0 | 40 |
+| packets accepted | 12,000 | 12,000 |
+
+Every one of the 40 read *"arrival clock, note=device_clock_not_monotonic"*: the
+late packet's clock appeared to step back, which the guard read as a reboot.
+
+**A reset takes time.** No flight controller reboots in the gap between two
+packets delivered milliseconds apart, so below `GUARD_MIN_RESET_GAP_S` (1 s) a
+backwards clock is a late packet, not a reboot, and there is no interval worth
+dividing by. The guard now returns **no verdict** there, and counts it:
+`swarmguard_guard_declined_total`. A detector that has gone quiet must not be
+mistaken for a quiet sky.
+
+What this costs: during congestion the guard rates fewer pairs. It still rates
+every pair whose device clock is usable, which a backlog does not touch — a
+spoof delivered late still fires, and a test pins exactly that. What it buys is
+that a congested link cannot ground a healthy aircraft.
+
+An earlier attempt counted how scrambled the window was and would not have
+caught this: a single straggler is one step back, which is what a reboot looks
+like too. It was replaced, not extended.
+
+The runs behind this section: `2026-09-23-capacity-rerun.json` and
+`2026-09-23-overload-1600.json` (the ones that did not reproduce it), and
+`2026-09-23-late-delivery-before-fix.json` and `-after-fix.json` (the one that
+did, either side of the fix).
 
 ## Recommendations
 
@@ -227,12 +267,14 @@ the queue grow that far. See the recommendations.
    lacked was a bound on how many requests could hold it, which admission now
    provides.
 4. **Fix the reorder false positive** — done, section 5.
-5. **Shed load before the queue reaches the guard's tolerance.** Admission
-   bounds work inside the application, but at 800/s requests pile up in front
-   of it, in the socket and the event loop, and packets arrive 40–80 s late.
-   Either run more workers (needs Prometheus multiprocess mode) or refuse
-   telemetry the server cannot reach in time. A packet whose detection cannot
-   run for a minute is not worth the alert it might raise.
+5. **Shed load before the queue grows.** Admission bounds work inside the
+   application, but at 800/s requests pile up in front of it, in the socket and
+   the event loop, and packets arrive 40–80 s late. The guard no longer files
+   false alerts over it, but it does stop rating those pairs, so detection is
+   degraded exactly when it matters. Either run more workers (needs Prometheus
+   multiprocess mode) or refuse telemetry the server cannot reach in time.
+   Watch `swarmguard_guard_declined_total`: it is the number that says the
+   detector is coasting.
 6. **Plan for about 200 packets/second per process.** Four times the ingest
    limit, so one process serves a fleet behind several uplinks, and the number
    to divide when sizing for more.

@@ -76,6 +76,13 @@ DETECTION_RUNS = Counter(
     "suppressed, insufficient_history, error.",
     ["outcome"],
 )
+GUARD_DECLINED = Counter(
+    "swarmguard_guard_declined_total",
+    "Cycles where the kinematic guard had no interval it could trust, by reason: "
+    "no_timestamps, or arrival_gap_too_small_to_rate when a packet arrived so long "
+    "after it was sampled that neither clock gave a usable interval.",
+    ["reason"],
+)
 DETECTION_LATENCY = Histogram(
     "swarmguard_detection_duration_seconds",
     "Wall time of one detection cycle, from history load to incident decision.",
