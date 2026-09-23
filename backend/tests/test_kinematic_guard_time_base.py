@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from services.kinematic_guard import (
+    NOTE_REORDERED,
     TIME_BASE_ARRIVAL,
     TIME_BASE_DEVICE,
     KinematicGuard,
@@ -141,19 +142,32 @@ class TestFallbackToArrival:
         assert verdict.interval_note == "device_clock_not_monotonic"
         assert verdict.interval_s == pytest.approx(45.0)
 
-    @pytest.mark.parametrize(
-        "prev_ms,curr_ms", [(3000, 1500), (1500, 1500)], ids=["out-of-order", "stalled"]
-    )
-    def test_a_backwards_or_repeated_device_clock_uses_arrival(self, prev_ms, curr_ms):
+    def test_a_repeated_device_clock_uses_arrival(self):
+        # A stalled clock gives no interval at all. (A clock that steps back a
+        # little is a late packet, not a reset: see TestDeliveredOutOfOrder.)
         rows = [
-            packet(LAT, arrival_s=0.0, sample_ms=prev_ms),
-            packet(LAT + NOMINAL_STEP, arrival_s=1.5, sample_ms=curr_ms),
+            packet(LAT, arrival_s=0.0, sample_ms=1500),
+            packet(LAT + NOMINAL_STEP, arrival_s=1.5, sample_ms=1500),
         ]
         verdict = kinematic_guard.evaluate(rows)
         assert verdict.triggered is False
         assert verdict.time_base == TIME_BASE_ARRIVAL
         assert verdict.interval_note == "device_clock_not_monotonic"
         assert verdict.interval_s == pytest.approx(1.5)
+
+    def test_a_reboot_is_not_mistaken_for_a_late_packet(self):
+        # A whole window from before the reboot: the new clock is ten minutes
+        # behind all of it, far past any reorder.
+        rows = [
+            packet(LAT, arrival_s=0.0, sample_ms=599_800),
+            packet(LAT, arrival_s=0.1, sample_ms=599_900),
+            packet(LAT, arrival_s=0.2, sample_ms=600_000),
+            packet(LAT, arrival_s=45.0, sample_ms=500),
+        ]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+        assert verdict.interval_note == "device_clock_not_monotonic"
+        assert verdict.interval_s == pytest.approx(44.8)
 
     def test_a_device_interval_far_beyond_arrival_is_disbelieved(self):
         # The device claims 1000 s passed between packets that arrived 1.5 s
@@ -174,6 +188,159 @@ class TestFallbackToArrival:
         relaxed = lenient.evaluate(rows)
         assert relaxed.time_base == TIME_BASE_DEVICE
         assert relaxed.triggered is False
+
+
+LOAD_SPEED = 15.0  # m/s, the load test's fleet
+DEG_PER_M = 1 / 111_320  # latitude degrees per metre
+
+
+def flown(seconds):
+    """Latitude after `seconds` of straight flight at LOAD_SPEED."""
+    return LAT + LOAD_SPEED * seconds * DEG_PER_M
+
+
+def load_packet(sample_s, *, arrival_s, lat=None):
+    return packet(
+        flown(sample_s) if lat is None else lat,
+        arrival_s=arrival_s,
+        sample_ms=round(sample_s * 1000),
+        speed=LOAD_SPEED,
+    )
+
+
+def as_before(rows):
+    """What the guard did before it looked past the packet stored last: rate
+    the last two stored packets, and read any backwards clock as a reset."""
+    old = KinematicGuard()
+    old.device_clock_max_reorder_s = 0.0
+    return old.evaluate(rows[-2:])
+
+
+class TestDeliveredOutOfOrder:
+    """Packets stored out of sample order, as an overloaded server stores them.
+
+    Each case is a shape from the 2026-09-22 load test, where the guard filed
+    200 false GPS_SPOOFING incidents against drones flying clean 15 m/s
+    circles (reports/06-LOAD-TEST-RESULTS.md). Each fired on the old guard and
+    is rated on the device clock now; a real jump in the same shape still
+    fires.
+    """
+
+    def test_neighbouring_packets_swapped(self):
+        # Sampled 0.0, 0.1, 0.2 s; the 0.1 s packet is stored last, 10 ms
+        # after the 0.2 s one. Old: 1.5 m in 0.01 s = 150 m/s.
+        rows = [
+            load_packet(0.0, arrival_s=0.00),
+            load_packet(0.2, arrival_s=0.01),
+            load_packet(0.1, arrival_s=0.02),
+        ]
+        old = as_before(rows)
+        assert old.triggered is True
+        assert old.attack_type == "GPS_SPOOFING"
+        assert old.time_base == TIME_BASE_ARRIVAL
+
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base == TIME_BASE_DEVICE
+        assert verdict.interval_s == pytest.approx(0.1)
+        assert verdict.interval_note == NOTE_REORDERED
+
+    def test_a_straggler_stored_just_before(self):
+        # The packet stored before the newest was sampled 15 s earlier and sat
+        # in a queue. Old: its 15 s device interval outran the 0.9 s arrival
+        # gap by more than the 10 s bound, so 225 m / 0.9 s = 250 m/s.
+        rows = [
+            load_packet(18.9, arrival_s=19.0),
+            load_packet(19.0, arrival_s=19.1),
+            load_packet(5.0, arrival_s=30.0),
+            load_packet(20.0, arrival_s=30.9),
+        ]
+        old = as_before(rows)
+        assert old.triggered is True
+        assert old.interval_note == "device_interval_exceeds_arrival"
+
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base == TIME_BASE_DEVICE
+        assert verdict.interval_s == pytest.approx(1.0)
+        assert verdict.interval_note == NOTE_REORDERED
+
+    def test_a_packet_late_past_the_whole_window(self):
+        # Sampled a second before anything else in the window, stored last.
+        # No predecessor to compare with, so it meets the sample after it.
+        rows = [
+            load_packet(10.0, arrival_s=0.00),
+            load_packet(10.1, arrival_s=0.01),
+            load_packet(9.0, arrival_s=0.02),
+        ]
+        assert as_before(rows).triggered is True
+
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base == TIME_BASE_DEVICE
+        assert verdict.interval_s == pytest.approx(1.0)
+        assert verdict.interval_note == NOTE_REORDERED
+
+    def test_the_reorder_bound_is_what_separates_late_from_reset(self):
+        # 15 s behind the window: past the default 10 s, so a reset.
+        rows = [
+            load_packet(20.0, arrival_s=0.0),
+            load_packet(5.0, arrival_s=0.5),
+        ]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+        assert verdict.interval_note == "device_clock_not_monotonic"
+
+        lenient = KinematicGuard()
+        lenient.device_clock_max_reorder_s = 20.0
+        relaxed = lenient.evaluate(rows)
+        assert relaxed.time_base == TIME_BASE_DEVICE
+        assert relaxed.interval_s == pytest.approx(15.0)
+        assert relaxed.triggered is False
+
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            [
+                load_packet(0.0, arrival_s=0.00),
+                load_packet(0.2, arrival_s=0.01),
+                load_packet(0.1, arrival_s=0.02, lat=LAT + JUMP),
+            ],
+            [
+                load_packet(10.0, arrival_s=0.00),
+                load_packet(10.1, arrival_s=0.01),
+                load_packet(9.0, arrival_s=0.02, lat=LAT + JUMP),
+            ],
+        ],
+        ids=["late-with-predecessor", "late-past-the-window"],
+    )
+    def test_a_late_packet_carrying_a_real_jump_still_fires(self, rows):
+        # 5.5 km from its real neighbour: arriving late does not launder it.
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is True
+        assert verdict.attack_type == "GPS_SPOOFING"
+        assert verdict.time_base == TIME_BASE_DEVICE
+        assert verdict.interval_note == NOTE_REORDERED
+
+    def test_in_order_delivery_is_unchanged(self):
+        rows = [load_packet(s / 10, arrival_s=s / 10) for s in range(5)]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base == TIME_BASE_DEVICE
+        assert verdict.interval_s == pytest.approx(0.1)
+        assert verdict.interval_note is None
+
+    def test_the_evidence_says_the_pair_was_reordered(self):
+        rows = [
+            load_packet(0.0, arrival_s=0.00),
+            load_packet(0.2, arrival_s=0.01),
+            load_packet(0.1, arrival_s=0.02, lat=LAT + JUMP),
+        ]
+        detection = kinematic_guard.evaluate(rows).to_detection("D1")
+        meta = detection["explanation"]["metadata"]
+        assert meta["time_base"] == "device"
+        assert meta["interval_note"] == NOTE_REORDERED
+        assert detection["explanation"]["summary"]["Time Base"] == "device clock"
 
 
 class TestDeclines:

@@ -291,6 +291,12 @@ class Settings(BaseSettings):
     # buffered bursts; a device interval far beyond that means a broken or
     # mis-scaled clock, and dividing by it would hide a real jump.
     GUARD_DEVICE_CLOCK_MAX_LEAD_S: float = 10.0
+    # How far a packet's device clock may sit behind everything else in the
+    # guard's window and still be read as a late packet (rated against its
+    # nearest neighbour on the device clock) rather than as a reboot or counter
+    # wrap (rated on arrival time). Resets step back by the whole uptime;
+    # overloaded delivery steps back by queueing delay.
+    GUARD_DEVICE_CLOCK_MAX_REORDER_S: float = 10.0
 
     # --- Tier 2: ML anomaly layer ------------------------------------------
     #

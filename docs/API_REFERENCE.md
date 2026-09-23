@@ -62,7 +62,9 @@ routes above were read off the router.
   milliseconds (MAVLink `time_boot_ms`; monotonic is sufficient, wall-clock
   sync is not required). The kinematic guard rates motion over this interval
   when present and over server arrival time otherwise; the incident evidence
-  records which (`"Time Base"`).
+  records which (`"Time Base"`). Packets may arrive out of order: each is
+  rated against its nearest neighbour on this clock, so send the time it was
+  *sampled*, not the time it was sent.
 - **Request Body:**
 ```json
 {

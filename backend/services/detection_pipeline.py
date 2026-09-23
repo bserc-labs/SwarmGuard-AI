@@ -71,8 +71,9 @@ def _load_history(db: Session, drone_id: str, organization_id: int) -> list[dict
         # one: a reboot resets time_boot_ms to ~0, so a window spanning one
         # would sort the post-reboot packets *before* the pre-reboot ones and
         # the guard would keep re-evaluating an old pair for up to
-        # MAX_HISTORY_PACKETS packets. The guard handles a non-monotonic
-        # device interval itself (kinematic_guard._interval_seconds).
+        # MAX_HISTORY_PACKETS packets. The guard handles out-of-order and
+        # non-monotonic device clocks itself: it pairs the newest packet with
+        # its nearest neighbour on the device clock (KinematicGuard._pair).
         .order_by(
             models.TelemetryLog.created_at.desc(),
             models.TelemetryLog.id.desc(),
@@ -128,7 +129,8 @@ def _run_detectors(
         if verdict.triggered:
             logger.info(
                 f"Kinematic guard fired for {drone_id}: {verdict.attack_type} "
-                f"({verdict.severity}, {len(verdict.violations)} violation(s))"
+                f"({verdict.severity}, {len(verdict.violations)} violation(s), "
+                f"{verdict.time_base} clock, note={verdict.interval_note})"
             )
             return verdict.to_detection(drone_id)
 
