@@ -16,10 +16,20 @@ on:
   # not checking one that did is how the `develop` typo went unnoticed.
   pull_request:
 
-# Cancel superseded runs on the same ref so a busy PR does not queue behind itself.
+# A pull request cancels its own superseded runs, so a busy PR does not queue
+# behind itself. A push to a branch never shares a group with another push:
+# every commit on main runs to the end and gets its images published.
+#
+# The group used to be the ref alone, with cancel-in-progress for everything.
+# Merging PR #14 two minutes after PR #13 then killed #13's release job in the
+# middle of its image build, so that merge commit was never published and
+# scripts/deploy.sh could not deploy it. Turning cancellation off would not be
+# enough: GitHub still replaces a *queued* run in the same group, so a third
+# quick merge would silently skip the second commit's images. A group per
+# commit SHA for pushes rules out both.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-test:

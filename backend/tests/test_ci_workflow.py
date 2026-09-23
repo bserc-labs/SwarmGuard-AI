@@ -136,3 +136,16 @@ class TestTheReleaseJob:
         deploy = (ROOT / "scripts" / "deploy.sh").read_text()
         assert "sha-*)" in deploy, "deploy.sh must accept sha tags only"
 
+
+class TestConcurrency:
+    """A push to main must never cancel or replace another push's run."""
+
+    def test_pull_requests_cancel_their_own_superseded_runs(self, workflow):
+        assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+    def test_every_push_is_its_own_group(self, workflow):
+        """Per-ref groups let a later merge kill -- or, queued, replace -- an earlier release."""
+        group = workflow["concurrency"]["group"]
+        assert "github.event_name == 'push' && github.sha" in group
+        assert "github.ref" in group, "pull requests still group by ref"
+

@@ -230,7 +230,10 @@ ghcr.io/bserc-labs/swarmguard-frontend:sha-<full commit sha>
 ```
 
 The `sha-` tag is **immutable**: it names exactly one commit, so "what is
-running" is never in doubt and a rollback is the previous tag. `main` and
+running" is never in doubt and a rollback is the previous tag. Every commit on
+`main` is published: pushes never cancel or replace one another's runs. (One
+earlier merge, `89c8626`, predates that rule and has no images; deploy the
+merge after it.) `main` and
 `latest` are pushed too, for looking around; `deploy.sh` refuses them.
 
 The scan is the gate: a CRITICAL or HIGH finding with a fix available means
