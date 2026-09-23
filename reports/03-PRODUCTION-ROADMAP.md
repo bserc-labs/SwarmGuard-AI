@@ -111,7 +111,30 @@ altogether; wiring MAVLink telemetry into the detection pipeline; routing
 heartbeat-raised incidents through the incident engine. Each is a behaviour
 change that did not belong inside the fix next to it.
 
-Everything in Phases 1–3 below is still outstanding.
+**Phase 3 is done** — branch `feat/phase3-hardening`, one commit per item.
+Gates: **ruff clean, mypy clean, 833 passed** (from 752 at the end of Phase 2),
+frontend 107/107, single alembic head `m3b4c5d6e7f8`.
+
+| Item | Status |
+|---|---|
+| 3.1 Hourly unbatched DELETE on a hypertable | ✅ native retention policy on 1-day chunks; the app now *checks* the policy exists and is not failing instead of deleting rows itself, and says which if it is |
+| 3.2 One shared key for the whole fleet | ✅ per-device credentials: hashed at rest, shown once, revocable one drone at a time; the shared key still works while `DEVICE_SHARED_KEY_ENABLED`, so a fleet migrates without an outage |
+| 3.3 Deprecated `on_event` hooks | ✅ done in Phase 2 |
+| 3.4 Naive timestamps in a forensic system | ✅ all 17 columns `timestamptz`, converted in place — no table rewritten, 122k-row hypertable keeps its chunks and policy — and the naive-datetime lint rules are on |
+| 3.5 Assumptions never measured | ✅ measured end to end ([`06-LOAD-TEST-RESULTS.md`](06-LOAD-TEST-RESULTS.md)); the limiter is exact, the pool was never the constraint, and the test found two real defects |
+| 3.6 Advisory security gates | ✅ `pip-audit` and `npm audit` block; PyJWT replaces python-jose, whose `ecdsa` dependency has no fixed release |
+| **New:** 200 false CRITICAL spoof alerts under load | ✅ out-of-order packets sent the guard to its arrival-time fallback; it now rates a late packet against its neighbour on the device clock |
+| **New:** the API deadlocked on its own pool at 100 packets/s | ✅ requests held connections across worker-thread hops while the threads waited for connections; admission bounds how many can, and the budget is checked at startup |
+
+What Phase 3 does not pretend to: **200 packets/second per process is the
+edge**, not headroom — beyond it the queue grows, and at 800/s (16× the ingest
+limit) packets arrive 40–80 s late and 23 false incidents remain, because
+delivery skew that large is indistinguishable from a broken device clock. The
+answer is shedding earlier or more workers, both recorded as recommendations,
+not a wider tolerance. Also unproven here: mTLS for airborne assets, which
+remains the right long-term answer to 3.2.
+
+The descriptions below are kept as the record of what was missing.
 
 ---
 
@@ -530,7 +553,10 @@ fixed, `audit_logs` needs the retention policy `telemetry_logs` already has.
 
 ---
 
-## Phase 3 — Hardening and scale (1.5 weeks)
+## Phase 3 — Hardening and scale (✅ done)
+
+The descriptions below are kept as the record of what was missing; status and
+evidence are in the Phase 3 table near the top.
 
 ### 3.1 — Replace the retention DELETE with `drop_chunks`
 

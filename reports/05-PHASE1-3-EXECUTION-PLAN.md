@@ -208,7 +208,14 @@ already requires, so immutability is untouched.
 
 ---
 
-## Phase 3 — Hardening and scale
+## Phase 3 — Hardening and scale ✅
+
+Done as ten commits on `feat/phase3-hardening`, in the order below. Two items
+are not in this plan because the load test found them: the kinematic guard
+filed 200 false CRITICAL spoof alerts once packets were stored out of order,
+and the API deadlocked on its own connection pool at 100 packets/second. Both
+are fixed, measured before and after, and written up in
+[`06-LOAD-TEST-RESULTS.md`](06-LOAD-TEST-RESULTS.md).
 
 ### 3.1 Retention by dropping chunks, not deleting rows
 
@@ -278,7 +285,7 @@ Three pull requests, one per phase, each a series of small commits.
 |---|---|
 | **Phase 1** ✅ | plan + roadmap correction → 1.4 migrations → 1.2 secrets → 1.2 key rotation → 1.1 TLS → 1.5 limits → 1.3 backups + rehearsal in CI → 1.5 release + deploy with rollback → status. The operations guide was written alongside each item, not at the end, so every procedure in it had been run once |
 | **Phase 2** ✅ | 3.3 lifespan → 2.2 `/ready` → 2.3 supervisor → 2.1 metrics → 2.1 Prometheus profile + alerts → 2.4 Sentry → 2.4 audit retention → status |
-| **Phase 3** | 3.1 retention → 3.2 device credentials (schema, API, ingest) → 3.6 CI gates → 3.5 load test → 3.4 timestamptz |
+| **Phase 3** ✅ | 3.1 retention → CI concurrency → 3.2 device credentials (schema, API, ingest) → PyJWT → 3.6 CI gates → 3.5 load test → guard: late packets → admission: the pool deadlock → 3.4 timestamptz → status. The last three items are the load test's doing: it measured the assumptions, then found two defects that had to be fixed before the measurement meant anything |
 
 1.4 goes first because TLS, secrets and backups all change how the stack starts,
 and they should build on the final start-up sequence rather than the old one.
