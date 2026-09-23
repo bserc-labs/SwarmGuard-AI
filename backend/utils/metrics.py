@@ -48,10 +48,25 @@ HTTP_LATENCY = Histogram(
 UNMATCHED_ROUTE = "unmatched"
 
 # --- ingest -------------------------------------------------------------------------------
+HTTP_IN_FLIGHT = Gauge(
+    "swarmguard_http_in_flight",
+    "HTTP requests admitted into the application and not yet finished (middleware/admission.py).",
+)
+HTTP_ADMISSION_REJECTED = Counter(
+    "swarmguard_http_admission_rejected_total",
+    "Requests answered 503 because no admission slot came free within HTTP_ADMISSION_WAIT_S.",
+)
 INGEST = Counter(
     "swarmguard_telemetry_ingest_total",
     "Telemetry packets by outcome: accepted, rejected_device_key, rejected_bad_request, error.",
     ["outcome"],
+)
+
+DEVICE_AUTH = Counter(
+    "swarmguard_device_auth_total",
+    "Accepted ingest device authentications, by method: device_key or shared_key. "
+    "When shared_key stops moving, the fleet has migrated and the shared key can be turned off.",
+    ["method"],
 )
 
 # --- detection ----------------------------------------------------------------------------------
@@ -60,6 +75,13 @@ DETECTION_RUNS = Counter(
     "Detection cycles by outcome: no_incident, incident_created, incident_escalated, "
     "suppressed, insufficient_history, error.",
     ["outcome"],
+)
+GUARD_DECLINED = Counter(
+    "swarmguard_guard_declined_total",
+    "Cycles where the kinematic guard had no interval it could trust, by reason: "
+    "no_timestamps, or arrival_gap_too_small_to_rate when a packet arrived so long "
+    "after it was sampled that neither clock gave a usable interval.",
+    ["reason"],
 )
 DETECTION_LATENCY = Histogram(
     "swarmguard_detection_duration_seconds",

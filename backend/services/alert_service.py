@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -157,7 +157,7 @@ class AlertService:
         suppress a genuine alert for another organization that happens to use
         the same drone_id.
         """
-        cutoff_time = datetime.utcnow() - timedelta(seconds=self.suppression_window_seconds)
+        cutoff_time = datetime.now(UTC) - timedelta(seconds=self.suppression_window_seconds)
 
         # Deliberately NOT filtered by attack_type. A single ongoing event
         # changes its own signature as it develops: a jamming attack first
@@ -223,7 +223,7 @@ class AlertService:
             "severity": severity,
             "threat_score": threat_score,
             "message": f"[{severity}] {attack_type} detected on {drone_id} (Score: {threat_score:.2f})",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }
 
 alert_service = AlertService()

@@ -19,21 +19,23 @@ from config import get_settings
 from database import get_db
 from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
+from services import device_credentials
 from services.audit_service import audit_service
 from services.detection_pipeline import run_detection
 from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.limiter import limiter
 from utils.logger import logger
-from utils.metrics import INGEST
+from utils.metrics import DEVICE_AUTH, INGEST
 
 settings = get_settings()
-EXPECTED_DRONE_API_KEY = settings.DRONE_API_KEY
+# See Settings.INGEST_RATE_LIMIT: measured, and keyed per client address.
+INGEST_RATE_LIMIT = settings.INGEST_RATE_LIMIT
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 @router.post("/ingest")
-@limiter.limit("50/second")
+@limiter.limit(INGEST_RATE_LIMIT)
 def ingest_telemetry(
     request: Request,
     packet: schemas.TelemetryPacket, 
@@ -42,8 +44,18 @@ def ingest_telemetry(
     db: Session = Depends(get_db),
     tenant: TenantContext = Depends(require_permission(Permissions.TELEMETRY_INGEST)),
 ):
-    # Drone Device Security Check (Anti-Spoofing)
-    if not x_drone_api_key or x_drone_api_key != EXPECTED_DRONE_API_KEY:
+    # Drone Device Security Check (Anti-Spoofing). A per-device key must belong
+    # to this drone in this organization; the shared fleet key is accepted only
+    # while DEVICE_SHARED_KEY_ENABLED. services/device_credentials.py.
+    device = device_credentials.authenticate(
+        db,
+        x_drone_api_key,
+        organization_id=tenant.organization_id,
+        drone_id=packet.drone_id,
+        shared_key=settings.DRONE_API_KEY,
+        shared_key_enabled=settings.DEVICE_SHARED_KEY_ENABLED,
+    )
+    if not device.ok:
         logger.warning(f"🚨 UNAUTHORIZED DRONE SPOOFING ATTEMPT: {packet.drone_id} sent invalid or missing API Key!")
         # Recorded, not just logged. A caller holding a valid operator token but
         # presenting the wrong device key is the signature of a compromised or
@@ -56,19 +68,20 @@ def ingest_telemetry(
             action="TELEMETRY_DEVICE_AUTH_FAILED",
             resource="TelemetryLog",
             resource_id=packet.drone_id,
-            reason="missing_api_key" if not x_drone_api_key else "invalid_api_key",
-            details=(
-                f"Rejected telemetry for drone '{packet.drone_id}': device API key "
-                f"{'missing' if not x_drone_api_key else 'did not match'}."
-            ),
+            reason=device.reason,
+            details=f"Rejected telemetry for drone '{packet.drone_id}': {device.reason}.",
             ip_address=request.client.host if request.client else None,
             commit=True,
         )
         INGEST.labels("rejected_device_key").inc()
+        # One answer for every reason: a caller must not learn whether a key
+        # exists, was revoked, or belongs to another drone.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Device Authentication Failed: Invalid or missing API Key for drone '{packet.drone_id}'"
         )
+
+    DEVICE_AUTH.labels(device.method).inc()
 
     try:
         processed_data = telemetry_service.process_telemetry(

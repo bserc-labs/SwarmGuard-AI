@@ -136,3 +136,39 @@ class TestTheReleaseJob:
         deploy = (ROOT / "scripts" / "deploy.sh").read_text()
         assert "sha-*)" in deploy, "deploy.sh must accept sha tags only"
 
+
+class TestConcurrency:
+    """A push to main must never cancel or replace another push's run."""
+
+    def test_pull_requests_cancel_their_own_superseded_runs(self, workflow):
+        assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+    def test_every_push_is_its_own_group(self, workflow):
+        """Per-ref groups let a later merge kill -- or, queued, replace -- an earlier release."""
+        group = workflow["concurrency"]["group"]
+        assert "github.event_name == 'push' && github.sha" in group
+        assert "github.ref" in group, "pull requests still group by ref"
+
+
+class TestDependencyAudits:
+    """An advisory security gate is a gate nobody reads."""
+
+    @pytest.fixture(scope="class")
+    def steps(self, jobs) -> dict:
+        return {step.get("name", ""): step for step in jobs["security-scan"]["steps"]}
+
+    @pytest.mark.parametrize("name", ["Audit Python dependencies (blocking)", "Audit npm dependencies (blocking)"])
+    def test_each_audit_blocks(self, steps, name):
+        assert name in steps, f"{name!r} is missing from the security-scan job"
+        assert "continue-on-error" not in steps[name], f"{name} must fail the build"
+
+    def test_the_python_audit_covers_the_requirements(self, steps):
+        assert "pip-audit -r requirements.txt" in steps["Audit Python dependencies (blocking)"]["run"]
+
+    def test_the_npm_audit_threshold_is_high(self, steps):
+        assert "--audit-level=high" in steps["Audit npm dependencies (blocking)"]["run"]
+
+    def test_the_vulnerable_jwt_dependency_does_not_come_back(self):
+        requirements = (ROOT / "backend" / "requirements.txt").read_text().lower()
+        assert "python-jose" not in requirements and "ecdsa" not in requirements
+

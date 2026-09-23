@@ -101,6 +101,15 @@ erDiagram
 
 ---
 
+## Timestamps
+
+Every `datetime` column above is `timestamp with time zone`, an absolute
+instant (migration `m3b4c5d6e7f8`). They were `timestamp without time zone`
+holding UTC by convention, which nothing enforced and which left every value
+in an API response without an offset. Connections pin their session to UTC, so
+a bare timestamp handed to the driver still means UTC whatever the server is
+configured for.
+
 ## High-Performance Database Indexes
 
 | Table | Index Column(s) | Type | Rationale |

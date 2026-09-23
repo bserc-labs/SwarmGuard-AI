@@ -21,6 +21,10 @@ class Permissions:
     DRONE_READ = "drone.read"
     DRONE_COMMAND_REQUEST = "drone.command.request"
     DRONE_COMMAND_APPROVE = "drone.command.approve"
+    # Issue and revoke per-drone ingest keys. Admin only: a key authenticates
+    # telemetry as that drone, so issuing one is granting the ability to
+    # speak for an aircraft.
+    DEVICE_CREDENTIALS_MANAGE = "device.credentials.manage"
 
     # Audit
     AUDIT_READ = "audit.read"
@@ -52,6 +56,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permissions.DRONE_COMMAND_APPROVE,
         Permissions.AUDIT_READ,
         Permissions.ORGANIZATION_MANAGE, Permissions.USER_MANAGE,
+        Permissions.DEVICE_CREDENTIALS_MANAGE,
         Permissions.GEOFENCE_READ, Permissions.GEOFENCE_MANAGE,
         Permissions.SETTINGS_READ, Permissions.SETTINGS_MANAGE,
         Permissions.AI_EXPLAIN,

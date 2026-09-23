@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import pandas as pd
@@ -216,7 +216,7 @@ class AIExplanationService:
         # 5. Add Metadata
         explanation["metadata"]["model_version"] = settings.MODEL_VERSION
         explanation["metadata"]["feature_engineering_version"] = "v1.0"
-        explanation["metadata"]["generation_timestamp"] = datetime.utcnow().isoformat()
+        explanation["metadata"]["generation_timestamp"] = datetime.now(UTC).isoformat()
         
         # Verify explanation stability (Confidence check)
         confidence = explanation["metadata"]["explanation_confidence_percent"]

@@ -231,7 +231,8 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
   compared per request, so a password or role change invalidates every
   outstanding session with a single `UPDATE`
 - **Device authentication** — `/telemetry/ingest` requires both an operator
-  bearer token and a device API key
+  bearer token and a device key: one per drone, stored as a digest, revocable on
+  its own; the shared fleet key can be switched off once no drone uses it
 - **Secrets as files** — mounted at `/run/secrets`, never container environment
   variables; startup fails on absent, short, or publicly-known secrets
   (`backend/config.py`)
@@ -344,6 +345,8 @@ cd frontend && npm run test
 | `GUARD_GPS_SPEED_ERROR_MPS` | `25` | Tolerated GNSS/airframe speed disagreement |
 | `GUARD_MIN_SATELLITES` | `6` | Satellite-loss floor |
 | `GUARD_DEVICE_CLOCK_MAX_LEAD_S` | `10` | How far the device sample clock (`sample_time_ms`) may exceed packet arrival spacing before it is disbelieved for that pair |
+| `GUARD_DEVICE_CLOCK_MAX_REORDER_S` | `10` | How far behind the rest of the window a late packet's device clock may be and still be rated against its neighbour, rather than taken for a reboot |
+| `GUARD_MIN_RESET_GAP_S` | `1` | The shortest arrival gap that could contain a device-clock reset. Closer together than this, a backwards clock is a late packet rather than a reboot, and the guard declines to rate instead of dividing by milliseconds |
 | `AI_INCIDENTS_ENABLED` | `false` | Let Tier 2 raise incidents — see Model results before enabling |
 | `MODEL_VERSION` | `v2` | Active model in the registry |
 | `MAVLINK_ENABLED` | `false` | Enable the MAVLink receiver |
@@ -351,6 +354,11 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
+| `INGEST_RATE_LIMIT` | `50/second` | Telemetry packets per client address. Every drone behind one uplink shares it; see [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md) |
+| `HTTP_MAX_IN_FLIGHT` | `40` | Requests inside the API at once; the rest wait at the door ([Admission](docs/OPERATIONS.md#metrics)) |
+| `HTTP_ADMISSION_WAIT_S` | `5` | How long a request waits for a slot before a 503 with `Retry-After` |
+| `BACKGROUND_THREADS` | `12` | Threads for detection, MAVLink persistence and background loops |
+| `DB_POOL_RESERVE` | `4` | Connections kept outside both bounds. The three above plus this must fit in `DB_POOL_SIZE + DB_MAX_OVERFLOW`, or the API refuses to start |
 | `SWARMGUARD_TAG` / `SWARMGUARD_IMAGE_PREFIX` | — / `ghcr.io/bserc-labs` | With `docker-compose.prod.yml`: which published image to run. `scripts/deploy.sh` sets the tag; see [`docs/OPERATIONS.md`](docs/OPERATIONS.md#releases-and-deploys) |
 | `BACKUP_INTERVAL_S` / `BACKUP_RETAIN_DAYS` | `21600` / `14` | Dump every 6 h (the RPO), keep 14 days. Restore and rehearsal: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#backups-and-restore) |
 | `SWARMGUARD_BACKUP_DIR` | `backups` volume | Where dumps go. Point it at a directory that is copied off the host |
@@ -366,7 +374,9 @@ cd frontend && npm run test
 | `SECRET_KEY_PREVIOUS` | — | The key `SECRET_KEY` replaced. Tokens are signed with the current key and verified against both, so a rotation logs nobody out. Managed by `scripts/rotate-secret-key.sh` |
 | `DATABASE_PASSWORD` | — | Joined into a `DATABASE_URL` that carries no password. Under compose it is the `database_password` secret file |
 | `SECRETS_DIR` | `/run/secrets` | Where the backend looks for secret files; used only if the directory exists |
+| telemetry retention | 3 days | A TimescaleDB policy on one-day chunks, not a setting: change it with `alter_job` ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#telemetry-retention)) |
 | `AUDIT_RETENTION_DAYS` | `365` | Audit rows older than this are deleted daily through the append-only table's maintenance flag. `0` keeps everything |
+| `DEVICE_SHARED_KEY_ENABLED` | `true` | Accept the shared `DRONE_API_KEY` on ingest alongside per-device keys. Turn off once `swarmguard_device_auth_total{method="shared_key"}` stops moving ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#device-credentials-and-retiring-drone_api_key)) |
 | `SENTRY_DSN` | — | Error tracking. Unset, off. Under compose it is the secret file `sentry_dsn` |
 | `SWARMGUARD_ENV` / `SWARMGUARD_RELEASE` | `development` / image tag | Tags on every error and metric; `deploy.sh` sets the release |
 | `METRICS_TOKEN` | — | Bearer token required on `/metrics`. Unset, the endpoint relies on not being proxied and on the API port being loopback-only |

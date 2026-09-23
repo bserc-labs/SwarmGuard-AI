@@ -57,16 +57,18 @@ async def explain_anomaly(request: ExplanationRequest):
     # time-derived feature was NaN on every call, and the endpoint returned a
     # confident attribution computed from features that did not exist.
     #
-    # Normalised to naive UTC, matching the naive column the live pipeline
-    # feeds: a payload mixing "...Z" with offset-less values otherwise reaches
-    # pandas as mixed tz-aware/naive and becomes a 500.
+    # Normalised to aware UTC, matching the timestamptz column the live
+    # pipeline feeds (migration m3b4c5d6e7f8): a payload mixing "...Z" with
+    # offset-less values otherwise reaches pandas as mixed tz-aware/naive and
+    # becomes a 500. An offset-less value is read as UTC, which is what this
+    # API has always meant by a bare timestamp.
     history_dicts = [
         {
             **item.model_dump(),
             "created_at": (
-                item.timestamp.astimezone(UTC).replace(tzinfo=None)
+                item.timestamp.astimezone(UTC)
                 if item.timestamp.tzinfo
-                else item.timestamp
+                else item.timestamp.replace(tzinfo=UTC)
             ),
         }
         for item in request.telemetry_history

@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # looks like protection.
     LOGIN_RATE_LIMIT: str = "5/minute"
 
+    # Telemetry ingest per client address. Measured (reports/06-LOAD-TEST-
+    # RESULTS.md): precise at the limit, and the limiter -- not the pool or the
+    # CPU -- is what caps throughput. Keyed by client address, so every drone
+    # behind one ground-station uplink shares it: 20 drones get 2.5 Hz each.
+    # Raise it for a larger fleet behind one uplink, or for a capacity test.
+    INGEST_RATE_LIMIT: str = "50/second"
+
     # AI models & thresholds (for future use)
     THREAT_ANOMALY_THRESHOLD: float = 0.8
     THREAT_CRITICAL_THRESHOLD: float = 85.0
@@ -134,6 +141,11 @@ class Settings(BaseSettings):
     # Device authentication for /telemetry/ingest. No default: a shared secret
     # that ships in the image authenticates an attacker as readily as a drone.
     DRONE_API_KEY: str
+    # Accept DRONE_API_KEY on ingest as well as per-device keys. On by default so
+    # an upgrade breaks nothing; turn it off once swarmguard_device_auth_total
+    # shows no more shared_key traffic, and a lost airframe stops being a lost
+    # fleet. See docs/OPERATIONS.md, "Device credentials".
+    DEVICE_SHARED_KEY_ENABLED: bool = True
 
     # MAVLink Configurations.
     #
@@ -180,6 +192,29 @@ class Settings(BaseSettings):
     # Fail fast under saturation instead of holding requests for SQLAlchemy's
     # 30 s default, which the client times out before and so hides the cause.
     DB_POOL_TIMEOUT: int = 10
+
+    # --- Admission: never ask the pool for more than it has ---------------------
+    #
+    # The load test of 2026-09-22 stopped the API at 100 packets/second: all 60
+    # connections sat "idle in transaction" after the authentication lookup,
+    # each request waiting for a worker thread to run its endpoint, while every
+    # worker thread held a newer request waiting for a connection. Only the
+    # 10 s pool timeout broke it, and it re-formed at once. Nothing bounded how
+    # many requests could hold a connection. Now two things do:
+    #
+    # HTTP requests inside the application at once. Each holds at most one
+    # request-session connection. Beyond this, requests wait at the door holding
+    # nothing, and after HTTP_ADMISSION_WAIT_S get 503 with Retry-After.
+    HTTP_MAX_IN_FLIGHT: int = 40
+    HTTP_ADMISSION_WAIT_S: float = 5.0
+    # Threads behind asyncio.to_thread: detection, MAVLink persistence, the
+    # background loops, the readiness probe. Each holds at most one connection.
+    # Python's default is min(32, CPUs + 4), which follows the host, not the pool.
+    BACKGROUND_THREADS: int = 12
+    # Connections left for work outside both bounds: WebSocket authentication,
+    # and slack. HTTP_MAX_IN_FLIGHT + BACKGROUND_THREADS + this must fit in
+    # DB_POOL_SIZE + DB_MAX_OVERFLOW; startup refuses otherwise.
+    DB_POOL_RESERVE: int = 4
 
     # --- CORS ----------------------------------------------------------------
     #
@@ -279,6 +314,19 @@ class Settings(BaseSettings):
     # buffered bursts; a device interval far beyond that means a broken or
     # mis-scaled clock, and dividing by it would hide a real jump.
     GUARD_DEVICE_CLOCK_MAX_LEAD_S: float = 10.0
+    # How far a packet's device clock may sit behind everything else in the
+    # guard's window and still be read as a late packet (rated against its
+    # nearest neighbour on the device clock) rather than as a reboot or counter
+    # wrap (rated on arrival time). Resets step back by the whole uptime;
+    # overloaded delivery steps back by queueing delay.
+    GUARD_DEVICE_CLOCK_MAX_REORDER_S: float = 10.0
+    # The shortest arrival gap that could contain a device-clock reset. When the
+    # device clock disagrees with arrival time, the reason to trust arrival time
+    # instead is a reboot or a counter wrap -- and a reset takes time. Two
+    # packets delivered closer together than this did not have one between them:
+    # one of them is simply late, arrival spacing is queueing rather than
+    # flight, and the guard declines to rate rather than divide by milliseconds.
+    GUARD_MIN_RESET_GAP_S: float = 1.0
 
     # --- Tier 2: ML anomaly layer ------------------------------------------
     #
@@ -354,6 +402,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
                 "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _connections_fit_the_pool(self) -> "Settings":
+        """Demand that can never exceed the pool cannot deadlock on it."""
+        demand = self.HTTP_MAX_IN_FLIGHT + self.BACKGROUND_THREADS + self.DB_POOL_RESERVE
+        pool = self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+        if min(self.HTTP_MAX_IN_FLIGHT, self.BACKGROUND_THREADS) < 1:
+            raise ValueError("HTTP_MAX_IN_FLIGHT and BACKGROUND_THREADS must each be at least 1.")
+        if demand > pool:
+            raise ValueError(
+                f"HTTP_MAX_IN_FLIGHT ({self.HTTP_MAX_IN_FLIGHT}) + BACKGROUND_THREADS "
+                f"({self.BACKGROUND_THREADS}) + DB_POOL_RESERVE ({self.DB_POOL_RESERVE}) = {demand} "
+                f"connections, but the pool holds DB_POOL_SIZE + DB_MAX_OVERFLOW = {pool}. "
+                "Requests would wait on the pool while holding it, which deadlocks. "
+                "Lower the first two or raise the pool (and PostgreSQL's max_connections)."
             )
         return self
 

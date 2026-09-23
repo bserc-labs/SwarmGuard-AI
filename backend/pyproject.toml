@@ -42,14 +42,6 @@ ignore = [
     # Deliberate: sensor_fusion and the dataset generators simulate telemetry.
     # These are simulations, not key material.
     "S311",
-    # datetime.utcnow() is used throughout and every column is naive. Migrating
-    # to timezone-aware datetimes is a schema decision, not a lint fix — see
-    # the retention/forensics question in the roadmap. 19 occurrences.
-    "DTZ003",
-    "DTZ005",
-    # Same decision as above: tests and fixtures build naive datetimes to match
-    # the naive columns. Goes when the schema goes timezone-aware.
-    "DTZ001",
     # Staged (see below): 35 blind excepts in application code, each needing a
     # decision about which exception is actually expected. Enable per-module.
     "BLE001",

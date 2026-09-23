@@ -16,10 +16,20 @@ on:
   # not checking one that did is how the `develop` typo went unnoticed.
   pull_request:
 
-# Cancel superseded runs on the same ref so a busy PR does not queue behind itself.
+# A pull request cancels its own superseded runs, so a busy PR does not queue
+# behind itself. A push to a branch never shares a group with another push:
+# every commit on main runs to the end and gets its images published.
+#
+# The group used to be the ref alone, with cancel-in-progress for everything.
+# Merging PR #14 two minutes after PR #13 then killed #13's release job in the
+# middle of its image build, so that merge commit was never published and
+# scripts/deploy.sh could not deploy it. Turning cancellation off would not be
+# enough: GitHub still replaces a *queued* run in the same group, so a third
+# quick merge would silently skip the second commit's images. A group per
+# commit SHA for pushes rules out both.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-test:
@@ -290,13 +300,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The two dependency audits are advisory for now. Neither backlog has been
-      # triaged, and a CVE published against a transitive pin would turn every
-      # unrelated PR red. Flip both to blocking (drop continue-on-error) once
-      # the first triage pass is done — that is a deliberate decision, not a
-      # thing to leave until it happens by accident.
-      - name: Audit Python dependencies (advisory)
-        continue-on-error: true
+      # Both dependency audits block. They ran with continue-on-error until the
+      # first triage pass, and an advisory gate is a gate nobody reads. The
+      # triage (Phase 3): the backend's one real finding was ecdsa, with no
+      # fixed version, pulled in by python-jose -- replaced by PyJWT; npm's two
+      # high findings had patch-level fixes in the lockfile.
+      #
+      # When a new advisory turns this red: upgrade if a fix exists. If none
+      # does and the vulnerable code is unreachable, ignore that one ID here
+      # with `--ignore-vuln <ID>` (pip-audit) or an `overrides` entry
+      # (package.json), and a comment saying why and until when. Never
+      # continue-on-error again.
+      - name: Audit Python dependencies (blocking)
         working-directory: ./backend
         run: |
           pip install pip-audit
@@ -307,8 +322,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Audit npm dependencies (advisory)
-        continue-on-error: true
+      # --audit-level=high: moderate findings are reported, not blocking. The
+      # two outstanding ones are in vitest, the test runner, which needs a major
+      # upgrade and never reaches the built bundle.
+      - name: Audit npm dependencies (blocking)
         working-directory: ./frontend
         run: npm audit --audit-level=high
 

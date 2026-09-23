@@ -2,8 +2,9 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,11 +18,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import models
 from config import get_settings
 from database import SessionLocal, engine
+from middleware.admission import AdmissionLimit
 from routers import (
     ai,
     ai_explain,
     auth,
     commands,
+    devices,
     geofence,
     incidents,
     settings,
@@ -32,6 +35,7 @@ from routers import (
 from services.audit_service import purge_expired_audit_logs
 from services.heartbeat_service import check_drone_heartbeats
 from services.readiness import Probe, check_readiness
+from services.retention import check_retention_policy
 from services.supervisor import Supervisor
 from services.ws_manager import ws_manager
 from utils import metrics
@@ -96,6 +100,16 @@ app = FastAPI(title="SwarmGuard AI API", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Bounds how many requests can hold a database connection, which is what kept
+# the API out of the pool deadlock the load test found (middleware/admission.py).
+# Registered before CORS so it sits inside it: a 503 still carries CORS headers.
+app.add_middleware(
+    AdmissionLimit,
+    limit=_settings.HTTP_MAX_IN_FLIGHT,
+    wait_s=_settings.HTTP_ADMISSION_WAIT_S,
+    exempt_paths=("/health", "/metrics"),
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
@@ -146,6 +160,7 @@ app.include_router(websocket.router)
 app.include_router(ai.router)
 app.include_router(ai_explain.router)
 app.include_router(commands.router)
+app.include_router(devices.router)
 app.include_router(settings.router)
 app.include_router(geofence.router)
 
@@ -205,20 +220,25 @@ async def heartbeat_pass() -> None:
 
 
 async def retention_pass() -> None:
-    """Data Retention Policy: deletes telemetry older than 3 days."""
+    """Telemetry retention is TimescaleDB's job now (migration k1f2a3b4c5d6).
 
-    def run_sync_cleanup():
+    This used to be the retention: one unbatched DELETE an hour over a
+    hypertable holding up to ~13 million rows -- a long transaction, locks, and
+    millions of dead tuples for autovacuum. The database drops whole chunks
+    instead, and this pass only asks whether that policy is there and healthy.
+    It raises when it is not, so the supervisor records a failure, /ready
+    carries the error, and a metric moves -- rather than the table quietly
+    growing until the disk fills.
+    """
+
+    def run_sync():
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(days=3)
-            deleted = db.query(models.TelemetryLog).filter(models.TelemetryLog.created_at < cutoff).delete()
-            db.commit()
-            if deleted > 0:
-                logger.info(f"Data Retention Policy executed: Pruned {deleted} old telemetry rows.")
+            return check_retention_policy(db)
         finally:
             db.close()
 
-    await asyncio.to_thread(run_sync_cleanup)
+    await asyncio.to_thread(run_sync)
 
 
 async def audit_retention_pass() -> None:
@@ -254,6 +274,15 @@ SHUTDOWN_GRACE_S = 10.0
 
 async def startup() -> None:
     logger.info("Initializing SwarmGuard AI Backend...")
+    # Everything behind asyncio.to_thread -- detection, MAVLink persistence, the
+    # background loops -- runs here, each job holding at most one connection.
+    # Sized from settings so it fits the pool (Settings._connections_fit_the_pool);
+    # Python's default follows the host's CPU count instead.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=get_settings().BACKGROUND_THREADS, thread_name_prefix="swarmguard-bg"
+        )
+    )
     # Migrations are applied by the migrate job, never here. Fail now, with the
     # reason, rather than on whichever request first meets a missing column.
     # In a worker thread: it is a blocking database call on the event loop.
@@ -266,7 +295,7 @@ async def startup() -> None:
     await mavlink_receiver.start()
 
     logger.info("Started background Heartbeat & Silent Drone Monitor task (checks every 10s)")
-    logger.info("Started background Data Retention Policy (prunes data older than 3 days)")
+    logger.info("Started background retention-policy check (TimescaleDB drops chunks older than 3 days)")
 
 
 async def shutdown() -> None:
@@ -406,7 +435,7 @@ def system_health_details(
             "silent_drones": silent_drones,
             "total_incidents": total_incidents,
             "critical_incidents": critical_incidents,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }
     except Exception as e:
         logger.error(f"Health details query error: {e}")

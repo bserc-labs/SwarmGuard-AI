@@ -85,9 +85,9 @@ without becoming a restart loop.
 ### Background loops
 
 Three loops run inside the API: the **heartbeat monitor** (every 10 s; it is what
-detects a jammed, silent drone), **telemetry retention** (hourly, three days)
-and **audit retention** (daily, `AUDIT_RETENTION_DAYS`, default a year; `0`
-keeps everything). All run
+detects a jammed, silent drone), a **telemetry retention check** (hourly; the
+retention itself is a database policy, see below) and **audit retention**
+(daily, `AUDIT_RETENTION_DAYS`, default a year; `0` keeps everything). All run
 under a supervisor that restarts a loop with backoff when its pass raises,
 brings the task back if it ever ends for any other reason, and records the time
 of each successful pass. `/ready` reports them:
@@ -101,6 +101,48 @@ stalled loop makes `/ready` answer 503 (`checks.background`). For the heartbeat
 monitor that is the difference between "no drone is jammed" and "nobody is
 looking", which used to be indistinguishable: it ran as a bare task, and a task
 that dies is simply gone.
+
+### Telemetry retention
+
+Telemetry older than three days is dropped by a **TimescaleDB retention policy**
+on `telemetry_logs`, not by the application: whole chunks go at once, a metadata
+operation with no dead rows to vacuum. Chunks are one day wide, so the window
+is three to four days. (On the default seven-day chunks, "three days" would
+have kept up to ten: a chunk is dropped only when all of it has aged out.)
+
+```bash
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+  "SELECT j.job_id, j.config->>'drop_after' AS drop_after, s.last_run_status, s.last_successful_finish
+     FROM timescaledb_information.jobs j LEFT JOIN timescaledb_information.job_stats s USING (job_id)
+    WHERE j.proc_name = 'policy_retention'"
+```
+
+To keep telemetry longer, change the policy, not the code:
+
+```sql
+SELECT alter_job(<job_id>, config => jsonb_set(config, '{drop_after}', '"7 days"'));
+```
+
+The hourly `telemetry-retention` loop only checks that the policy exists and
+that its last run succeeded. If someone removes it, or a database is restored
+from a dump that predates it, the loop's pass fails: the failure shows in
+`/ready` (`background.telemetry-retention.last_error`) and in
+`swarmguard_background_loop_failures_total`, with the `add_retention_policy`
+call to run in the message.
+
+Compression is deliberately off: with three days of retention the saving is
+small, and a compressed hypertable restricts later schema changes.
+
+The policy is part of the database, so it travels with a backup: restored with
+`scripts/restore.sh` into a scratch database, the copy had the job, the
+three-day cutoff, one-day chunks and the schedule active.
+
+**A long read delays retention.** Dropping a chunk takes an exclusive lock on
+it, so the policy waits behind any transaction still reading that chunk -- an
+analyst's open `psql` session, a report query left in a transaction. It
+resumes when the reader finishes; nothing is lost, but nothing is dropped
+either. Look for `idle in transaction` in `pg_stat_activity` if
+`last_successful_finish` stops advancing.
 
 ## Metrics
 
@@ -116,6 +158,8 @@ to require a bearer token on top.
 | `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
+| `swarmguard_http_in_flight`, `swarmguard_http_admission_rejected_total` | requests inside the API against `HTTP_MAX_IN_FLIGHT`, and how many were turned away with 503 (see Admission, below) |
+| `swarmguard_guard_declined_total{reason}` | cycles where the kinematic guard had no interval it could trust. `arrival_gap_too_small_to_rate` means packets are arriving so late that the clocks disagree and arrival spacing is queueing rather than flight: **the detector is degraded, not quiet**, and the fix is less load per process or a better link, not a wider tolerance |
 | `swarmguard_websocket_connections`, `swarmguard_websocket_broadcasts_total{path}`, `swarmguard_websocket_broadcast_duration_seconds` | live sockets, and how messages reached them (published via Redis, local, or fallback after a failed publish) |
 | `swarmguard_background_loop_ticks_total{loop}`, `_failures_total`, `_restarts_total`, `_seconds_since_tick`, `_stalled`, `_alive` | the supervised loops; alert on `stalled == 1` or `alive == 0` |
 
@@ -130,7 +174,24 @@ swarmguard_background_loop_stalled == 1                      # heartbeat monitor
 swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
 rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
+rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
+rate(swarmguard_guard_declined_total[5m]) > 0               # the detector cannot rate what it is being sent
 ```
+
+**Admission.** At most `HTTP_MAX_IN_FLIGHT` (40) requests are inside the API at
+once; the rest wait at the door, and one that waits `HTTP_ADMISSION_WAIT_S` (5 s)
+gets **503 with `Retry-After: 1`**. That is the API shedding load it cannot
+take, not a fault: back off and retry, or add capacity. `/health`, `/metrics`
+and WebSockets are never queued.
+
+The limit exists because without it the API deadlocked on its own connection
+pool at 100 packets/second (load test of 2026-09-22): a request holds its
+connection across worker-thread hops, so a burst larger than the pool held
+every connection while the threads waited for one. Admitted requests plus
+`BACKGROUND_THREADS` (12, everything behind `asyncio.to_thread`) plus
+`DB_POOL_RESERVE` (4) must fit in `DB_POOL_SIZE + DB_MAX_OVERFLOW` (60); the API
+refuses to start otherwise. To take more load, raise the pool and PostgreSQL's
+`max_connections` first, then the limit.
 
 **A Prometheus to look at them.** `docker compose --profile observability up -d`
 adds one, loopback-only at `http://localhost:9090`, scraping the API inside the
@@ -188,7 +249,10 @@ ghcr.io/bserc-labs/swarmguard-frontend:sha-<full commit sha>
 ```
 
 The `sha-` tag is **immutable**: it names exactly one commit, so "what is
-running" is never in doubt and a rollback is the previous tag. `main` and
+running" is never in doubt and a rollback is the previous tag. Every commit on
+`main` is published: pushes never cancel or replace one another's runs. (One
+earlier merge, `89c8626`, predates that rule and has no images; deploy the
+merge after it.) `main` and
 `latest` are pushed too, for looking around; `deploy.sh` refuses them.
 
 The scan is the gate: a CRITICAL or HIGH finding with a fix available means
@@ -197,6 +261,18 @@ base layers and the virtualenv, which the filesystem scan in the other job
 cannot. The first run of it found two HIGH findings, both in copies of
 `msgpack` and `setuptools` that pip vendors for its own use; the runtime image
 no longer ships pip at all.
+
+### Dependency audits
+
+`pip-audit` (backend) and `npm audit --audit-level=high` (frontend) run on every
+push and pull request and **fail the build**. When one turns red: upgrade if a
+fix exists. If none does and the vulnerable code is unreachable here, ignore
+exactly that advisory ID in `.github/workflows/ci.yml` with a comment saying why
+and until when -- never turn the step back into an advisory. The first triage
+replaced python-jose with PyJWT (its `ecdsa` dependency has an advisory with no
+fix) and took patch-level fixes for two npm packages. Two moderate npm findings
+remain in `vitest`, the test runner: below the threshold, and never in the
+built bundle.
 
 ### Deploying
 
@@ -226,6 +302,20 @@ Measured on the development host against a throwaway registry: a good tag
 deploys and passes; a release whose frontend image was not nginx failed its
 smoke test, was rolled back, the site answered 200 afterwards, and the bad tag
 was never recorded as current.
+
+**The timestamptz migration (`m3b4c5d6e7f8`) takes a lock on the ingest
+table.** It converts all 17 datetime columns to `timestamp with time zone`. No
+table is rewritten — PostgreSQL 12+ converts in place under a UTC session, so
+`telemetry_logs` keeps its chunks, its rows and its retention policy — but
+**every index on a converted column is rebuilt**, and that holds an exclusive
+lock: no ingest, no reads of those tables, until it finishes. Measured on 122k
+telemetry rows (38 MB, one chunk, 1,156 incidents): under two seconds, nine
+indexes rebuilt including the chunk's own. Time grows with index size, so on a
+table holding three days of packets at the ingest limit, deploy it in a window
+where a pause in ingest is acceptable, or rebuild the indexes concurrently by
+hand first. The migration refuses to run at all where the server's default
+`TimeZone` is not UTC: there `now()` wrote local time, and reading it as UTC
+would shift it silently.
 
 For a self-signed development certificate set `SWARMGUARD_SMOKE_INSECURE=1`;
 leave it unset on a server. To deploy from a different registry set
@@ -476,10 +566,40 @@ Measured: in the right order the API reconnects at once. With the file changed
 and the role not, the API **does not start** — its start-up schema check cannot
 connect — which is a clearer failure than a running API answering 500.
 
-### `DRONE_API_KEY`
+### Device credentials (and retiring `DRONE_API_KEY`)
 
-One key is shared by the whole fleet, so rotating it means re-keying every
-aircraft at the same moment. There is no graceful version of that, which is why
-per-device credentials are on the roadmap (`reports/03-PRODUCTION-ROADMAP.md`,
-item 3.2). Until then: replace `secrets/drone_api_key`, restart the API, and
-update every device.
+Every drone used to present the one shared `DRONE_API_KEY`: one lost airframe
+was the whole fleet's key. Each drone can now hold its own, which an admin
+issues, lists and revokes:
+
+```bash
+TOKEN=...   # an admin's access token
+curl -sk -X POST https://HOST/api/drones/ALPHA-07/credentials \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"label": "airframe 7"}'
+# -> {"id": 12, "key": "sgd_...", "key_prefix": "sgd_Ab3dE6gH", ...}
+#    The key is in this response and nowhere else. Load it into the drone now.
+curl -sk https://HOST/api/drones/ALPHA-07/credentials -H "Authorization: Bearer $TOKEN"
+curl -sk -X DELETE https://HOST/api/drones/ALPHA-07/credentials/12 -H "Authorization: Bearer $TOKEN"
+```
+
+The drone sends it in `X-Drone-API-Key` exactly as it sent the shared key. A key
+works only for its own drone id in its own organization; the database keeps its
+SHA-256, never the key. Revocation takes effect on the next packet and leaves
+the drone's other keys alone, so **rotation** is: issue a new key, load it,
+revoke the old one. Every issue, revoke and rejection is in the audit log with
+its reason; the HTTP answer to a rejected key is the same whatever the reason.
+
+**Moving the fleet off the shared key.** The shared key keeps working while
+`DEVICE_SHARED_KEY_ENABLED=true` (the default), so an upgrade breaks nothing.
+
+1. Issue a key per drone and load it.
+2. Watch `swarmguard_device_auth_total{method="shared_key"}`. When it stops
+   increasing, no drone uses the shared key any more.
+3. Set `DEVICE_SHARED_KEY_ENABLED=false` and restart the API. A drone still on
+   the shared key is now rejected with reason `shared_key_disabled` in the
+   audit log.
+
+Until then, rotating the shared key itself is still the old procedure: replace
+`secrets/drone_api_key`, restart the API, and update every device still using
+it. Mutual TLS for airborne assets remains the longer-term answer.

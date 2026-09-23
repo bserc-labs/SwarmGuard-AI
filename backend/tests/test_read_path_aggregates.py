@@ -7,15 +7,15 @@ organizations and assert the responses are the ones the old code produced --
 for /latest, literally, by running the old DISTINCT ON statement as the oracle.
 
 Telemetry is seeded relative to *now*, never a fixed date. The `client` fixture
-runs the application's startup, which starts the retention sweep (main.py
-periodic_database_cleanup); it deletes telemetry older than three days, and
+runs the application's startup. Retention is a TimescaleDB policy now
+(migration k1f2a3b4c5d6) that drops chunks older than three days, and
 would silently empty a test seeded in the past. Seeded drones keep the default
 last_seen, so the heartbeat loop the same fixture starts never turns them into
 incidents.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -80,7 +80,7 @@ def organizations(db_session):
 
 
 def _recent() -> datetime:
-    return datetime.utcnow().replace(microsecond=0) - timedelta(minutes=10)
+    return datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
 
 
 def _packet(org_id: int, drone_id: str, created_at: datetime, seq: int) -> models.TelemetryLog:
@@ -181,7 +181,7 @@ class TestStats:
         self, db_session, client, organizations
     ):
         org = organizations[0]
-        detected = datetime(2026, 9, 21, 10, 0, 0, 250_000)
+        detected = datetime(2026, 9, 21, 10, 0, 0, 250_000, tzinfo=UTC)
         rows = [
             self._incident(org.id, severity="CRITICAL", status="RESOLVED", detection_time=detected,
                            resolution_time=detected + timedelta(seconds=200, milliseconds=500)),

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ def check_drone_heartbeats(db: Session) -> list[tuple[int, dict]]:
     owned by the main loop. The failure was caught and logged, so the alerts this
     system generates almost certainly never reached a browser.
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     cutoff_time = now - timedelta(seconds=SILENCE_THRESHOLD_SECONDS)
 
     silent_drones = (

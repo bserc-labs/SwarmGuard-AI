@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
 from config import get_settings
 from models_ml.dataset_loader import DatasetLoader
@@ -65,7 +65,7 @@ class DataProfiler:
         corr_matrix = df[numeric_cols].corr().fillna(0).to_dict()
         
         report = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "dataset_source": settings.DATASET_PATH,
             "dataset_summary": {
                 "total_rows": len(df),

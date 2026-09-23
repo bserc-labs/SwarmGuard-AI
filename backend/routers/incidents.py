@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import extract, func, select
@@ -187,7 +187,7 @@ def _apply_transition(
     incident.status = new_status
 
     if new_status == "RESOLVED":
-        incident.resolution_time = datetime.utcnow()
+        incident.resolution_time = datetime.now(UTC)
 
     audit_service.log_from_context(
         db=db,

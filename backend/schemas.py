@@ -274,3 +274,31 @@ class SystemSettingsOrdering(BaseModel):
                 "incident can fall into the high band."
             )
         return self
+
+
+class DeviceCredentialCreate(BaseModel):
+    # Free text for the operator ("airframe 7, replaced 2026-09"); not secret.
+    label: str | None = Field(None, max_length=120)
+
+
+class DeviceCredentialOut(BaseModel):
+    """What may be shown about a credential: never the key, never its digest."""
+
+    id: int
+    drone_id: str
+    key_prefix: str
+    label: str | None
+    created_by: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+    revoked_by: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class DeviceCredentialIssued(DeviceCredentialOut):
+    """Returned once, by the issuing call. Load `key` into the drone now; it cannot be shown again."""
+
+    key: str = ""
+

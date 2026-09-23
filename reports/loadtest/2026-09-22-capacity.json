@@ -1,0 +1,172 @@
+{
+  "api": "http://127.0.0.1:8000",
+  "drones": 40,
+  "listeners": 1,
+  "listener_errors": [],
+  "sample_failures": {
+    "metrics": 0,
+    "memory": 0
+  },
+  "phases": [
+    {
+      "name": "2x",
+      "planned_per_s": 100.0,
+      "planned_seconds": 20.0,
+      "actual_seconds": 20.0,
+      "achieved_send_per_s": 100.0,
+      "schedule_lag_ms": {
+        "p50": 0.7,
+        "p95": 0.8,
+        "max": 15.7
+      },
+      "sent": 2000,
+      "statuses": {
+        "200": 2000
+      },
+      "accepted_per_s": 100.0,
+      "latency_ms": {
+        "p50": 4.4,
+        "p95": 7.2,
+        "p99": 15.1,
+        "max": 55.7
+      },
+      "detection_runs": {
+        "insufficient_history": 40,
+        "no_incident": 1960
+      },
+      "detection_mean_ms": 1.1,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 2000,
+      "ws_expected": 2000,
+      "ws_delivery_ms": {
+        "p50": 4.5,
+        "p95": 7.3,
+        "max": 56.2
+      },
+      "backend_memory_mib_max": 206.3
+    },
+    {
+      "name": "4x",
+      "planned_per_s": 200.0,
+      "planned_seconds": 20.0,
+      "actual_seconds": 20.0,
+      "achieved_send_per_s": 200.0,
+      "schedule_lag_ms": {
+        "p50": 0.2,
+        "p95": 0.5,
+        "max": 8.5
+      },
+      "sent": 4000,
+      "statuses": {
+        "200": 4000
+      },
+      "accepted_per_s": 200.0,
+      "latency_ms": {
+        "p50": 3.8,
+        "p95": 7.8,
+        "p99": 22.9,
+        "max": 55.8
+      },
+      "detection_runs": {
+        "no_incident": 4000
+      },
+      "detection_mean_ms": 1.1,
+      "pool_checked_out_max": 1.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 4000,
+      "ws_expected": 4000,
+      "ws_delivery_ms": {
+        "p50": 3.9,
+        "p95": 7.9,
+        "max": 61.3
+      },
+      "backend_memory_mib_max": 208.8
+    },
+    {
+      "name": "8x",
+      "planned_per_s": 400.0,
+      "planned_seconds": 20.0,
+      "actual_seconds": 20.2,
+      "achieved_send_per_s": 396.5,
+      "schedule_lag_ms": {
+        "p50": 115.4,
+        "p95": 1687.8,
+        "max": 2369.7
+      },
+      "sent": 8000,
+      "statuses": {
+        "200": 6281,
+        "500": 40,
+        "PoolTimeout": 1371,
+        "ReadTimeout": 308
+      },
+      "accepted_per_s": 311.3,
+      "latency_ms": {
+        "p50": 25387.0,
+        "p95": 86403.6,
+        "p99": 94233.9,
+        "max": 291454.6
+      },
+      "detection_runs": {
+        "error": 12,
+        "incident_created": 76,
+        "incident_escalated": 36,
+        "no_incident": 3252,
+        "suppressed": 2915
+      },
+      "detection_mean_ms": 25.3,
+      "pool_checked_out_max": 19.0,
+      "pool_overflow_max": 15.0,
+      "ws_delivered": 6303,
+      "ws_expected": 6281,
+      "ws_delivery_ms": {
+        "p50": 19851.2,
+        "p95": 85959.7,
+        "max": 96053.3
+      },
+      "backend_memory_mib_max": 233.0
+    },
+    {
+      "name": "16x",
+      "planned_per_s": 800.0,
+      "planned_seconds": 20.0,
+      "actual_seconds": 20.0,
+      "achieved_send_per_s": 799.2,
+      "schedule_lag_ms": {
+        "p50": 264.0,
+        "p95": 1141.6,
+        "max": 1675.4
+      },
+      "sent": 16000,
+      "statuses": {
+        "200": 15995,
+        "RemoteProtocolError": 5
+      },
+      "accepted_per_s": 798.9,
+      "latency_ms": {
+        "p50": 121669.2,
+        "p95": 184824.3,
+        "p99": 193421.0,
+        "max": 200372.4
+      },
+      "detection_runs": {
+        "incident_created": 65,
+        "incident_escalated": 31,
+        "no_incident": 2966,
+        "suppressed": 3272
+      },
+      "detection_mean_ms": 5.1,
+      "pool_checked_out_max": 2.0,
+      "pool_overflow_max": 0.0,
+      "ws_delivered": 16169,
+      "ws_expected": 15995,
+      "ws_delivery_ms": {
+        "p50": 120985.9,
+        "p95": 185174.2,
+        "max": 291438.4
+      },
+      "backend_memory_mib_max": 234.2
+    }
+  ]
+}

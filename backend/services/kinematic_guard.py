@@ -49,6 +49,23 @@ _TIME_BASE_LABELS = {
     TIME_BASE_ARRIVAL: "server arrival time",
 }
 
+# Interval note for a pair rated on the device clock although the newest packet
+# was not stored in sample order: its partner is its nearest neighbour on the
+# device clock, not the packet stored just before it. See KinematicGuard._pair.
+NOTE_REORDERED = "device_clock_reordered"
+
+# The device clock could not be used, and the packets arrived too close together
+# for arrival time to stand in for it. No interval, so no verdict. See
+# KinematicGuard._pair.
+NOTE_ARRIVAL_UNUSABLE = "arrival_gap_too_small_to_rate"
+
+# The notes that mean "the two clocks disagree about this pair". Missing device
+# time is not one of them: there arrival time is all there has ever been, and
+# the rates computed from it are the ones this detector shipped with.
+_CLOCKS_DISAGREE = frozenset(
+    {"device_clock_not_monotonic", "device_interval_exceeds_arrival"}
+)
+
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in metres between two fixes."""
@@ -198,21 +215,24 @@ class KinematicGuard:
         self.gps_speed_error_mps = settings.GUARD_GPS_SPEED_ERROR_MPS
         self.min_satellites = settings.GUARD_MIN_SATELLITES
         self.device_clock_max_lead_s = settings.GUARD_DEVICE_CLOCK_MAX_LEAD_S
+        self.device_clock_max_reorder_s = settings.GUARD_DEVICE_CLOCK_MAX_REORDER_S
+        self.min_reset_gap_s = settings.GUARD_MIN_RESET_GAP_S
 
     def evaluate(self, history: list[dict[str, Any]]) -> GuardVerdict:
-        """Check the most recent packet against its predecessor.
+        """Check the most recent packet against its nearest neighbour in time.
 
         Needs two packets: every check is a rate, and a rate needs an interval.
         The interval comes from the device's own sample clock when both packets
         carry one and it is usable, otherwise from server arrival time -- see
-        `_interval_seconds` for why that distinction is the whole detector.
+        `_interval_seconds` for why that distinction is the whole detector, and
+        `_pair` for which packet the newest one is compared with.
         """
         if len(history) < 2:
             return GuardVerdict(triggered=False)
 
-        prev, curr = history[-2], history[-1]
-
-        dt, time_base, note = self._interval_seconds(prev, curr)
+        # In flight order: `prev` was sampled first. The newest stored packet is
+        # one of the two, but not necessarily `curr`.
+        prev, curr, dt, time_base, note = self._pair(history)
         if dt is None or dt <= 0:
             # Two packets sharing a timestamp make every rate infinite. Decline
             # rather than report a division artefact as an attack.
@@ -324,6 +344,89 @@ class KinematicGuard:
             interval_s=dt,
             interval_note=note,
         )
+
+    def _pair(
+        self, history: list[dict[str, Any]]
+    ) -> tuple[dict, dict, float | None, str | None, str | None]:
+        """Which two samples to rate, in flight order, and the interval between.
+
+        The newest stored packet is always one of the two. Its partner is its
+        nearest neighbour on the device clock within the window. Normally that
+        is the packet stored just before it, which is all this used to consider.
+
+        Under load it is often not. A drone's requests queue for seconds and are
+        stored out of order, so the packet stored just before may have been
+        sampled *later* (the clock seems to run backwards: a reboot?) or long
+        *before* (a straggler, so the device interval outruns arrival: a broken
+        clock?). Both sent the pair to the arrival-time fallback, and packets
+        flushed from one queue arrive milliseconds apart -- the load test of
+        2026-09-22 filed 200 false GPS_SPOOFING incidents against healthy
+        drones that way (reports/06-LOAD-TEST-RESULTS.md). A late packet's
+        sample time is still true; it only has to meet its real neighbour.
+
+        In order of preference:
+
+        1. The sample just before it on the device clock, when the device
+           interval to it is believable. The ordinary case, and a late packet
+           whose predecessor is still in the window.
+        2. The sample just after it, when that is no more than
+           `device_clock_max_reorder_s` ahead: a packet delivered late past
+           everything else in the window.
+        3. Otherwise as before: the predecessor if there was one, else the
+           packet stored just before it, through `_interval_seconds` -- which
+           falls back to arrival time. A clock further behind the whole window
+           than any reorder is a reboot or a counter wrap, and arrival time is
+           the only interval left.
+
+        Neither neighbour weakens the check. A forged position is as far from
+        its real neighbour as from any other; only the divisor changed, and it
+        is now the true flight time between the two samples.
+        """
+        curr = history[-1]
+        stored_prev = history[-2]
+        curr_ms = curr.get("sample_time_ms")
+        if curr_ms is None:
+            return (stored_prev, curr, *self._interval_seconds(stored_prev, curr))
+
+        timed = [p for p in history[:-1] if p.get("sample_time_ms") is not None]
+        before = [p for p in timed if p["sample_time_ms"] < curr_ms]
+        after = [p for p in timed if p["sample_time_ms"] > curr_ms]
+
+        predecessor = None
+        if before:
+            # reversed(): among equal sample times, the copy stored last.
+            predecessor = max(reversed(before), key=lambda p: p["sample_time_ms"])
+            dt, time_base, note = self._interval_seconds(predecessor, curr)
+            if time_base == TIME_BASE_DEVICE:
+                if predecessor is not stored_prev:
+                    note = NOTE_REORDERED
+                return predecessor, curr, dt, time_base, note
+
+        if after:
+            successor = min(after, key=lambda p: p["sample_time_ms"])
+            step = (successor["sample_time_ms"] - curr_ms) / 1000.0
+            if step <= self.device_clock_max_reorder_s:
+                return curr, successor, step, TIME_BASE_DEVICE, NOTE_REORDERED
+
+        partner = predecessor if predecessor is not None else stored_prev
+        dt, time_base, note = self._interval_seconds(partner, curr)
+
+        # Falling back to arrival time assumes the packets arrived far enough
+        # apart for that spacing to mean something. When the clocks disagree
+        # because one packet was simply delivered very late, they did not: it
+        # arrives in the same breath as the packets that overtook it, and
+        # dividing real motion by milliseconds implies hundreds of metres per
+        # second. Measured: one packet in ten held back 60 s produced 40 false
+        # CRITICAL spoof alerts against drones flying clean circles.
+        #
+        # The reason to trust arrival time here was a reset -- a reboot or a
+        # counter wrap. A reset takes time. No flight controller reboots in the
+        # gap between two packets delivered milliseconds apart, so below
+        # GUARD_MIN_RESET_GAP_S this is a late packet, there is no interval
+        # worth dividing by, and the honest answer is no verdict at all.
+        if note in _CLOCKS_DISAGREE and (dt is None or dt < self.min_reset_gap_s):
+            return partner, curr, None, None, NOTE_ARRIVAL_UNUSABLE
+        return partner, curr, dt, time_base, note
 
     def _interval_seconds(
         self, prev: dict, curr: dict

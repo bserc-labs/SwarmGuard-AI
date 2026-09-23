@@ -26,7 +26,7 @@ from models_ml.preprocess import undefined_features
 from services.ai_service import ai_service
 from services.explanation_service import explanation_service
 
-T0 = datetime(2026, 1, 1, 12, 0, 0)
+T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def window(n: int = 10, step_s: float = 1.5, with_created_at: bool = True) -> list[dict]:
