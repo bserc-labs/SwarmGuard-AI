@@ -7,7 +7,7 @@ not be stored, SHAP output that was fabricated, an attack label nothing matched,
 and GPS features that had no live implementation at all.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -37,7 +37,7 @@ def _window(spoof_at: int | None = None, n: int = 10) -> pd.DataFrame:
     The spoof holds reported speed constant while the position jumps, which is
     the signature the gps_speed_error_* features exist to catch.
     """
-    t0 = datetime(2026, 1, 1, 12, 0, 0)
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     lat, lon = 34.0522, -118.2437
     rows = []
     for i in range(n):

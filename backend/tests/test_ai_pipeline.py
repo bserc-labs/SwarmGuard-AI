@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -35,7 +35,7 @@ def test_normal_telemetry_inference():
 
 def _telemetry_window(n=8):
     """A history window. Inference needs one: every feature is a rolling stat."""
-    base = datetime(2026, 1, 1, 12, 0, 0)
+    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     return [
         {
             "drone_id": "drone_test_2",

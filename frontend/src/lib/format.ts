@@ -55,9 +55,10 @@ export function latLon(
 /* ------------------------------------------------------------------ time */
 
 /**
- * The backend emits naive UTC timestamps (datetime.utcnow), which lack an
- * offset. Date parsing would otherwise treat them as local time and shift every
- * displayed timestamp by the viewer's offset, so append Z when absent.
+ * The backend emits UTC timestamps with an offset (every column is
+ * timestamptz). Older records and any caller still sending a bare timestamp
+ * lack one, and Date parsing would treat those as local time and shift them by
+ * the viewer's offset, so append Z when absent.
  */
 export function parseTimestamp(value: string | null | undefined): Date | null {
   if (!value) return null;

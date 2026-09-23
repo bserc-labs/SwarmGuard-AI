@@ -7,7 +7,7 @@ pinned here against the real database.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pydantic
 import pytest
@@ -132,7 +132,7 @@ class TestHistoryWindow:
         drone_id = f"st-{uuid.uuid4().hex[:6]}"
         # Relative to now, not a fixed date: the retention sweep that runs at
         # application startup (main.py) purges telemetry older than three days.
-        base = datetime.utcnow().replace(microsecond=0) - timedelta(minutes=10)
+        base = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
         for i, sample_ms in enumerate((3000, 1500, 4500)):
             db_session.add(
                 models.TelemetryLog(

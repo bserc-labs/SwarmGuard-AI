@@ -15,7 +15,7 @@ none of its packets carry `sample_time_ms`, so all of it exercises the arrival
 fallback and proves that path behaves exactly as it did.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,7 +27,7 @@ from services.kinematic_guard import (
     kinematic_guard,
 )
 
-T0 = datetime(2026, 1, 1, 12, 0, 0)
+T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 LAT, LON = 34.0522, -118.2437
 NOMINAL_STEP = 0.000243  # ~27 m of latitude: 1.5 s at the reported 18 m/s
 JUMP = 0.05  # ~5,560 m of latitude: the simulator's spoof injection

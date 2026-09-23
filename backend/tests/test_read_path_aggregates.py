@@ -15,7 +15,7 @@ incidents.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -80,7 +80,7 @@ def organizations(db_session):
 
 
 def _recent() -> datetime:
-    return datetime.utcnow().replace(microsecond=0) - timedelta(minutes=10)
+    return datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
 
 
 def _packet(org_id: int, drone_id: str, created_at: datetime, seq: int) -> models.TelemetryLog:
@@ -181,7 +181,7 @@ class TestStats:
         self, db_session, client, organizations
     ):
         org = organizations[0]
-        detected = datetime(2026, 9, 21, 10, 0, 0, 250_000)
+        detected = datetime(2026, 9, 21, 10, 0, 0, 250_000, tzinfo=UTC)
         rows = [
             self._incident(org.id, severity="CRITICAL", status="RESOLVED", detection_time=detected,
                            resolution_time=detected + timedelta(seconds=200, milliseconds=500)),

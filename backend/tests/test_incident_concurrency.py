@@ -17,34 +17,21 @@ import time
 import uuid
 
 import pytest
-from sqlalchemy import text
 
 import models
 from services.alert_service import alert_service
 from services.incident_engine import _serialize_incident_writes, incident_engine
 from tests.conftest import TestingSessionLocal, engine
 
-
-def _database_timezone() -> str:
-    try:
-        with engine.connect() as conn:
-            return str(conn.execute(text("SELECT current_setting('TimeZone')")).scalar())
-    except Exception:  # unreachable database: the postgres skip below covers it
-        return "unknown"
-
-
 _IS_POSTGRES = engine.url.drivername.startswith("postgresql")
 
+# These used to be skipped unless the database session was UTC: the suppression
+# cutoff compared a naive `detection_time` against an aware now(), so off UTC
+# the window was wrong by the offset. `detection_time` is timestamptz now
+# (migration m3b4c5d6e7f8) and both sides are absolute, so the session's zone
+# cannot change the answer.
 pytestmark = [
     pytest.mark.skipif(not _IS_POSTGRES, reason="advisory locks exist only on PostgreSQL"),
-    # The suppression cutoff compares a naive `detection_time` (server default
-    # now(), in the session's zone -- models.py) against datetime.utcnow()
-    # (alert_service.is_alert_suppressed). Off UTC the window is wrong by the
-    # offset, which would make these tests fail for a reason that is not theirs.
-    pytest.mark.skipif(
-        _IS_POSTGRES and _database_timezone() not in {"UTC", "Etc/UTC"},
-        reason="suppression compares naive timestamps; needs a UTC database session",
-    ),
 ]
 
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -43,7 +43,7 @@ class TelemetryService:
             drone = models.Drone(
                 drone_id=packet.drone_id,
                 status="ACTIVE",
-                last_seen=datetime.utcnow(),
+                last_seen=datetime.now(UTC),
                 organization_id=organization_id,
             )
             db.add(drone)
@@ -61,7 +61,7 @@ class TelemetryService:
                     ),
                 )
         else:
-            drone.last_seen = datetime.utcnow()
+            drone.last_seen = datetime.now(UTC)
             if drone.status != "ACTIVE":
                 drone.status = "ACTIVE"
         

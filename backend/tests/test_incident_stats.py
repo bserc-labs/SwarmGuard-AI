@@ -12,7 +12,7 @@ is also the proof that the new SQL is portable: `extract("epoch")` must compile
 on SQLite because other SQLite-backed modules reach this route.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -84,7 +84,7 @@ def seed(**fields) -> models.Incident:
 
 def at(hour: int, minute: int = 0, second: int = 0) -> datetime:
     # Whole seconds: SQLite's epoch extraction is integral.
-    return datetime(2026, 9, 21, hour, minute, second)
+    return datetime(2026, 9, 21, hour, minute, second, tzinfo=UTC)
 
 
 def test_the_body_matches_the_old_python_aggregation(client):

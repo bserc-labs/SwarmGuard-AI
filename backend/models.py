@@ -41,8 +41,8 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String, index=True, nullable=True)
     slug: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String, default="ACTIVE", nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 
 class User(Base):
     __tablename__ = "users"
@@ -58,7 +58,7 @@ class User(Base):
     # all of a user's outstanding sessions without needing a blocklist.
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
     organization: Mapped["Organization"] = relationship()
 
@@ -98,7 +98,7 @@ class TelemetryLog(Base):
     # created_at. BigInteger because a device may report epoch milliseconds,
     # which overflow a 32-bit Integer.
     sample_time_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, primary_key=True, server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, server_default=func.now(), index=True)
 
 
 class Incident(Base):
@@ -124,10 +124,10 @@ class Incident(Base):
     status: Mapped[str] = mapped_column(String, default="NEW", index=True, nullable=True)  # NEW, OPEN, ACKNOWLEDGED, INVESTIGATING, CONTAINED, RESOLVED, CLOSED
     assigned_analyst: Mapped[str | None] = mapped_column(String, nullable=True)
     
-    detection_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
-    resolution_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
+    detection_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=True)
+    resolution_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 
 
 class Drone(Base):
@@ -147,7 +147,7 @@ class Drone(Base):
     # that identifier.
     drone_id: Mapped[str] = mapped_column(String, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String, default="ACTIVE", nullable=True)  # ACTIVE, COMPROMISED, GROUNDED, RETURNING
-    last_seen: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
     last_command: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
@@ -161,9 +161,9 @@ class CommandRequest(Base):
     command_type: Mapped[str] = mapped_column(String, nullable=True)  # RETURN_TO_HOME, EMERGENCY_LAND, SWITCH_SAFE_MODE, KILL_MOTOR, RESUME_MISSION
     reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="PENDING", nullable=True)  # PENDING, APPROVED, REJECTED
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AuditLog(Base):
@@ -196,7 +196,7 @@ class AuditLog(Base):
     # Rows in this table are append-only at the database level: a trigger
     # rejects UPDATE outright and permits DELETE only for a retention pass that
     # sets `swarmguard.audit_maintenance` on its session first.
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=True)
 
 
 class SystemSettings(Base):
@@ -228,7 +228,7 @@ class GeofenceZone(Base):
     coordinates: Mapped[Any] = mapped_column(JSON, nullable=True)  # List of [lat, lng] for POLYGON, or {"center": [lat, lng], "radius": int} for CIRCLE
     severity: Mapped[str] = mapped_column(String, default="CRITICAL", nullable=True)  # WARNING, CRITICAL
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
 
 class DeviceCredential(Base):
@@ -247,8 +247,8 @@ class DeviceCredential(Base):
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     created_by: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String, nullable=True)
 

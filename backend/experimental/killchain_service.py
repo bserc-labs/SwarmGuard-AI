@@ -5,7 +5,7 @@ Sprint 7 CRITICAL: This engine evaluates threat conditions but does NOT
 execute physical drone commands. All actions are recorded as PENDING
 CommandRequests for human review.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
@@ -91,7 +91,7 @@ class AutonomousKillChainEngine:
                     "action": mitigation_action,
                     "reason": reason,
                     "status": "PENDING_APPROVAL",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(UTC).isoformat()
                 },
                 organization_id,
             )

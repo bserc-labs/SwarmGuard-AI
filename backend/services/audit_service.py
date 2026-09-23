@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,7 +20,7 @@ def purge_expired_audit_logs(db: Session, retention_days: int) -> int:
     """
     if retention_days <= 0:
         return 0
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     db.execute(text("SET LOCAL swarmguard.audit_maintenance = 'on'"))
     result = db.execute(
         text("DELETE FROM audit_logs WHERE created_at < :cutoff"), {"cutoff": cutoff}

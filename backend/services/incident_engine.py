@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -379,7 +379,7 @@ class IncidentEngine:
                 # Re-evaluate priority
                 incident.priority = priority_service.calculate_priority(incident.threat_score, incident.anomaly_score, 1)
 
-            incident.updated_at = datetime.utcnow()
+            incident.updated_at = datetime.now(UTC)
 
         # Decided before the commit: SessionLocal expires attributes on commit,
         # so reading them afterwards would cost a reload per comparison.

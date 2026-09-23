@@ -2,7 +2,10 @@
 
 **Base URL:** `/` (Development: `http://localhost:8000`, Production: `/api/`)  
 **Authentication:** Bearer JWT (`Authorization: Bearer <token>`). `/telemetry/ingest`
-additionally requires an `x-drone-api-key` header — both, not either.
+additionally requires an `x-drone-api-key` header — both, not either.  
+**Timestamps:** every timestamp in a response is UTC and says so, with the ISO
+8601 zone designator (`2026-09-22T17:13:19.336042Z`). A request that sends one
+without a zone is read as UTC.
 
 > **The generated OpenAPI schema at `/docs` is authoritative.** It is produced
 > from the routers themselves and cannot drift. This file is a hand-written

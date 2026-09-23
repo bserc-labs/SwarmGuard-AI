@@ -8,7 +8,7 @@ against the real test hypertable, and the policy's own job is run to show it
 drops the old and keeps the new.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -83,7 +83,7 @@ class TestThePolicyItself:
         )
 
     def test_it_drops_a_chunk_that_has_aged_out_and_keeps_the_rest(self, db, organization):
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         db.add_all([self._row(organization, now - timedelta(days=10)), self._row(organization, now)])
         db.commit()
         assert db.execute(text("SELECT count(*) FROM telemetry_logs WHERE drone_id = :d"), {"d": DRONE}).scalar() == 2

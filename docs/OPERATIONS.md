@@ -301,6 +301,20 @@ deploys and passes; a release whose frontend image was not nginx failed its
 smoke test, was rolled back, the site answered 200 afterwards, and the bad tag
 was never recorded as current.
 
+**The timestamptz migration (`m3b4c5d6e7f8`) takes a lock on the ingest
+table.** It converts all 17 datetime columns to `timestamp with time zone`. No
+table is rewritten — PostgreSQL 12+ converts in place under a UTC session, so
+`telemetry_logs` keeps its chunks, its rows and its retention policy — but
+**every index on a converted column is rebuilt**, and that holds an exclusive
+lock: no ingest, no reads of those tables, until it finishes. Measured on 122k
+telemetry rows (38 MB, one chunk, 1,156 incidents): under two seconds, nine
+indexes rebuilt including the chunk's own. Time grows with index size, so on a
+table holding three days of packets at the ingest limit, deploy it in a window
+where a pause in ingest is acceptable, or rebuild the indexes concurrently by
+hand first. The migration refuses to run at all where the server's default
+`TimeZone` is not UTC: there `now()` wrote local time, and reading it as UTC
+would shift it silently.
+
 For a self-signed development certificate set `SWARMGUARD_SMOKE_INSECURE=1`;
 leave it unset on a server. To deploy from a different registry set
 `SWARMGUARD_IMAGE_PREFIX`.

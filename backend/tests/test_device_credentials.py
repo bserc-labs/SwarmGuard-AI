@@ -10,7 +10,7 @@ until it is deliberately turned off.
 
 import inspect
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -139,7 +139,7 @@ class TestAuthenticate:
         """A write per packet at 50 packets/s would be its own load problem."""
         credential, key = dc.issue(db, organization_id=org.id, drone_id="D1", issued_by="t", label=None)
         db.commit()
-        t0 = datetime(2026, 9, 22, 12, 0, 0)
+        t0 = datetime(2026, 9, 22, 12, 0, 0, tzinfo=UTC)
         _auth(db, key, org.id, now=t0)
         assert credential.last_used_at == t0
         _auth(db, key, org.id, now=t0 + timedelta(seconds=30))

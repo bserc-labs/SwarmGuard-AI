@@ -6,7 +6,7 @@ import argparse
 import os
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import requests
 
@@ -68,7 +68,7 @@ def generate_telemetry(drone_id: str, is_anomaly: bool = False, attack_mode: str
         "speed": round(speed, 2),
         "battery": round(battery, 2),
         "packet_sequence": int(time.time()),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now(UTC).isoformat()
     }
 
 import math

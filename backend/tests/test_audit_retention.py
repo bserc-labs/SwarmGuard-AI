@@ -6,7 +6,7 @@ the one place in the application that sets the flag, for one statement, and
 only when a retention is configured.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -24,7 +24,7 @@ def org_with_old_and_new_rows():
     org = models.Organization(name=ORG_NAME, slug="retention-test-org")
     db.add(org)
     db.commit()
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     rows = [
         models.AuditLog(organization_id=org.id, actor="t", action="OLD", resource="x", created_at=now - timedelta(days=400)),
         models.AuditLog(organization_id=org.id, actor="t", action="OLD", resource="x", created_at=now - timedelta(days=366)),

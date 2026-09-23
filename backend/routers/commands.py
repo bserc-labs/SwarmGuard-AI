@@ -4,7 +4,7 @@ Secure Command Framework — DRY-RUN / OBSERVER MODE
 Sprint 7: This module receives, validates, and records command requests.
 It does NOT transmit any physical drone commands.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -128,7 +128,7 @@ def approve_command(
     previous_state = cmd.status
     cmd.status = "APPROVED" if approval.approved else "REJECTED"
     cmd.approved_by = tenant.username
-    cmd.approved_at = datetime.utcnow()
+    cmd.approved_at = datetime.now(UTC)
 
     audit_service.log_from_context(
         db=db, tenant=tenant,

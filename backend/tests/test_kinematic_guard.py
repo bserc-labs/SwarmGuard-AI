@@ -7,13 +7,13 @@ typical behaviour.
 """
 
 import math
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from services.kinematic_guard import KinematicGuard, haversine_m, kinematic_guard
 
-T0 = datetime(2026, 1, 1, 12, 0, 0)
+T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def packet(seq, lat, lon, alt=150.0, speed=18.0, sats=12, dt=1.5):

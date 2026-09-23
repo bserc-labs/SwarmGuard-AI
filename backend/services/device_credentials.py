@@ -30,7 +30,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -91,7 +91,7 @@ def authenticate(
             return DeviceAuth(False, reason=REVOKED, credential_id=credential.id)
         if credential.drone_id != drone_id:
             return DeviceAuth(False, reason=WRONG_DRONE, credential_id=credential.id)
-        moment = now or datetime.utcnow()
+        moment = now or datetime.now(UTC)
         if credential.last_used_at is None or moment - credential.last_used_at >= LAST_USED_RESOLUTION:
             # Staged on the request's session; ingest commits it with the packet.
             credential.last_used_at = moment
@@ -125,6 +125,6 @@ def revoke(credential: DeviceCredential, *, revoked_by: str, now: datetime | Non
     """Revoke; False if it already was (revocation is not re-dated)."""
     if credential.revoked_at is not None:
         return False
-    credential.revoked_at = now or datetime.utcnow()
+    credential.revoked_at = now or datetime.now(UTC)
     credential.revoked_by = revoked_by
     return True

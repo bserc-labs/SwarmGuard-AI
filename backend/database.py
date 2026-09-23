@@ -51,6 +51,12 @@ if DATABASE_URL.startswith("sqlite"):
 # invisible.
 engine = create_engine(
     DATABASE_URL,
+    # Every timestamp column is timestamptz (migration m3b4c5d6e7f8). The stored
+    # instant does not depend on this, but two things do: the offset values come
+    # back with, and how a naive datetime handed to the driver is read. Pinning
+    # the session to UTC makes both independent of the server's configured zone,
+    # so a database whose TimeZone was changed cannot quietly shift either.
+    connect_args={"options": "-c timezone=utc"},
     pool_pre_ping=True,
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,

@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -145,7 +145,7 @@ def run_training_pipeline():
     version = settings.MODEL_VERSION
     metadata = {
         "model_version": version,
-        "training_timestamp": datetime.utcnow().isoformat(),
+        "training_timestamp": datetime.now(UTC).isoformat(),
         "dataset_source": settings.DATASET_PATH,
         "feature_list": feature_cols,
         "algorithm": best_model_name,

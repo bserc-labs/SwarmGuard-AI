@@ -4,7 +4,7 @@ import re
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -435,7 +435,7 @@ def system_health_details(
             "silent_drones": silent_drones,
             "total_incidents": total_incidents,
             "critical_incidents": critical_incidents,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }
     except Exception as e:
         logger.error(f"Health details query error: {e}")

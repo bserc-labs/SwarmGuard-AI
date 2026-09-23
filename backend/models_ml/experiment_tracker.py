@@ -1,7 +1,7 @@
 import json
 import os
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 
 from config import get_settings
 from utils.logger import logger
@@ -34,11 +34,11 @@ class ExperimentTracker:
         model_version: str,
         execution_time_seconds: float
     ):
-        experiment_id = f"EXP-{datetime.utcnow().strftime('%Y%md%H%M%S')}"
+        experiment_id = f"EXP-{datetime.now(UTC).strftime('%Y%md%H%M%S')}"
         
         record = {
             "experiment_id": experiment_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "git_commit": get_git_commit(),
             "execution_time_seconds": execution_time_seconds,
             "dataset_source": dataset_source,
