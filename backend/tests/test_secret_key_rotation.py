@@ -12,8 +12,9 @@ import subprocess
 from datetime import timedelta
 from pathlib import Path
 
+import jwt
 import pytest
-from jose import JWTError, jwt
+from jwt import InvalidTokenError
 from pydantic import ValidationError
 
 from config import Settings
@@ -43,7 +44,7 @@ class TestDuringARotation:
     def test_new_tokens_are_signed_with_the_new_key_only(self, rotating):
         token = auth_service.create_access_token({"sub": "alice"})
         assert jwt.decode(token, NEW, algorithms=[auth_service.ALGORITHM])["sub"] == "alice"
-        with pytest.raises(JWTError):
+        with pytest.raises(InvalidTokenError):
             jwt.decode(token, OLD, algorithms=[auth_service.ALGORITHM])
 
     def test_a_key_that_is_neither_still_verifies_nothing(self, rotating):
