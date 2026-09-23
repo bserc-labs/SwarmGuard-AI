@@ -193,6 +193,29 @@ class Settings(BaseSettings):
     # 30 s default, which the client times out before and so hides the cause.
     DB_POOL_TIMEOUT: int = 10
 
+    # --- Admission: never ask the pool for more than it has ---------------------
+    #
+    # The load test of 2026-09-22 stopped the API at 100 packets/second: all 60
+    # connections sat "idle in transaction" after the authentication lookup,
+    # each request waiting for a worker thread to run its endpoint, while every
+    # worker thread held a newer request waiting for a connection. Only the
+    # 10 s pool timeout broke it, and it re-formed at once. Nothing bounded how
+    # many requests could hold a connection. Now two things do:
+    #
+    # HTTP requests inside the application at once. Each holds at most one
+    # request-session connection. Beyond this, requests wait at the door holding
+    # nothing, and after HTTP_ADMISSION_WAIT_S get 503 with Retry-After.
+    HTTP_MAX_IN_FLIGHT: int = 40
+    HTTP_ADMISSION_WAIT_S: float = 5.0
+    # Threads behind asyncio.to_thread: detection, MAVLink persistence, the
+    # background loops, the readiness probe. Each holds at most one connection.
+    # Python's default is min(32, CPUs + 4), which follows the host, not the pool.
+    BACKGROUND_THREADS: int = 12
+    # Connections left for work outside both bounds: WebSocket authentication,
+    # and slack. HTTP_MAX_IN_FLIGHT + BACKGROUND_THREADS + this must fit in
+    # DB_POOL_SIZE + DB_MAX_OVERFLOW; startup refuses otherwise.
+    DB_POOL_RESERVE: int = 4
+
     # --- CORS ----------------------------------------------------------------
     #
     # Comma-separated origins allowed to call the API from a browser with
@@ -372,6 +395,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
                 "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _connections_fit_the_pool(self) -> "Settings":
+        """Demand that can never exceed the pool cannot deadlock on it."""
+        demand = self.HTTP_MAX_IN_FLIGHT + self.BACKGROUND_THREADS + self.DB_POOL_RESERVE
+        pool = self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+        if min(self.HTTP_MAX_IN_FLIGHT, self.BACKGROUND_THREADS) < 1:
+            raise ValueError("HTTP_MAX_IN_FLIGHT and BACKGROUND_THREADS must each be at least 1.")
+        if demand > pool:
+            raise ValueError(
+                f"HTTP_MAX_IN_FLIGHT ({self.HTTP_MAX_IN_FLIGHT}) + BACKGROUND_THREADS "
+                f"({self.BACKGROUND_THREADS}) + DB_POOL_RESERVE ({self.DB_POOL_RESERVE}) = {demand} "
+                f"connections, but the pool holds DB_POOL_SIZE + DB_MAX_OVERFLOW = {pool}. "
+                "Requests would wait on the pool while holding it, which deadlocks. "
+                "Lower the first two or raise the pool (and PostgreSQL's max_connections)."
             )
         return self
 

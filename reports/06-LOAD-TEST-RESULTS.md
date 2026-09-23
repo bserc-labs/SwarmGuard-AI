@@ -86,8 +86,11 @@ requests left unanswered for 10 s (308).
   operations guide.
 - **Memory never moved**: 204 to 234 MiB under every load, a quarter of the
   1 GiB limit.
-- The 40 server errors at 400/s could not be attributed: the backend's logs
-  were lost when the override container was replaced. The rerun keeps them.
+- The 40 server errors at 400/s are explained in section 5: the API was
+  deadlocking on its own connection pool. They are pool checkout timeouts.
+- "Sustains 200/s" means for the 20 s this run offered it. Section 5 offers
+  200/s for a minute, and the queue grows: just under 200/s is the edge, not
+  comfortable headroom.
 
 ## 3. What broke: false GPS-spoofing alerts under overload
 
@@ -134,7 +137,7 @@ The guard just compares it with the wrong neighbour.
 The 40 signal-loss incidents at the end of the run are correct: the generator
 stops mid-flight, and those drones did go silent for 30 s.
 
-Status: **open in this commit; fixed in the next**, with the rerun recorded here.
+Status: **open in this commit; fixed in the next**, with the rerun in section 5.
 
 ## 4. The generator, too, was wrong once
 
@@ -149,6 +152,70 @@ proving revocation is immediate. The tool now measures its own schedule lag,
 divides by the real send window, drains every request before revoking, and
 records listener errors. That run's results were discarded.
 
+## 5. After the fixes
+
+Two commits followed this measurement: the guard now rates a late packet
+against its nearest neighbour on the device clock, and the API bounds how many
+requests can hold a database connection. Same stack, same fleet, same phases.
+Raw results: `reports/loadtest/2026-09-22-capacity-rerun.json`.
+
+| Offered | Result | Latency p50 / p95 | False spoof incidents | Pool in use / overflow | Memory |
+|---|---|---|---|---|---|
+| 100/s | 2,000 / 2,000 accepted | 5 / 18 ms | 0 | 1 / 0 | 216 MiB |
+| 200/s | 4,000 / 4,000 accepted | 6 ms / 985 ms | 0 | 39 / 20 | 222 MiB |
+| 400/s | 8,000 / 8,000 accepted | 6.2 s / 22.5 s | 0 | 30 / 18 | 233 MiB |
+| 800/s | 16,000 / 16,000 accepted | 41 s / 80 s | 23 | 38 / 19 | 237 MiB |
+
+**No server errors, no pool timeouts, no detection errors, and every request
+answered.** The 40 unexplained 500s of section 2 were the deadlock below.
+
+**False spoofing incidents fell from 200 to 23, and none at all below 800/s.**
+The 23 that remain are all the large-skew kind: 19 report 10 s or more of
+flight between their two samples, 4 carry only the speed mismatch. The swapped
+neighbours and the seconds-late stragglers — 117 of the original 200 — are
+gone.
+
+### What the rerun found first: the API deadlocked on its own pool
+
+Rerunning this test stopped the API at **100 packets/second**, half the rate
+section 2 had just called comfortable, and it stayed stopped: waves of
+`QueuePool limit of size 20 overflow 40 reached` ten seconds apart for sixteen
+minutes, readiness failing, the heartbeat monitor unable to run.
+
+Sampling `pg_stat_activity` during a reproduction named it. All 60 connections
+sat **idle in transaction** on the authentication query. A request runs in
+several worker-thread hops — user lookup, permission check, endpoint — and the
+lookup's transaction holds its connection while the request waits for a thread
+for the next hop. The 40 threads were meanwhile running newer requests, each
+waiting for a connection. Each side held what the other needed; the 10 s pool
+timeout broke it by failing requests, and it re-formed at once.
+
+The same minute, offered to each build in turn — 200/s for 60 s, same fleet,
+same data:
+
+| | before (this commit's code) | after (both fixes) |
+|---|---|---|
+| packets accepted | 206 | 11,935 |
+| pool timeouts | 631, over 81 s | 0 |
+| readiness checks failed | 6 | 0 |
+| shed with 503 | — | 63 |
+| outcome | stopped answering; the generator gave up | finished the minute |
+
+**Sustained 200/s is past this deployment's edge.** The fixed build answers
+everything, but the queue grows to a 7 s median and 63 requests are shed. The
+clean 20 s at 200/s in section 2 was a burst, not capacity. One process on two
+cores handles roughly 200 packets/second, which is four times the configured
+ingest limit.
+
+### What is still open
+
+At 800/s the backlog reaches 40–80 s, and delivery skew that large is beyond
+what the guard can tell from a broken clock: its tolerance is 10 s either way
+(`GUARD_DEVICE_CLOCK_MAX_LEAD_S`, `GUARD_DEVICE_CLOCK_MAX_REORDER_S`). That is
+where the 23 remaining false incidents come from. It is 16 times the configured
+per-uplink limit, and the answer is not a wider tolerance — it is not letting
+the queue grow that far. See the recommendations.
+
 ## Recommendations
 
 1. **Size fleets below the ingest limit per uplink**, or raise
@@ -156,5 +223,16 @@ records listener errors. That run's results were discarded.
 2. **Key the ingest limit on the device credential, not the client address**,
    now that per-device keys exist: one drone could not then starve its
    neighbours behind the same uplink. A behaviour change; not made here.
-3. **Leave the pool as it is.** It was never the constraint.
-4. **Fix the reorder false positive** — the next commit.
+3. **Leave the pool as it is.** Its size was never the constraint; what it
+   lacked was a bound on how many requests could hold it, which admission now
+   provides.
+4. **Fix the reorder false positive** — done, section 5.
+5. **Shed load before the queue reaches the guard's tolerance.** Admission
+   bounds work inside the application, but at 800/s requests pile up in front
+   of it, in the socket and the event loop, and packets arrive 40–80 s late.
+   Either run more workers (needs Prometheus multiprocess mode) or refuse
+   telemetry the server cannot reach in time. A packet whose detection cannot
+   run for a minute is not worth the alert it might raise.
+6. **Plan for about 200 packets/second per process.** Four times the ingest
+   limit, so one process serves a fleet behind several uplinks, and the number
+   to divide when sizing for more.

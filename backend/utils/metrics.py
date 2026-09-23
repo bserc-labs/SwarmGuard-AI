@@ -48,6 +48,14 @@ HTTP_LATENCY = Histogram(
 UNMATCHED_ROUTE = "unmatched"
 
 # --- ingest -------------------------------------------------------------------------------
+HTTP_IN_FLIGHT = Gauge(
+    "swarmguard_http_in_flight",
+    "HTTP requests admitted into the application and not yet finished (middleware/admission.py).",
+)
+HTTP_ADMISSION_REJECTED = Counter(
+    "swarmguard_http_admission_rejected_total",
+    "Requests answered 503 because no admission slot came free within HTTP_ADMISSION_WAIT_S.",
+)
 INGEST = Counter(
     "swarmguard_telemetry_ingest_total",
     "Telemetry packets by outcome: accepted, rejected_device_key, rejected_bad_request, error.",

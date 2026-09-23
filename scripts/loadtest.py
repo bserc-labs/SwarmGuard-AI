@@ -103,6 +103,7 @@ class Drone:
     radius_m: float
     speed_mps: float
     t0: float
+    client: httpx.AsyncClient
     seq: int = 0
 
     def packet(self, now: float) -> dict:
@@ -167,8 +168,13 @@ async def run(args) -> dict:
     if args.insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    limits = httpx.Limits(max_connections=args.connections, max_keepalive_connections=args.connections)
-    client = httpx.AsyncClient(verify=ctx, limits=limits, timeout=10.0)
+    # One small connection pool per drone, as real drones each hold their own
+    # link. A single shared pool of hundreds of connections costs httpcore time
+    # quadratic in its size on every request; a rerun stalled on exactly that,
+    # the generator at full CPU while the server sat idle.
+    per_drone = max(1, math.ceil(args.connections / args.drones))
+    drone_limits = httpx.Limits(max_connections=per_drone, max_keepalive_connections=per_drone)
+    client = httpx.AsyncClient(verify=ctx, limits=httpx.Limits(max_connections=10), timeout=10.0)
     user, password = credentials()
 
     res = await client.post(f"{args.api}/auth/login", data={"username": user, "password": password})
@@ -185,7 +191,8 @@ async def run(args) -> dict:
         issued.raise_for_status()
         body = issued.json()
         fleet.append(Drone(drone_id, body["key"], body["id"], 34.05 + 0.01 * (i % 10), -118.25 + 0.01 * (i // 10),
-                           radius_m=300.0, speed_mps=15.0, t0=now))
+                           radius_m=300.0, speed_mps=15.0, t0=now,
+                           client=httpx.AsyncClient(verify=ctx, limits=drone_limits, timeout=10.0)))
     print(f"fleet: {len(fleet)} drones, each with its own key", flush=True)
 
     sent_at: dict[tuple[str, int], float] = {}
@@ -250,7 +257,7 @@ async def run(args) -> dict:
         t = time.monotonic()
         sent_at[(drone.drone_id, packet["packet_sequence"])] = t
         try:
-            resp = await client.post(f"{args.api}/telemetry/ingest", json=packet,
+            resp = await drone.client.post(f"{args.api}/telemetry/ingest", json=packet,
                                      headers={**auth, "X-Drone-API-Key": drone.key})
             code = str(resp.status_code)
         except httpx.HTTPError as exc:
@@ -313,6 +320,7 @@ async def run(args) -> dict:
     await asyncio.gather(*listeners, sampling, return_exceptions=True)
     for drone in fleet:
         await client.delete(f"{args.api}/drones/{drone.drone_id}/credentials/{drone.credential_id}", headers=auth)
+        await drone.client.aclose()
     await client.aclose()
 
     report = {"api": args.api, "drones": args.drones, "listeners": args.listeners,
@@ -352,7 +360,7 @@ def main() -> None:
     ap.add_argument("--phases", default="10@10:warm-up,40@60:under-cap,50@60:at-cap,100@20:over-cap")
     ap.add_argument("--drones", type=int, default=20)
     ap.add_argument("--listeners", type=int, default=10)
-    ap.add_argument("--connections", type=int, default=100)
+    ap.add_argument("--connections", type=int, default=100, help="connections across the fleet, split evenly per drone")
     ap.add_argument("--container", default="swarmguard-backend", help="docker container to sample memory from; '' to skip")
     ap.add_argument("--insecure", action="store_true", help="skip TLS verification (self-signed development certificate)")
     ap.add_argument("--out", default="")

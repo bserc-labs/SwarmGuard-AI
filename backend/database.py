@@ -38,6 +38,13 @@ if DATABASE_URL.startswith("sqlite"):
 # DB_POOL_SIZE/DB_MAX_OVERFLOW together with max_connections if running
 # several workers.
 #
+# Size alone does not keep the pool from running dry. A request holds its
+# connection across worker-thread hops, so enough requests at once can hold
+# every connection while waiting for threads that are busy waiting for one --
+# the load test of 2026-09-22 stopped the API at 100 packets/second that way.
+# middleware/admission.py and Settings._connections_fit_the_pool bound total
+# demand below the pool so a checkout never waits.
+#
 # pool_timeout is short on purpose: under genuine saturation, failing fast
 # surfaces the problem as an error the caller can retry, rather than holding a
 # request open for 30 s until the client gives up first and the cause stays

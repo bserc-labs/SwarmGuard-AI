@@ -354,6 +354,10 @@ cd frontend && npm run test
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
 | `INGEST_RATE_LIMIT` | `50/second` | Telemetry packets per client address. Every drone behind one uplink shares it; see [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md) |
+| `HTTP_MAX_IN_FLIGHT` | `40` | Requests inside the API at once; the rest wait at the door ([Admission](docs/OPERATIONS.md#metrics)) |
+| `HTTP_ADMISSION_WAIT_S` | `5` | How long a request waits for a slot before a 503 with `Retry-After` |
+| `BACKGROUND_THREADS` | `12` | Threads for detection, MAVLink persistence and background loops |
+| `DB_POOL_RESERVE` | `4` | Connections kept outside both bounds. The three above plus this must fit in `DB_POOL_SIZE + DB_MAX_OVERFLOW`, or the API refuses to start |
 | `SWARMGUARD_TAG` / `SWARMGUARD_IMAGE_PREFIX` | — / `ghcr.io/bserc-labs` | With `docker-compose.prod.yml`: which published image to run. `scripts/deploy.sh` sets the tag; see [`docs/OPERATIONS.md`](docs/OPERATIONS.md#releases-and-deploys) |
 | `BACKUP_INTERVAL_S` / `BACKUP_RETAIN_DAYS` | `21600` / `14` | Dump every 6 h (the RPO), keep 14 days. Restore and rehearsal: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#backups-and-restore) |
 | `SWARMGUARD_BACKUP_DIR` | `backups` volume | Where dumps go. Point it at a directory that is copied off the host |

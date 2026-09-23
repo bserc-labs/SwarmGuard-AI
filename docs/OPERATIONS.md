@@ -158,6 +158,7 @@ to require a bearer token on top.
 | `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
+| `swarmguard_http_in_flight`, `swarmguard_http_admission_rejected_total` | requests inside the API against `HTTP_MAX_IN_FLIGHT`, and how many were turned away with 503 (see Admission, below) |
 | `swarmguard_websocket_connections`, `swarmguard_websocket_broadcasts_total{path}`, `swarmguard_websocket_broadcast_duration_seconds` | live sockets, and how messages reached them (published via Redis, local, or fallback after a failed publish) |
 | `swarmguard_background_loop_ticks_total{loop}`, `_failures_total`, `_restarts_total`, `_seconds_since_tick`, `_stalled`, `_alive` | the supervised loops; alert on `stalled == 1` or `alive == 0` |
 
@@ -172,7 +173,23 @@ swarmguard_background_loop_stalled == 1                      # heartbeat monitor
 swarmguard_db_pool_checked_out / swarmguard_db_pool_max > 0.8
 rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
+rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
 ```
+
+**Admission.** At most `HTTP_MAX_IN_FLIGHT` (40) requests are inside the API at
+once; the rest wait at the door, and one that waits `HTTP_ADMISSION_WAIT_S` (5 s)
+gets **503 with `Retry-After: 1`**. That is the API shedding load it cannot
+take, not a fault: back off and retry, or add capacity. `/health`, `/metrics`
+and WebSockets are never queued.
+
+The limit exists because without it the API deadlocked on its own connection
+pool at 100 packets/second (load test of 2026-09-22): a request holds its
+connection across worker-thread hops, so a burst larger than the pool held
+every connection while the threads waited for one. Admitted requests plus
+`BACKGROUND_THREADS` (12, everything behind `asyncio.to_thread`) plus
+`DB_POOL_RESERVE` (4) must fit in `DB_POOL_SIZE + DB_MAX_OVERFLOW` (60); the API
+refuses to start otherwise. To take more load, raise the pool and PostgreSQL's
+`max_connections` first, then the limit.
 
 **A Prometheus to look at them.** `docker compose --profile observability up -d`
 adds one, loopback-only at `http://localhost:9090`, scraping the API inside the

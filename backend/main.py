@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -17,6 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import models
 from config import get_settings
 from database import SessionLocal, engine
+from middleware.admission import AdmissionLimit
 from routers import (
     ai,
     ai_explain,
@@ -97,6 +99,16 @@ init_error_tracking(
 app = FastAPI(title="SwarmGuard AI API", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Bounds how many requests can hold a database connection, which is what kept
+# the API out of the pool deadlock the load test found (middleware/admission.py).
+# Registered before CORS so it sits inside it: a 503 still carries CORS headers.
+app.add_middleware(
+    AdmissionLimit,
+    limit=_settings.HTTP_MAX_IN_FLIGHT,
+    wait_s=_settings.HTTP_ADMISSION_WAIT_S,
+    exempt_paths=("/health", "/metrics"),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -262,6 +274,15 @@ SHUTDOWN_GRACE_S = 10.0
 
 async def startup() -> None:
     logger.info("Initializing SwarmGuard AI Backend...")
+    # Everything behind asyncio.to_thread -- detection, MAVLink persistence, the
+    # background loops -- runs here, each job holding at most one connection.
+    # Sized from settings so it fits the pool (Settings._connections_fit_the_pool);
+    # Python's default follows the host's CPU count instead.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=get_settings().BACKGROUND_THREADS, thread_name_prefix="swarmguard-bg"
+        )
+    )
     # Migrations are applied by the migrate job, never here. Fail now, with the
     # reason, rather than on whichever request first meets a missing column.
     # In a worker thread: it is a blocking database call on the event loop.
