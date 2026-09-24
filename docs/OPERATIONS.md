@@ -728,6 +728,23 @@ pip install git-filter-repo
 scripts/purge-db-history.sh https://github.com/bserc-labs/SwarmGuard-AI.git /tmp/sg-purged
 ```
 
+Rotate the listed accounts on every server that has them — production,
+staging and development — with `backend/scripts/rotate_passwords.py`, run in
+that server's backend container. It sets a random password on each, ends
+every session they hold, audits it, and writes `username<TAB>password` to
+stdout only (so redirect it into a file only you can read):
+
+```bash
+docker compose exec -T backend python scripts/rotate_passwords.py --dry-run \
+    admin analyst commander observer operator          # which exist here; changes nothing
+(umask 077; docker compose exec -T backend python scripts/rotate_passwords.py \
+    admin analyst commander observer operator > rotated-$(hostname).tsv)
+```
+
+Hand each password to its owner over a channel you trust, then delete the
+file. If the rotated `admin` is the one `secrets/admin_password` holds, update
+that file too.
+
 The force-push that follows changes every commit id, so it is the owner's
 call, made with everyone who has a clone. Rotate the listed accounts first —
 rewriting history does not un-leak a hash someone has already cloned — then
