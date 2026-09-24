@@ -154,7 +154,7 @@ to require a bearer token on top.
 | Series | Answers |
 |---|---|
 | `swarmguard_http_requests_total{method,route,status}`, `swarmguard_http_request_duration_seconds` | request rate, error rate and latency per route *template* (`/incidents/{id}`, never a raw path) |
-| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as bad requests, or errored |
+| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as stale (`rejected_stale`: answered 503, see Stale telemetry, below), rejected as bad requests, or errored |
 | `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
@@ -176,7 +176,24 @@ rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
 rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
 rate(swarmguard_guard_declined_total[5m]) > 0               # the detector cannot rate what it is being sent
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_stale"}[5m]) > 0   # the link or the API is behind; the sender is being told
 ```
+
+### Stale telemetry
+
+A packet whose device clock is more than `GUARD_DEVICE_CLOCK_MAX_REORDER_S`
+behind packets the same drone has already delivered, and which a reset of that
+clock cannot explain, is answered **503 with `Retry-After: 1`** and not stored.
+It is exactly the packet the kinematic guard would otherwise have declined to
+rate (`services/ingest_staleness.py` asks the guard's own question), so under
+overload the backlog shows up as 503s at the sender instead of as a detector
+that has quietly stopped rating. The sender should send current samples and
+drop the refused one; resending it only makes it staler.
+
+A reboot is not refused: a restarted clock counts up from zero, so it never
+shows more uptime than has passed since the drone's last delivery. Set
+`INGEST_REJECT_STALE=false` to store everything, as before, and let the guard
+decline instead.
 
 **Admission.** At most `HTTP_MAX_IN_FLIGHT` (40) requests are inside the API at
 once; the rest wait at the door, and one that waits `HTTP_ADMISSION_WAIT_S` (5 s)

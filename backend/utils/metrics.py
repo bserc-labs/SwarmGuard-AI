@@ -75,7 +75,8 @@ HTTP_ADMISSION_REJECTED = Counter(
 )
 INGEST = Counter(
     "swarmguard_telemetry_ingest_total",
-    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_bad_request, error.",
+    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_stale, "
+    "rejected_bad_request, error.",
     ["outcome"],
 )
 

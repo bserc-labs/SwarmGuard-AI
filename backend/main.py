@@ -123,9 +123,13 @@ app.add_middleware(
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request, exc):
+    # The exception's headers are passed on. They used to be dropped, which
+    # took Retry-After off every 503 raised in a route and WWW-Authenticate off
+    # every 401.
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": "HTTP Exception", "detail": str(exc.detail)}
+        content={"error": "HTTP Exception", "detail": str(exc.detail)},
+        headers=getattr(exc, "headers", None),
     )
 
 @app.exception_handler(RequestValidationError)

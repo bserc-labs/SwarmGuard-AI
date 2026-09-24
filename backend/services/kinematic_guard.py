@@ -426,7 +426,34 @@ class KinematicGuard:
         # worth dividing by, and the honest answer is no verdict at all.
         if note in _CLOCKS_DISAGREE and (dt is None or dt < self.min_reset_gap_s):
             return partner, curr, None, None, NOTE_ARRIVAL_UNUSABLE
+
+        # A reset also restarts the clock. time_boot_ms after a reboot (or a
+        # uint32 wrap) counts up from ~0, so it cannot show more uptime than
+        # the time since the partner arrived, plus delivery slack. A clock that
+        # stepped back but still reads a minute of uptime four seconds after
+        # the last delivery was not reset; its packet is late. Measured: when a
+        # backlog drained after fresh traffic stopped, each drone's first late
+        # packet arrived ~4 s after the last and was rated on that spacing --
+        # 40 false GPS_SPOOFING incidents, one per drone (reports/06-LOAD-TEST-
+        # RESULTS.md, section 7). A clock that merely repeats is left to the
+        # arrival fallback as before: it is stalled, not late.
+        if (
+            note == "device_clock_not_monotonic"
+            and dt is not None
+            and partner.get("sample_time_ms") is not None
+            and curr_ms < partner["sample_time_ms"]
+            and not self.could_have_reset(curr_ms, dt)
+        ):
+            return partner, curr, None, None, NOTE_ARRIVAL_UNUSABLE
         return partner, curr, dt, time_base, note
+
+    def could_have_reset(self, sample_time_ms: int, since_last_arrival_s: float) -> bool:
+        """Whether a device clock reading this low could have restarted since the last delivery.
+
+        Also asked by ingest (services/ingest_staleness.py), so the packet the
+        guard would decline here is the packet ingest refuses.
+        """
+        return sample_time_ms / 1000.0 <= since_last_arrival_s + self.device_clock_max_lead_s
 
     def _interval_seconds(
         self, prev: dict, curr: dict

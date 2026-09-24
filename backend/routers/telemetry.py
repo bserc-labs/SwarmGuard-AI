@@ -19,9 +19,10 @@ from config import get_settings
 from database import get_db
 from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
-from services import device_credentials
+from services import device_credentials, ingest_staleness
 from services.audit_service import audit_service
-from services.detection_pipeline import run_detection
+from services.detection_pipeline import MAX_HISTORY_PACKETS, run_detection
+from services.kinematic_guard import kinematic_guard
 from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.limiter import device_or_address, limiter
@@ -83,6 +84,33 @@ def ingest_telemetry(
         )
 
     DEVICE_AUTH.labels(device.method).inc()
+
+    # After authentication, so an unauthenticated caller learns nothing about a
+    # drone's recent traffic; before storage, which is the point.
+    if settings.INGEST_REJECT_STALE:
+        lag = ingest_staleness.check(
+            db,
+            organization_id=tenant.organization_id,
+            drone_id=packet.drone_id,
+            sample_time_ms=packet.sample_time_ms,
+            guard=kinematic_guard,
+            window=MAX_HISTORY_PACKETS,
+        )
+        if lag is not None and lag.stale:
+            INGEST.labels("rejected_stale").inc()
+            # 503, not 4xx: nothing is wrong with the packet except that the
+            # server is behind. Retry-After tells the sender to back off; the
+            # detail says not to resend this one, which will only be staler.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    f"Telemetry for drone '{packet.drone_id}' was sampled {lag.behind_s:.1f} s before "
+                    f"packets it has already delivered, beyond the {lag.tolerance_s:.0f} s the "
+                    "detector can rate. Not stored. The link or the server is behind: send current "
+                    "samples and do not resend this one."
+                ),
+                headers={"Retry-After": "1"},
+            )
 
     try:
         processed_data = telemetry_service.process_telemetry(

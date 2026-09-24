@@ -441,6 +441,72 @@ class TestAPacketTooLateToRate:
         assert strict.evaluate(rows).interval_note == NOTE_ARRIVAL_UNUSABLE
 
 
+class TestALateClockIsNotAReset:
+    """A reset restarts the clock, so it cannot show more uptime than has passed.
+
+    Found by the load test of 2026-09-24. Fresh traffic stopped, the backlog
+    kept draining, and each drone's first late packet arrived ~4 s after the
+    one before -- long enough for a reboot, by the gap alone. Its clock read a
+    minute of uptime. Rated on arrival time: 590 m in 4.4 s, and 40 false
+    GPS_SPOOFING incidents, one per drone.
+    """
+
+    def _drained(self, *, late_sample_s, gap_s, lat=None):
+        # Fresh packets up to 120 s of flight, then one sampled `late_sample_s`
+        # into the flight arriving `gap_s` after the last of them.
+        rows = [load_packet(119.0 + s / 10, arrival_s=s / 10) for s in range(10)]
+        rows.append(load_packet(late_sample_s, arrival_s=0.9 + gap_s, lat=lat))
+        return rows
+
+    def test_a_minute_of_uptime_four_seconds_after_the_last_packet_is_late(self):
+        rows = self._drained(late_sample_s=60.0, gap_s=4.4)
+        # What the guard did before: a reset, rated on arrival, a false spoof.
+        credulous = KinematicGuard()
+        credulous.device_clock_max_lead_s = 1e9
+        assert credulous.evaluate(rows).triggered is True
+
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.triggered is False
+        assert verdict.time_base is None
+        assert verdict.interval_note == NOTE_ARRIVAL_UNUSABLE
+
+    def test_a_clock_that_restarted_in_the_gap_is_still_a_reset(self):
+        # Two seconds of uptime, four seconds after the last packet: it could
+        # have rebooted, so arrival time stands in as it always has.
+        verdict = kinematic_guard.evaluate(self._drained(late_sample_s=2.0, gap_s=4.4))
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+        assert verdict.interval_note == "device_clock_not_monotonic"
+
+    def test_a_long_gap_can_contain_a_long_uptime(self):
+        # Ninety seconds of silence can hold a reboot and 60 s of flight.
+        verdict = kinematic_guard.evaluate(self._drained(late_sample_s=60.0, gap_s=90.0))
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+
+    def test_the_slack_is_the_lead_setting(self):
+        # 20 s of uptime is more than 4.4 s plus the default 10 s of slack...
+        rows = self._drained(late_sample_s=20.0, gap_s=4.4)
+        assert kinematic_guard.evaluate(rows).time_base is None
+        # ...and within 4.4 s plus 20.
+        lenient = KinematicGuard()
+        lenient.device_clock_max_lead_s = 20.0
+        assert lenient.evaluate(rows).time_base == TIME_BASE_ARRIVAL
+
+    def test_a_stalled_clock_is_not_read_as_late(self):
+        # A clock that repeats did not step back; it is broken, and arrival
+        # time stands in as before rather than silencing the detector.
+        rows = [
+            packet(LAT, arrival_s=0.0, sample_ms=600_000),
+            packet(LAT + JUMP, arrival_s=1.5, sample_ms=600_000),
+        ]
+        verdict = kinematic_guard.evaluate(rows)
+        assert verdict.time_base == TIME_BASE_ARRIVAL
+        assert verdict.triggered is True
+
+    def test_ingest_asks_the_same_question(self):
+        assert kinematic_guard.could_have_reset(2_000, 4.4) is True
+        assert kinematic_guard.could_have_reset(60_000, 4.4) is False
+
+
 class TestDeclines:
     def test_no_interval_means_no_time_base(self):
         for rows in ([], [packet(LAT, arrival_s=0.0, sample_ms=0)]):

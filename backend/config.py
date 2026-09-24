@@ -127,12 +127,18 @@ class Settings(BaseSettings):
     # looks like protection.
     LOGIN_RATE_LIMIT: str = "5/minute"
 
-    # Telemetry ingest per client address. Measured (reports/06-LOAD-TEST-
-    # RESULTS.md): precise at the limit, and the limiter -- not the pool or the
-    # CPU -- is what caps throughput. Keyed by client address, so every drone
-    # behind one ground-station uplink shares it: 20 drones get 2.5 Hz each.
-    # Raise it for a larger fleet behind one uplink, or for a capacity test.
+    # Telemetry ingest per drone. Measured (reports/06-LOAD-TEST-RESULTS.md):
+    # precise at the limit, and the limiter -- not the pool or the CPU -- is
+    # what caps throughput. Keyed on the per-device credential; a drone still on
+    # the shared fleet key counts against its client address, so every such
+    # drone behind one uplink shares it (utils/limiter.py, device_or_address).
     INGEST_RATE_LIMIT: str = "50/second"
+    # Refuse, with 503 and Retry-After, a packet the kinematic guard could not
+    # rate: its device clock more than GUARD_DEVICE_CLOCK_MAX_REORDER_S behind
+    # the drone's recent packets, and not explainable by a clock reset. Under
+    # overload that is the backlog, and storing it only buys a declined
+    # detection cycle. services/ingest_staleness.py.
+    INGEST_REJECT_STALE: bool = True
 
     # AI models & thresholds (for future use)
     THREAT_ANOMALY_THRESHOLD: float = 0.8
