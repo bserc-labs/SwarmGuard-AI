@@ -25,6 +25,8 @@ COPY nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
 # The base image's entrypoint runs every executable in this directory, in name
 # order, before starting nginx.
 COPY --chmod=0755 nginx/40-tls.sh /docker-entrypoint.d/40-tls.sh
+# The device CA for mTLS on 8443, or one that admits no one when none is mounted.
+COPY --chmod=0755 nginx/41-device-ca.sh /docker-entrypoint.d/41-device-ca.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Run as an unprivileged user.

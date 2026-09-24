@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     # shows no more shared_key traffic, and a lost airframe stops being a lost
     # fleet. See docs/OPERATIONS.md, "Device credentials".
     DEVICE_SHARED_KEY_ENABLED: bool = True
+    # Refuse ingest that did not arrive through the mTLS port (8443) with a
+    # client certificate for this drone. Off by default: a drone needs a
+    # certificate from scripts/device-ca.sh first. Turn it on once
+    # swarmguard_device_certificate_total{outcome="absent"} stops moving; from
+    # then on a device key read off a captured airframe is not enough on its
+    # own. services/device_certificates.py.
+    DEVICE_MTLS_REQUIRED: bool = False
 
     # MAVLink Configurations.
     #

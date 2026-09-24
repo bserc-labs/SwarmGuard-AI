@@ -75,8 +75,8 @@ HTTP_ADMISSION_REJECTED = Counter(
 )
 INGEST = Counter(
     "swarmguard_telemetry_ingest_total",
-    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_stale, "
-    "rejected_bad_request, error.",
+    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_device_certificate, "
+    "rejected_stale, rejected_bad_request, error.",
     ["outcome"],
 )
 
@@ -85,6 +85,13 @@ DEVICE_AUTH = Counter(
     "Accepted ingest device authentications, by method: device_key or shared_key. "
     "When shared_key stops moving, the fleet has migrated and the shared key can be turned off.",
     ["method"],
+)
+DEVICE_CERT = Counter(
+    "swarmguard_device_certificate_total",
+    "Ingest requests by client certificate: verified (through the mTLS port, for this drone), "
+    "absent (not through it), or mismatch (a certificate for another drone or organization). "
+    "When absent stops moving, DEVICE_MTLS_REQUIRED can be turned on.",
+    ["outcome"],
 )
 
 # --- detection ----------------------------------------------------------------------------------

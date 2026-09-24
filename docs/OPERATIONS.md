@@ -154,7 +154,8 @@ to require a bearer token on top.
 | Series | Answers |
 |---|---|
 | `swarmguard_http_requests_total{method,route,status}`, `swarmguard_http_request_duration_seconds` | request rate, error rate and latency per route *template* (`/incidents/{id}`, never a raw path) |
-| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as stale (`rejected_stale`: answered 503, see Stale telemetry, below), rejected as bad requests, or errored |
+| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key or certificate, rejected as stale (`rejected_stale`: answered 503, see Stale telemetry, below), rejected as bad requests, or errored |
+| `swarmguard_device_certificate_total{outcome}` | ingest by client certificate: `verified` through port 8443, `absent`, or `mismatch` (a certificate for another drone). When `absent` stops moving, `DEVICE_MTLS_REQUIRED` can go on |
 | `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
@@ -177,6 +178,7 @@ rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0  
 rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
 rate(swarmguard_guard_declined_total[5m]) > 0               # the detector cannot rate what it is being sent
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_stale"}[5m]) > 0   # the link or the API is behind; the sender is being told
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_certificate"}[5m]) > 0   # a certificate for the wrong drone
 ```
 
 ### Stale telemetry
@@ -642,4 +644,73 @@ its reason; the HTTP answer to a rejected key is the same whatever the reason.
 
 Until then, rotating the shared key itself is still the old procedure: replace
 `secrets/drone_api_key`, restart the API, and update every device still using
-it. Mutual TLS for airborne assets remains the longer-term answer.
+it.
+
+### Device certificates (mTLS on port 8443)
+
+A device key is still a bearer secret: read off a recovered airframe, it sends
+telemetry as that drone until someone revokes it. A client certificate adds
+something the thief must also have — a private key the drone proves it holds in
+the TLS handshake, which can live in a TPM or secure element rather than a file.
+
+Port **8443** accepts `POST /api/telemetry/ingest` only, and only from a caller
+presenting an unrevoked certificate from the device CA; nginx refuses anyone
+else before the application sees the request. The certificate names its drone
+(`CN=<drone id>`, `O=org:<organization id>`) and the API refuses one presented
+for any other drone, audited as `client_certificate_for_other_drone`. The
+device key is still required alongside it.
+
+With no CA mounted the port starts and admits no one; nothing changes for
+drones on 443.
+
+**Set up the CA** — once, on the machine that will issue certificates, not the
+server:
+
+```bash
+scripts/device-ca.sh init            # ./device-ca/{private,trust,issued}
+```
+
+Copy `device-ca/trust/` (a certificate and a revocation list, nothing secret)
+to the server and point `SWARMGUARD_DEVICE_TRUST_DIR` at it, then
+`docker compose up -d frontend`. Keep `device-ca/private/` off the server:
+whoever holds `ca.key` can mint a drone.
+
+**Issue, rotate, revoke:**
+
+```bash
+scripts/device-ca.sh issue 3 ALPHA-07        # organization id, drone id; 365 days
+# -> device-ca/issued/org-3/ALPHA-07-1000/{device.key,device.crt,ca.crt}
+#    Load onto the drone, then delete device.key from here.
+scripts/device-ca.sh list
+scripts/device-ca.sh revoke device-ca/issued/org-3/ALPHA-07-1000/device.crt
+# copy trust/crl.pem to the server, then:
+docker compose exec frontend nginx -s reload
+```
+
+Rotation is the same as for keys: issue the new certificate, load it, revoke
+the old one. Several can be valid for one drone at once.
+
+**Republish the CRL monthly.** nginx refuses *every* certificate once the CRL is
+past its `nextUpdate` (`CRL_DAYS`, 30 by default), which grounds the fleet on
+8443. The frontend logs the date at start. From cron on the CA machine:
+
+```bash
+scripts/device-ca.sh crl   # then copy trust/crl.pem to the server and reload nginx
+```
+
+**Moving the fleet onto certificates**, the same shape as retiring the shared
+key:
+
+1. Issue a certificate per drone and point the drone at `https://HOST:8443`.
+2. Watch `swarmguard_device_certificate_total{outcome="absent"}`. When it stops
+   increasing, every packet arrives through 8443.
+3. Set `DEVICE_MTLS_REQUIRED=true` and restart the API. Ingest without a
+   certificate is now refused (`client_certificate_required` in the audit log),
+   so a device key on its own is no longer enough.
+
+Why the API believes nginx's headers about the certificate: nginx sets them on
+8443 from the verified handshake, blanks them on 443 so a caller cannot supply
+them, and the API's own port is published on the loopback interface only.
+Anyone who can reach `127.0.0.1:8000` directly is already on the host.
+
+MAVLink ingest does not pass through nginx and is not covered by this.

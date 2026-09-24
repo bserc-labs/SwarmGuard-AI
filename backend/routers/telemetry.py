@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import NoReturn
 
 from fastapi import (
     APIRouter,
@@ -19,7 +20,7 @@ from config import get_settings
 from database import get_db
 from middleware.auth_middleware import TenantContext, require_permission
 from middleware.rbac import Permissions
-from services import device_credentials, ingest_staleness
+from services import device_certificates, device_credentials, ingest_staleness
 from services.audit_service import audit_service
 from services.detection_pipeline import MAX_HISTORY_PACKETS, run_detection
 from services.kinematic_guard import kinematic_guard
@@ -27,7 +28,7 @@ from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.limiter import device_or_address, limiter
 from utils.logger import logger
-from utils.metrics import DEVICE_AUTH, INGEST
+from utils.metrics import DEVICE_AUTH, DEVICE_CERT, INGEST
 
 settings = get_settings()
 # See Settings.INGEST_RATE_LIMIT: measured. Keyed per device credential, so a
@@ -35,6 +36,40 @@ settings = get_settings()
 INGEST_RATE_LIMIT = settings.INGEST_RATE_LIMIT
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
+
+def _refuse_device(
+    db: Session,
+    tenant: TenantContext,
+    request: Request,
+    drone_id: str,
+    reason: str | None,
+    *,
+    outcome: str,
+    detail: str,
+    evidence: str = "",
+) -> NoReturn:
+    """Audit a refused device, count it, and answer 403.
+
+    Recorded, not just logged. A caller holding a valid operator token but
+    presenting the wrong device key or certificate is the signature of a
+    compromised or misconfigured airframe, and it is exactly the event an
+    investigator comes looking for. `commit=True` because this request ends in
+    a 403 and there is no later write to carry the row.
+    """
+    audit_service.log_from_context(
+        db=db,
+        tenant=tenant,
+        action="TELEMETRY_DEVICE_AUTH_FAILED",
+        resource="TelemetryLog",
+        resource_id=drone_id,
+        reason=reason,
+        details=f"Rejected telemetry for drone '{drone_id}': {reason}.{evidence}",
+        ip_address=request.client.host if request.client else None,
+        commit=True,
+    )
+    INGEST.labels(outcome).inc()
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
 
 @router.post("/ingest")
 @limiter.limit(INGEST_RATE_LIMIT, key_func=device_or_address)
@@ -59,28 +94,39 @@ def ingest_telemetry(
     )
     if not device.ok:
         logger.warning(f"🚨 UNAUTHORIZED DRONE SPOOFING ATTEMPT: {packet.drone_id} sent invalid or missing API Key!")
-        # Recorded, not just logged. A caller holding a valid operator token but
-        # presenting the wrong device key is the signature of a compromised or
-        # misconfigured airframe, and it is exactly the event an investigator
-        # comes looking for. `commit=True` because this request ends in a 403
-        # and there is no later write to carry the row.
-        audit_service.log_from_context(
-            db=db,
-            tenant=tenant,
-            action="TELEMETRY_DEVICE_AUTH_FAILED",
-            resource="TelemetryLog",
-            resource_id=packet.drone_id,
-            reason=device.reason,
-            details=f"Rejected telemetry for drone '{packet.drone_id}': {device.reason}.",
-            ip_address=request.client.host if request.client else None,
-            commit=True,
-        )
-        INGEST.labels("rejected_device_key").inc()
         # One answer for every reason: a caller must not learn whether a key
         # exists, was revoked, or belongs to another drone.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Device Authentication Failed: Invalid or missing API Key for drone '{packet.drone_id}'"
+        _refuse_device(
+            db, tenant, request, packet.drone_id, device.reason,
+            outcome="rejected_device_key",
+            detail=f"Device Authentication Failed: Invalid or missing API Key for drone '{packet.drone_id}'",
+        )
+
+    # The client certificate, when the packet came through the mTLS port
+    # (8443). A certificate for another drone is refused whatever the setting:
+    # nginx vouched for the caller, and the caller is not this drone.
+    certificate = device_certificates.check(
+        request.headers, organization_id=tenant.organization_id, drone_id=packet.drone_id
+    )
+    DEVICE_CERT.labels(certificate.outcome).inc()
+    if certificate.outcome == device_certificates.MISMATCH or (
+        certificate.outcome == device_certificates.ABSENT and settings.DEVICE_MTLS_REQUIRED
+    ):
+        reason = (
+            device_certificates.FOR_OTHER_DRONE
+            if certificate.outcome == device_certificates.MISMATCH
+            else device_certificates.REQUIRED
+        )
+        logger.warning(f"🚨 Telemetry for {packet.drone_id} refused: {reason} ({certificate.subject}).")
+        _refuse_device(
+            db, tenant, request, packet.drone_id, reason,
+            outcome="rejected_device_certificate",
+            detail=(
+                f"Device Authentication Failed: telemetry for drone '{packet.drone_id}' must come "
+                "through the device port with that drone's client certificate"
+            ),
+            evidence=f" Certificate subject {certificate.subject!r}, serial {certificate.serial}."
+            if certificate.subject else "",
         )
 
     DEVICE_AUTH.labels(device.method).inc()

@@ -49,9 +49,9 @@ def servers() -> dict[str, str]:
     source = _without_comments(NGINX.read_text())
     by_port = {}
     for _, body in _blocks(source, "server"):
-        port = "443" if re.search(r"listen\s+443", body) else "80"
+        port = re.search(r"listen\s+(\d+)", body).group(1)
         by_port[port] = body
-    assert set(by_port) == {"80", "443"}, "expected one plain and one TLS server"
+    assert set(by_port) == {"80", "443", "8443"}, "expected a plain server, the TLS server and the device server"
     return by_port
 
 
@@ -168,6 +168,51 @@ class TestTheWebSocketTokenStaysOutOfTheLog:
         assert "access_log off;" in body
 
 
+CERT_HEADERS = ("X-Device-Cert-Verify", "X-Device-Cert-Subject", "X-Device-Cert-Serial")
+
+
+class TestTheDeviceServer:
+    """Port 8443: ingest for drones that prove a certificate from the device CA.
+
+    The API believes these headers about who is calling. So they must be set by
+    nginx from the verified handshake on 8443, and on 443, where nothing was
+    verified, a caller must not be able to supply them.
+    """
+
+    def test_it_demands_a_certificate_and_checks_revocation(self, servers):
+        device = servers["8443"]
+        assert re.search(r"listen\s+8443\s+ssl;", device) and re.search(r"listen\s+\[::\]:8443\s+ssl;", device)
+        assert re.search(r"ssl_verify_client\s+on;", device), "`optional` would let a caller without one through"
+        assert "ssl_client_certificate /etc/nginx/tls/device-ca.crt;" in device
+        assert "ssl_crl                /etc/nginx/tls/device-crl.pem;" in device, "without a CRL, revocation does nothing"
+        assert re.search(r"ssl_verify_depth\s+1;", device)
+
+    def test_it_has_the_same_tls_floor_as_443(self, servers):
+        for directive in ("ssl_protocols", "ssl_ciphers", "ssl_session_tickets"):
+            ours = re.search(rf"{directive}\s+([^;]+);", servers["8443"]).group(1)
+            assert ours == re.search(rf"{directive}\s+([^;]+);", servers["443"]).group(1), directive
+
+    def test_only_ingest_is_proxied(self, servers):
+        locations = dict(_blocks(servers["8443"], "location"))
+        assert set(locations) == {"location = /api/telemetry/ingest", "location /"}
+        assert "return 404;" in locations["location /"]
+        assert "proxy_pass http://backend:8000/telemetry/ingest;" in locations["location = /api/telemetry/ingest"]
+
+    def test_it_forwards_what_the_handshake_verified(self, servers):
+        ingest = dict(_blocks(servers["8443"], "location"))["location = /api/telemetry/ingest"]
+        assert "proxy_set_header X-Device-Cert-Verify $ssl_client_verify;" in ingest
+        assert "proxy_set_header X-Device-Cert-Subject $ssl_client_s_dn;" in ingest
+        assert "proxy_set_header X-Device-Cert-Serial $ssl_client_serial;" in ingest
+
+    def test_on_443_a_caller_cannot_supply_them(self, servers):
+        api = dict(_blocks(servers["443"], "location"))["location /api/"]
+        for header in CERT_HEADERS:
+            assert f'proxy_set_header {header} "";' in api, f"{header} can be forged through 443"
+
+    def test_the_image_installs_the_ca_script(self):
+        assert "nginx/41-device-ca.sh /docker-entrypoint.d/41-device-ca.sh" in DOCKERFILE.read_text()
+
+
 class TestCompose:
     @pytest.fixture(scope="class")
     def frontend(self) -> dict:
@@ -175,7 +220,13 @@ class TestCompose:
             return yaml.safe_load(fh)["services"]["frontend"]
 
     def test_https_is_published(self, frontend):
-        assert {"80:80", "443:443"} <= {str(p) for p in frontend["ports"]}
+        assert {"80:80", "443:443", "8443:8443"} <= {str(p) for p in frontend["ports"]}
+
+    def test_the_device_trust_is_mounted_read_only_and_holds_no_key(self, frontend):
+        mount = next(v for v in frontend["volumes"] if ":/etc/nginx/device-ca" in v)
+        assert mount.endswith(":ro"), mount
+        # The trust directory, never the CA home: the CA key stays off the proxy.
+        assert "device-ca/trust" in mount, mount
 
     def test_certificates_are_mounted_read_only(self, frontend):
         mount = next(v for v in frontend["volumes"] if ":/etc/nginx/certs" in v)
