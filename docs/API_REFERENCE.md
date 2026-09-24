@@ -10,7 +10,9 @@ without a zone is read as UTC.
 > **The generated OpenAPI schema at `/docs` is authoritative.** It is produced
 > from the routers themselves and cannot drift. This file is a hand-written
 > orientation guide covering the routes most people integrate against first;
-> it describes a subset of the 40 routes the application actually serves.
+> it describes a subset of the 51 the application actually serves (50 HTTP and
+> one WebSocket, counted from the router tree by `tests/test_route_tenancy.py`,
+> which also refuses to let a new one be added without classifying its tenancy).
 
 ---
 
