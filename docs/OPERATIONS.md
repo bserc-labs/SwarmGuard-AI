@@ -714,3 +714,23 @@ them, and the API's own port is published on the loopback interface only.
 Anyone who can reach `127.0.0.1:8000` directly is already on the host.
 
 MAVLink ingest does not pass through nginx and is not covered by this.
+
+### Committed databases in git history
+
+`swarmguard.db` and two copies of it were committed in the project's early
+history and carry a users table with password hashes. The files are untracked
+now, but the blobs are in every clone. `scripts/purge-db-history.sh` rewrites a
+fresh mirror without them, verifies none remain, lists the accounts whose
+hashes were exposed, and **stops without pushing**:
+
+```bash
+pip install git-filter-repo
+scripts/purge-db-history.sh https://github.com/bserc-labs/SwarmGuard-AI.git /tmp/sg-purged
+```
+
+The force-push that follows changes every commit id, so it is the owner's
+call, made with everyone who has a clone. Rotate the listed accounts first —
+rewriting history does not un-leak a hash someone has already cloned — then
+push with the commands the script prints, have everyone re-clone, and ask
+GitHub Support to drop the old pull-request refs. The script's header has the
+full sequence.
