@@ -9,6 +9,7 @@
  */
 
 import { telemetrySocketUrl } from "@/config";
+import { api } from "./api";
 import { getToken } from "./auth";
 
 export type WSConnectionState =
@@ -71,12 +72,30 @@ export class TelemetrySocket {
 
     this.intentionalClose = false;
     this.updateState(this.retries > 0 ? "RECONNECTING" : "CONNECTING");
+    void this.openWithTicket();
+  }
 
-    // The backend reads the token from the query string. nginx no longer logs
-    // the /ws/ request line and the backend redacts it from its own access
-    // log, but a credential in a URL is still one proxy misconfiguration away
-    // from a log file. Tracked for removal from the URL.
-    const url = `${telemetrySocketUrl()}?token=${encodeURIComponent(token)}`;
+  /**
+   * Fetch a single-use ticket over HTTPS, then open the socket with it.
+   *
+   * The session token used to go in the query string, where proxy logs and
+   * browser history keep it. A ticket lives half a minute and opens exactly one
+   * socket, so a copy read out of a log afterwards opens nothing.
+   */
+  private async openWithTicket(): Promise<void> {
+    let ticket: string;
+    try {
+      ({ ticket } = await api.getSocketTicket());
+    } catch {
+      // No ticket, no socket. Retry on the same backoff as a dropped one: the
+      // usual cause is the same outage.
+      this.scheduleReconnect();
+      return;
+    }
+
+    if (this.intentionalClose) return; // disconnected while the ticket was in flight
+
+    const url = `${telemetrySocketUrl()}?ticket=${encodeURIComponent(ticket)}`;
 
     try {
       this.ws = new WebSocket(url);

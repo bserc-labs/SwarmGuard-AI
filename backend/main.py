@@ -50,13 +50,15 @@ from utils.schema_check import assert_schema_current
 class RedactQueryToken(logging.Filter):
     """Keep bearer tokens out of the access log.
 
-    The WebSocket handshake carries the JWT as `?token=<jwt>`, and uvicorn's
-    access logger writes the full path with its query string for every accepted
-    and every rejected socket. nginx was told to stop logging /ws/, but this is
-    the second place the same credential landed, and the one nginx cannot reach.
+    The WebSocket handshake carries its credential in the query string -- a
+    single-use ticket now, the session JWT before that -- and uvicorn's access
+    logger writes the full path for every accepted and every rejected socket.
+    nginx was told to stop logging /ws/, but this is the second place the
+    credential landed, and the one nginx cannot reach. A spent ticket is worth
+    nothing, but it is still a credential, and old clients still send tokens.
     """
 
-    _token = re.compile(r"([?&]token=)[^&\s\"]+")
+    _token = re.compile(r"([?&](?:token|ticket)=)[^&\s\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple):

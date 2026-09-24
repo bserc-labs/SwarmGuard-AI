@@ -72,6 +72,13 @@ class TokenResponse(BaseModel):
     role: str
 
 
+class WebSocketTicket(BaseModel):
+    """One short-lived, single-use ticket for opening the telemetry socket."""
+
+    ticket: str
+    expires_in: int
+
+
 # --- Organization ---
 class OrganizationCreate(BaseModel):
     name: str

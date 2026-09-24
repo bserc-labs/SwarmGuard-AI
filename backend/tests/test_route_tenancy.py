@@ -67,6 +67,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # --- auth ---------------------------------------------------------------
     ("POST", "/auth/login"): PUBLIC,
     ("POST", "/auth/logout"): SELF,
+    # Mints a socket ticket for the caller's own session, carrying that
+    # session's organization and expiry. Nothing else is readable through it.
+    ("POST", "/auth/ws-ticket"): SELF,
 
     # --- users --------------------------------------------------------------
     ("POST", "/users/"): TENANT_DATA,
