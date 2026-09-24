@@ -31,7 +31,16 @@ if [ -f "$CRT" ] || [ -f "$CRL" ]; then
     echo "[device-ca]        scripts/device-ca.sh init writes both into its trust/ directory." >&2
     exit 1
   fi
-  if ! openssl crl -in "$CRL" -noout -CAfile "$CRT" >/dev/null 2>&1; then
+  # Read the verdict, not just the exit code: OpenSSL 3.0 prints "verify
+  # failure" for a CRL signed by another key and still exits 0 (CI's Ubuntu
+  # caught this; 3.6 exits 1). Both print "verify OK" only on a real match.
+  verdict="$(openssl crl -in "$CRL" -noout -CAfile "$CRT" 2>&1)" || verdict="failed: $verdict"
+  case "$verdict" in
+    failed:*|*"verify failure"*) signed=no ;;
+    *"verify OK"*) signed=yes ;;
+    *) signed=no ;;
+  esac
+  if [ "$signed" != yes ]; then
     echo "[device-ca] ERROR: $CRL is not a revocation list signed by $CRT." >&2
     exit 1
   fi
