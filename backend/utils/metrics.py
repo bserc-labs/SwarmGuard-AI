@@ -123,6 +123,8 @@ def detection_tier(detection: dict) -> str:
         return "kinematic"
     if detector == "geofence" or "zones" in metadata:
         return "geofence"
+    if detector == "heartbeat":
+        return "heartbeat"
     return "ml"
 
 
