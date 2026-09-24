@@ -403,9 +403,12 @@ services:
           pids: 128
     # 443 is the application. 80 answers a health probe and the ACME challenge
     # and redirects everything else; nothing is served over it.
+    # 8443 is telemetry ingest for drones with a client certificate (mTLS); it
+    # refuses every caller until a device CA is mounted below.
     ports:
       - "80:80"
       - "443:443"
+      - "8443:8443"
     volumes:
       # tls.crt + tls.key. Read-only, and never baked into the image: a
       # certificate in an image is a certificate in every registry it is pushed
@@ -414,6 +417,10 @@ services:
       - "${SWARMGUARD_CERTS_DIR:-./certs}:/etc/nginx/certs:ro"
       # Let's Encrypt HTTP-01 webroot, written by certbot on the host.
       - "${SWARMGUARD_ACME_DIR:-./acme}:/var/www/acme:ro"
+      # The device CA's public half: ca.crt and crl.pem, from
+      # scripts/device-ca.sh. Its trust/ directory only -- the CA key stays off
+      # this machine. Empty, and 8443 admits no one.
+      - "${SWARMGUARD_DEVICE_TRUST_DIR:-./device-ca/trust}:/etc/nginx/device-ca:ro"
     environment:
       # Subject of the self-signed fallback only; ignored once a real
       # certificate is mounted.

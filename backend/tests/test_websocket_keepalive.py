@@ -13,6 +13,7 @@ fixing it without a replacement would have let a socket outlive its token.
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from starlette.websockets import WebSocketDisconnect
@@ -20,7 +21,7 @@ from starlette.websockets import WebSocketDisconnect
 import models
 from main import RedactQueryToken
 from routers import websocket as websocket_router
-from services.auth_service import create_access_token
+from services import ws_tickets
 from services.ws_manager import ConnectionManager, ws_manager
 from tests.conftest import TestingSessionLocal
 
@@ -72,21 +73,28 @@ def socket_env(monkeypatch):
     monkeypatch.setattr(ConnectionManager, "_ensure_broadcaster", no_broker)
 
 
-def token_for(user: models.User) -> str:
-    return create_access_token(
-        data={"sub": user.username, "role": user.role,
-              "org_id": user.organization_id, "tv": user.token_version}
+def ticket_for(user: models.User, *, session_lasts_s: int = 3600) -> str:
+    """A single-use ticket, as /auth/ws-ticket mints one.
+
+    The socket takes a ticket rather than the session token, which used to
+    travel in this URL and from there into proxy logs and browser history.
+    """
+    return ws_tickets.issue(
+        username=user.username,
+        organization_id=user.organization_id,
+        token_version=user.token_version or 0,
+        session_expires_at=int(datetime.now(UTC).timestamp()) + session_lasts_s,
     )
 
 
 class TestKeepalive:
     def test_a_ping_is_answered_with_a_pong(self, client, ws_operator, socket_env):
-        with client.websocket_connect(f"/ws/telemetry?token={token_for(ws_operator)}") as ws:
+        with client.websocket_connect(f"/ws/telemetry?ticket={ticket_for(ws_operator)}") as ws:
             ws.send_text(PING)
             assert ws.receive_json() == {"type": "pong"}
 
     def test_only_a_ping_is_answered(self, client, ws_operator, socket_env):
-        with client.websocket_connect(f"/ws/telemetry?token={token_for(ws_operator)}") as ws:
+        with client.websocket_connect(f"/ws/telemetry?ticket={ticket_for(ws_operator)}") as ws:
             # None of these may close the socket or produce a reply...
             ws.send_text("not json")
             ws.send_text(json.dumps([1, 2, 3]))
@@ -98,7 +106,7 @@ class TestKeepalive:
 
     def test_the_socket_stays_registered_across_pings(self, client, ws_operator, socket_env):
         org = ws_operator.organization_id
-        with client.websocket_connect(f"/ws/telemetry?token={token_for(ws_operator)}") as ws:
+        with client.websocket_connect(f"/ws/telemetry?ticket={ticket_for(ws_operator)}") as ws:
             for _ in range(3):
                 ws.send_text(PING)
                 assert ws.receive_json() == {"type": "pong"}
@@ -111,12 +119,12 @@ class TestSessionExpiry:
         self, client, ws_operator, socket_env, monkeypatch
     ):
         """Post-accept, so this is a real 1008 on the wire and the client stops retrying."""
-        with client.websocket_connect(f"/ws/telemetry?token={token_for(ws_operator)}") as ws:
+        with client.websocket_connect(f"/ws/telemetry?ticket={ticket_for(ws_operator)}") as ws:
             ws.send_text(PING)
             assert ws.receive_json() == {"type": "pong"}
 
-            # The token expires while the socket is open.
-            monkeypatch.setattr(websocket_router, "decode_access_token", lambda token: None)
+            # The session it was opened from expires while the socket is up.
+            monkeypatch.setattr(websocket_router, "_now", lambda: 1e12)
 
             ws.send_text(PING)
             with pytest.raises(WebSocketDisconnect) as closed:
@@ -134,15 +142,47 @@ class TestHandshake:
     `socket_env` is deliberately not requested.
     """
 
-    def test_a_missing_token_is_refused(self, client):
+    def test_a_missing_ticket_is_refused(self, client):
         with pytest.raises(WebSocketDisconnect) as closed:
             with client.websocket_connect("/ws/telemetry"):
                 pass
         assert closed.value.code == 1008
 
-    def test_a_garbage_token_is_refused(self, client):
+    def test_a_garbage_ticket_is_refused(self, client):
         with pytest.raises(WebSocketDisconnect) as closed:
-            with client.websocket_connect("/ws/telemetry?token=not-a-jwt"):
+            with client.websocket_connect("/ws/telemetry?ticket=not-a-jwt"):
+                pass
+        assert closed.value.code == 1008
+
+    def test_a_session_token_is_not_a_ticket(self, client, ws_operator, socket_env):
+        """The credential this change exists to keep out of the URL stays out."""
+        from services.auth_service import create_access_token
+
+        session = create_access_token(
+            data={"sub": ws_operator.username, "role": ws_operator.role,
+                  "org_id": ws_operator.organization_id, "tv": ws_operator.token_version}
+        )
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with client.websocket_connect(f"/ws/telemetry?ticket={session}"):
+                pass
+        assert closed.value.code == 1008
+
+    def test_a_ticket_opens_exactly_one_socket(self, client, ws_operator, socket_env):
+        ticket = ticket_for(ws_operator)
+        with client.websocket_connect(f"/ws/telemetry?ticket={ticket}") as ws:
+            ws.send_text(PING)
+            assert ws.receive_json() == {"type": "pong"}
+
+        # Replaying it -- from a log, from history -- opens nothing.
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with client.websocket_connect(f"/ws/telemetry?ticket={ticket}"):
+                pass
+        assert closed.value.code == 1008
+
+    def test_a_ticket_from_an_expired_session_is_refused(self, client, ws_operator, socket_env):
+        stale = ticket_for(ws_operator, session_lasts_s=-1)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with client.websocket_connect(f"/ws/telemetry?ticket={stale}"):
                 pass
         assert closed.value.code == 1008
 
@@ -162,6 +202,13 @@ class TestTokenRedaction:
         assert "eyJhbGciOi" not in line
         assert "token=[redacted]" in line
         assert "/ws/telemetry" in line
+
+    def test_the_ticket_is_redacted_too(self):
+        record = self._record("172.28.0.10:5000", "/ws/telemetry?ticket=eyJhbGciOi.payload.sig")
+        assert RedactQueryToken().filter(record) is True
+        line = record.getMessage()
+        assert "eyJhbGciOi" not in line
+        assert "ticket=[redacted]" in line
 
     def test_other_query_parameters_survive(self):
         record = self._record("h", "/x?limit=5&token=secret.value&skip=2")

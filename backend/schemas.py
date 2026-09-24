@@ -51,6 +51,7 @@ class UserOut(BaseModel):
     email: str | None
     role: str
     organization_id: int | None = None
+    is_active: bool = True
     created_at: datetime
 
     model_config = {
@@ -62,6 +63,17 @@ class UserUpdate(BaseModel):
 
     _normalise_email = field_validator("email", mode="before")(_blank_email_is_none)
 
+
+class UserAdminUpdate(BaseModel):
+    """What an administrator may change about somebody else's account.
+
+    Not the password: an administrator resets a forgotten one by disabling the
+    account, not by choosing a new secret for its owner.
+    """
+
+    role: UserRole | None = None
+    is_active: bool | None = None
+
 class PasswordUpdate(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
@@ -70,6 +82,13 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"  # noqa: S105 — OAuth2 token type, not a credential
     role: str
+
+
+class WebSocketTicket(BaseModel):
+    """One short-lived, single-use ticket for opening the telemetry socket."""
+
+    ticket: str
+    expires_in: int
 
 
 # --- Organization ---

@@ -154,7 +154,8 @@ to require a bearer token on top.
 | Series | Answers |
 |---|---|
 | `swarmguard_http_requests_total{method,route,status}`, `swarmguard_http_request_duration_seconds` | request rate, error rate and latency per route *template* (`/incidents/{id}`, never a raw path) |
-| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key, rejected as bad requests, or errored |
+| `swarmguard_telemetry_ingest_total{outcome}` | packets accepted, rejected for a bad device key or certificate, rejected as stale (`rejected_stale`: answered 503, see Stale telemetry, below), rejected as bad requests, or errored |
+| `swarmguard_device_certificate_total{outcome}` | ingest by client certificate: `verified` through port 8443, `absent`, or `mismatch` (a certificate for another drone). When `absent` stops moving, `DEVICE_MTLS_REQUIRED` can go on |
 | `swarmguard_detection_runs_total{outcome}`, `swarmguard_detection_duration_seconds` | detection cycles by result (no incident, created, escalated, suppressed, insufficient history, error) and how long one takes |
 | `swarmguard_incidents_raised_total{tier,severity,attack_type}` | incidents by detector tier (kinematic, geofence, ml, heartbeat) |
 | `swarmguard_db_pool_checked_out`, `_checked_in`, `_overflow`, `_size`, `_max` | whether the pool sized by reasoning in `database.py` holds under real load |
@@ -176,7 +177,25 @@ rate(swarmguard_http_requests_total{status=~"5.."}[5m]) > 0
 rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_key"}[5m]) > 0   # a device with a wrong key, or an attacker
 rate(swarmguard_http_admission_rejected_total[5m]) > 0      # more load than one process takes: shedding
 rate(swarmguard_guard_declined_total[5m]) > 0               # the detector cannot rate what it is being sent
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_stale"}[5m]) > 0   # the link or the API is behind; the sender is being told
+rate(swarmguard_telemetry_ingest_total{outcome="rejected_device_certificate"}[5m]) > 0   # a certificate for the wrong drone
 ```
+
+### Stale telemetry
+
+A packet whose device clock is more than `GUARD_DEVICE_CLOCK_MAX_REORDER_S`
+behind packets the same drone has already delivered, and which a reset of that
+clock cannot explain, is answered **503 with `Retry-After: 1`** and not stored.
+It is exactly the packet the kinematic guard would otherwise have declined to
+rate (`services/ingest_staleness.py` asks the guard's own question), so under
+overload the backlog shows up as 503s at the sender instead of as a detector
+that has quietly stopped rating. The sender should send current samples and
+drop the refused one; resending it only makes it staler.
+
+A reboot is not refused: a restarted clock counts up from zero, so it never
+shows more uptime than has passed since the drone's last delivery. Set
+`INGEST_REJECT_STALE=false` to store everything, as before, and let the guard
+decline instead.
 
 **Admission.** At most `HTTP_MAX_IN_FLIGHT` (40) requests are inside the API at
 once; the rest wait at the door, and one that waits `HTTP_ADMISSION_WAIT_S` (5 s)
@@ -200,10 +219,33 @@ profile so the default stack is unchanged. A real deployment points its own
 Prometheus at `http://backend:8000/metrics` and copies the rules file; the
 alerts there are the ones above, each with a next step in its description.
 
-**Single process.** uvicorn runs one worker here. With `--workers N` each
-worker keeps its own counters and a scrape sees one of them; that needs
-prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a
-deliberate later step.
+**More than one worker.** `UVICORN_WORKERS` (default 1) is the number of
+uvicorn processes. One handles about 200 telemetry packets a second on two
+cores; two hold 400/s with a half-second median where one was at six seconds.
+Measured on the development stack:
+
+| | one worker | two workers |
+|---|---|---|
+| 200/s sustained | queue grows, p50 ≈ 7 s | p50 4 ms, p95 9 ms |
+| 400/s sustained | p50 6.2 s | p50 0.5 s, p95 2.0 s |
+| memory | 230 MiB | 449 MiB |
+
+Three things follow from running more than one, and the code handles each:
+
+- **Metrics are aggregated.** The entrypoint sets `PROMETHEUS_MULTIPROC_DIR`
+  and empties it, every worker writes there, and a scrape sums them. Check it
+  worked: `swarmguard_db_pool_size` should be the per-worker pool times the
+  worker count.
+- **Pools multiply.** Each worker opens its own, so `UVICORN_WORKERS ×
+  (DB_POOL_SIZE + DB_MAX_OVERFLOW)` must fit `DB_SERVER_MAX_CONNECTIONS`
+  (PostgreSQL's `max_connections`, 100 by default). Start-up refuses a
+  configuration that would not, naming the numbers. Divide the pool by the
+  worker count, or raise `max_connections` and this setting together.
+- **Background passes are claimed.** The heartbeat monitor and the two
+  retention checks are application work, not per-worker work. Each pass is
+  claimed in Redis for just under its interval, so one worker runs it and the
+  others skip. Without Redis every worker runs every pass, which is correct for
+  one worker and duplicated for several.
 
 ## Error tracking
 
@@ -602,4 +644,110 @@ its reason; the HTTP answer to a rejected key is the same whatever the reason.
 
 Until then, rotating the shared key itself is still the old procedure: replace
 `secrets/drone_api_key`, restart the API, and update every device still using
-it. Mutual TLS for airborne assets remains the longer-term answer.
+it.
+
+### Device certificates (mTLS on port 8443)
+
+A device key is still a bearer secret: read off a recovered airframe, it sends
+telemetry as that drone until someone revokes it. A client certificate adds
+something the thief must also have — a private key the drone proves it holds in
+the TLS handshake, which can live in a TPM or secure element rather than a file.
+
+Port **8443** accepts `POST /api/telemetry/ingest` only, and only from a caller
+presenting an unrevoked certificate from the device CA; nginx refuses anyone
+else before the application sees the request. The certificate names its drone
+(`CN=<drone id>`, `O=org:<organization id>`) and the API refuses one presented
+for any other drone, audited as `client_certificate_for_other_drone`. The
+device key is still required alongside it.
+
+With no CA mounted the port starts and admits no one; nothing changes for
+drones on 443.
+
+**Set up the CA** — once, on the machine that will issue certificates, not the
+server:
+
+```bash
+scripts/device-ca.sh init            # ./device-ca/{private,trust,issued}
+```
+
+Copy `device-ca/trust/` (a certificate and a revocation list, nothing secret)
+to the server and point `SWARMGUARD_DEVICE_TRUST_DIR` at it, then
+`docker compose up -d frontend`. Keep `device-ca/private/` off the server:
+whoever holds `ca.key` can mint a drone.
+
+**Issue, rotate, revoke:**
+
+```bash
+scripts/device-ca.sh issue 3 ALPHA-07        # organization id, drone id; 365 days
+# -> device-ca/issued/org-3/ALPHA-07-1000/{device.key,device.crt,ca.crt}
+#    Load onto the drone, then delete device.key from here.
+scripts/device-ca.sh list
+scripts/device-ca.sh revoke device-ca/issued/org-3/ALPHA-07-1000/device.crt
+# copy trust/crl.pem to the server, then:
+docker compose exec frontend nginx -s reload
+```
+
+Rotation is the same as for keys: issue the new certificate, load it, revoke
+the old one. Several can be valid for one drone at once.
+
+**Republish the CRL monthly.** nginx refuses *every* certificate once the CRL is
+past its `nextUpdate` (`CRL_DAYS`, 30 by default), which grounds the fleet on
+8443. The frontend logs the date at start. From cron on the CA machine:
+
+```bash
+scripts/device-ca.sh crl   # then copy trust/crl.pem to the server and reload nginx
+```
+
+**Moving the fleet onto certificates**, the same shape as retiring the shared
+key:
+
+1. Issue a certificate per drone and point the drone at `https://HOST:8443`.
+2. Watch `swarmguard_device_certificate_total{outcome="absent"}`. When it stops
+   increasing, every packet arrives through 8443.
+3. Set `DEVICE_MTLS_REQUIRED=true` and restart the API. Ingest without a
+   certificate is now refused (`client_certificate_required` in the audit log),
+   so a device key on its own is no longer enough.
+
+Why the API believes nginx's headers about the certificate: nginx sets them on
+8443 from the verified handshake, blanks them on 443 so a caller cannot supply
+them, and the API's own port is published on the loopback interface only.
+Anyone who can reach `127.0.0.1:8000` directly is already on the host.
+
+MAVLink ingest does not pass through nginx and is not covered by this.
+
+### Committed databases in git history
+
+`swarmguard.db` and two copies of it were committed in the project's early
+history and carry a users table with password hashes. The files are untracked
+now, but the blobs are in every clone. `scripts/purge-db-history.sh` rewrites a
+fresh mirror without them, verifies none remain, lists the accounts whose
+hashes were exposed, and **stops without pushing**:
+
+```bash
+pip install git-filter-repo
+scripts/purge-db-history.sh https://github.com/bserc-labs/SwarmGuard-AI.git /tmp/sg-purged
+```
+
+Rotate the listed accounts on every server that has them — production,
+staging and development — with `backend/scripts/rotate_passwords.py`, run in
+that server's backend container. It sets a random password on each, ends
+every session they hold, audits it, and writes `username<TAB>password` to
+stdout only (so redirect it into a file only you can read):
+
+```bash
+docker compose exec -T backend python scripts/rotate_passwords.py --dry-run \
+    admin analyst commander observer operator          # which exist here; changes nothing
+(umask 077; docker compose exec -T backend python scripts/rotate_passwords.py \
+    admin analyst commander observer operator > rotated-$(hostname).tsv)
+```
+
+Hand each password to its owner over a channel you trust, then delete the
+file. If the rotated `admin` is the one `secrets/admin_password` holds, update
+that file too.
+
+The force-push that follows changes every commit id, so it is the owner's
+call, made with everyone who has a clone. Rotate the listed accounts first —
+rewriting history does not un-leak a hash someone has already cloned — then
+push with the commands the script prints, have everyone re-clone, and ask
+GitHub Support to drop the old pull-request refs. The script's header has the
+full sequence.

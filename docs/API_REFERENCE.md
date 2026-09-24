@@ -10,7 +10,9 @@ without a zone is read as UTC.
 > **The generated OpenAPI schema at `/docs` is authoritative.** It is produced
 > from the routers themselves and cannot drift. This file is a hand-written
 > orientation guide covering the routes most people integrate against first;
-> it describes a subset of the 40 routes the application actually serves.
+> it describes a subset of the 51 the application actually serves (50 HTTP and
+> one WebSocket, counted from the router tree by `tests/test_route_tenancy.py`,
+> which also refuses to let a new one be added without classifying its tenancy).
 
 ---
 
@@ -134,4 +136,4 @@ routes above were read off the router.
 
 | Type | Endpoint | Query Param | Description |
 |:---|:---|:---:|:---|
-| `WebSocket` | `/ws/telemetry` | `?token=<JWT>` | Live telemetry frames and incident alerts (`AI_DETECTION`, `INCIDENT_ESCALATED`), scoped to the caller's organization. Clients send `{"type":"ping"}` every 15 s as an application-level keepalive and the server answers `{"type":"pong"}`; token expiry is re-checked on each ping and an expired session is closed with `1008`. All other client frames are ignored. |
+| `WebSocket` | `/ws/telemetry` | `?ticket=<ticket>` | Live telemetry frames and incident alerts (`AI_DETECTION`, `INCIDENT_ESCALATED`, `SILENT_DRONE_ALERT`), scoped to the caller's organization. **Get the ticket from `POST /auth/ws-ticket`** with the usual bearer token: it lives 30 s, opens exactly one socket, and is refused on replay. The session token is not accepted here — a browser cannot set handshake headers, so whatever goes in this URL lands in proxy logs and browser history. Clients send `{"type":"ping"}` every 15 s as an application-level keepalive and the server answers `{"type":"pong"}`; the originating session's expiry is re-checked on each ping and an expired one is closed with `1008`. All other client frames are ignored. |

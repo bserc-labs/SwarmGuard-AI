@@ -1,6 +1,10 @@
 # SwarmGuard AI — Database Schema Documentation
 
-**Supported Engines:** PostgreSQL 16 (Production), SQLite 3 (Development)
+**Supported Engine:** PostgreSQL 16 with TimescaleDB, everywhere.
+
+SQLite is not supported and has not been since the telemetry table became a
+hypertable: `database.py` refuses to start on a SQLite URL rather than let a
+deployment discover the difference at run time.
 
 ---
 
@@ -10,11 +14,28 @@
 erDiagram
     User {
         int id PK
+        int organization_id FK
         string username UK
         string email UK
         string password
         string role
+        bool is_active
+        int token_version
         datetime created_at
+    }
+
+    DeviceCredential {
+        int id PK
+        int organization_id FK
+        string drone_id
+        string key_hash UK
+        string key_prefix
+        string label
+        string created_by
+        datetime created_at
+        datetime last_used_at
+        datetime revoked_at
+        string revoked_by
     }
 
     TelemetryLog {
@@ -95,9 +116,14 @@ erDiagram
     Drone ||--o{ TelemetryLog : "generates"
     Drone ||--o{ Incident : "triggers"
     Drone ||--o{ DroneCommand : "receives"
+    Drone ||--o{ DeviceCredential : "authenticates with"
     User ||--o{ DroneCommand : "issues"
     User ||--o{ AuditLog : "creates"
 ```
+
+Every table above except `system_settings` carries an `organization_id`: it is
+the tenancy boundary, and `tests/test_route_tenancy.py` refuses to let a route
+read one of these tables without scoping by it.
 
 ---
 

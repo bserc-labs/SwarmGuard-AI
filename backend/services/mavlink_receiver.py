@@ -5,6 +5,7 @@ from pymavlink import mavutil
 import schemas
 from config import get_settings
 from database import SessionLocal
+from services.detection_pipeline import run_detection
 from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
 from utils.logger import logger
@@ -13,6 +14,8 @@ settings = get_settings()
 
 # Broadcasts are fire-and-forget; the set keeps each task alive until it finishes.
 _broadcast_tasks: set[asyncio.Task] = set()
+# The same, for the detection cycle each packet triggers.
+_detection_tasks: set[asyncio.Task] = set()
 
 
 class MavlinkReceiver:
@@ -263,6 +266,21 @@ class MavlinkReceiver:
         task = asyncio.create_task(ws_manager.broadcast(processed_data, organization_id))
         _broadcast_tasks.add(task)
         task.add_done_callback(_broadcast_tasks.discard)
+
+        # Detection, the same cycle the HTTP route runs after every packet it
+        # accepts. Without this the whole MAVLink path was stored and never
+        # scored: a deployment ingesting over MAVLink had a kinematic guard, a
+        # geofence and an incident engine that no packet ever reached, and a
+        # dashboard that could only ever show a clean sky.
+        #
+        # Fired rather than awaited: this receiver awaits its writes so one
+        # vehicle's packets land in order, and detection is a read of what was
+        # just written. Making packet N+1 wait for packet N's detection would
+        # put the detector's latency in the ingest path. run_detection never
+        # raises into its caller.
+        detecting = asyncio.create_task(run_detection(packet.drone_id, organization_id))
+        _detection_tasks.add(detecting)
+        detecting.add_done_callback(_detection_tasks.discard)
 
 
 mavlink_receiver = MavlinkReceiver()

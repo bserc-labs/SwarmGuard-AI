@@ -404,6 +404,18 @@ export const INCIDENT_STATUSES = [
 /* ----------------------------------------------------------------- methods */
 
 export const api = {
+  /* --- auth ------------------------------------------------------------ */
+
+  /**
+   * POST /auth/ws-ticket — a single-use ticket for opening the telemetry
+   * socket. A browser cannot set headers on a WebSocket handshake, so the
+   * credential has to travel in the URL; this one lives half a minute, opens
+   * one socket, and is worthless afterwards, unlike the session token the
+   * client used to put there.
+   */
+  getSocketTicket: (): Promise<{ ticket: string; expires_in: number }> =>
+    request("/auth/ws-ticket", { method: "POST" }),
+
   /* --- system ---------------------------------------------------------- */
 
   /** GET /system/health — requires an authenticated operator or above. */

@@ -11,27 +11,50 @@ a route *template* (`/incidents/{id}`), never a raw path, and never a
 drone id or an organization id -- a label value per drone would be a time
 series per drone, and the fleet is the one thing that grows without bound.
 
-Single process. uvicorn runs one worker here; with `--workers N` each worker
-would keep its own counters and a scrape would see one of them at random.
-That is the multiprocess mode of prometheus_client (PROMETHEUS_MULTIPROC_DIR),
-which is a deliberate later step, not a default.
+One worker or several. With `--workers N` each process keeps its own counters,
+so a scrape would otherwise see whichever one answered. Set
+`PROMETHEUS_MULTIPROC_DIR` -- the entrypoint does when `UVICORN_WORKERS > 1` --
+and every process writes to files there instead, which `render` sums into one
+view of the whole application. Two consequences worth knowing: a gauge needs a
+`multiprocess_mode` to say how workers combine (`livesum` here: add them up),
+and a collector that reads live state at scrape time has nothing to write to
+those files, so the pool is sampled into gauges instead (`sample_pool`).
 """
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterable
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     REGISTRY,
+    CollectorRegistry,
     Counter,
     Gauge,
     Histogram,
     generate_latest,
+    multiprocess,
 )
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.registry import Collector
+
+# With more than one uvicorn worker, each process keeps its own counters and a
+# scrape would see whichever one answered. prometheus_client's multiprocess mode
+# has every process write to files in a shared directory, and the scrape sums
+# them. The entrypoint sets this when UVICORN_WORKERS > 1 and empties the
+# directory first, because stale files from a previous boot would be added in.
+MULTIPROCESS_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
+MULTIPROCESS = bool(MULTIPROCESS_DIR)
+
+
+def gauge(name: str, documentation: str) -> Gauge:
+    """Create a gauge that can be summed across uvicorn workers when needed."""
+    if MULTIPROCESS:
+        return Gauge(name, documentation, multiprocess_mode="livesum")
+    return Gauge(name, documentation)
+
 
 # --- HTTP ---------------------------------------------------------------------------
 HTTP_REQUESTS = Counter(
@@ -48,9 +71,10 @@ HTTP_LATENCY = Histogram(
 UNMATCHED_ROUTE = "unmatched"
 
 # --- ingest -------------------------------------------------------------------------------
-HTTP_IN_FLIGHT = Gauge(
+HTTP_IN_FLIGHT = gauge(
     "swarmguard_http_in_flight",
-    "HTTP requests admitted into the application and not yet finished (middleware/admission.py).",
+    "HTTP requests admitted into the application and not yet finished (middleware/admission.py). "
+    "Summed across workers: admission bounds each one separately.",
 )
 HTTP_ADMISSION_REJECTED = Counter(
     "swarmguard_http_admission_rejected_total",
@@ -58,7 +82,8 @@ HTTP_ADMISSION_REJECTED = Counter(
 )
 INGEST = Counter(
     "swarmguard_telemetry_ingest_total",
-    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_bad_request, error.",
+    "Telemetry packets by outcome: accepted, rejected_device_key, rejected_device_certificate, "
+    "rejected_stale, rejected_bad_request, error.",
     ["outcome"],
 )
 
@@ -67,6 +92,13 @@ DEVICE_AUTH = Counter(
     "Accepted ingest device authentications, by method: device_key or shared_key. "
     "When shared_key stops moving, the fleet has migrated and the shared key can be turned off.",
     ["method"],
+)
+DEVICE_CERT = Counter(
+    "swarmguard_device_certificate_total",
+    "Ingest requests by client certificate: verified (through the mTLS port, for this drone), "
+    "absent (not through it), or mismatch (a certificate for another drone or organization). "
+    "When absent stops moving, DEVICE_MTLS_REQUIRED can be turned on.",
+    ["outcome"],
 )
 
 # --- detection ----------------------------------------------------------------------------------
@@ -95,9 +127,9 @@ INCIDENTS = Counter(
 )
 
 # --- websockets ------------------------------------------------------------------------------------
-WS_CONNECTIONS = Gauge(
+WS_CONNECTIONS = gauge(
     "swarmguard_websocket_connections",
-    "Open WebSocket connections held by this process.",
+    "Open WebSocket connections, summed across workers.",
 )
 WS_BROADCASTS = Counter(
     "swarmguard_websocket_broadcasts_total",
@@ -123,6 +155,8 @@ def detection_tier(detection: dict) -> str:
         return "kinematic"
     if detector == "geofence" or "zones" in metadata:
         return "geofence"
+    if detector == "heartbeat":
+        return "heartbeat"
     return "ml"
 
 
@@ -133,6 +167,11 @@ class PoolCollector(Collector):
     The pool was sized to 20 + 40 by reasoning in database.py and never
     measured. `checked_out` against `max` is the number that says whether that
     reasoning held.
+
+    Only registered when this process is the whole application. Under
+    `--workers N` prometheus_client aggregates from files each process writes,
+    and a collector that reads live state has nothing to write to them, so the
+    pool is sampled into the gauges below instead. See `sample_pool`.
     """
 
     def __init__(self, engine) -> None:
@@ -153,6 +192,50 @@ class PoolCollector(Collector):
             "pool_size + max_overflow: the hard ceiling before a checkout waits.",
             value=size + getattr(pool, "_max_overflow", 0),
         )
+
+
+# The same five numbers, as gauges each worker writes, for when there is more
+# than one. `livesum` adds the workers together, which is what an operator wants
+# from every one of these: the fleet's connections against the fleet's ceiling.
+POOL_CHECKED_OUT = (
+    gauge("swarmguard_db_pool_checked_out", "Connections currently in use.") if MULTIPROCESS else None
+)
+POOL_CHECKED_IN = (
+    gauge("swarmguard_db_pool_checked_in", "Idle connections in the pool.") if MULTIPROCESS else None
+)
+POOL_OVERFLOW = (
+    gauge("swarmguard_db_pool_overflow", "Connections open beyond pool_size.") if MULTIPROCESS else None
+)
+POOL_SIZE = gauge("swarmguard_db_pool_size", "Configured pool_size.") if MULTIPROCESS else None
+POOL_MAX = (
+    gauge(
+        "swarmguard_db_pool_max",
+        "pool_size + max_overflow: the hard ceiling before a checkout waits.",
+    )
+    if MULTIPROCESS
+    else None
+)
+
+
+def sample_pool(engine) -> None:
+    """Write this worker's pool numbers into the gauges. No-op when single-process."""
+    if not MULTIPROCESS:
+        return
+    if (
+        POOL_CHECKED_OUT is None
+        or POOL_CHECKED_IN is None
+        or POOL_OVERFLOW is None
+        or POOL_SIZE is None
+        or POOL_MAX is None
+    ):
+        raise RuntimeError("Multiprocess pool gauges were not initialized.")
+    pool = engine.pool
+    size = pool.size()
+    POOL_CHECKED_OUT.set(pool.checkedout())
+    POOL_CHECKED_IN.set(pool.checkedin())
+    POOL_OVERFLOW.set(pool.overflow())
+    POOL_SIZE.set(size)
+    POOL_MAX.set(size + getattr(pool, "_max_overflow", 0))
 
 
 class SupervisorCollector(Collector):
@@ -257,4 +340,13 @@ def route_templates(app) -> dict:
 
 
 def render(registry=REGISTRY) -> tuple[bytes, str]:
+    """The exposition text for a scrape.
+
+    With several workers the answer is not this process's registry but the sum
+    of every worker's files, gathered fresh each time: whichever worker happens
+    to serve /metrics reports for all of them.
+    """
+    if MULTIPROCESS and registry is REGISTRY:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
     return generate_latest(registry), CONTENT_TYPE_LATEST

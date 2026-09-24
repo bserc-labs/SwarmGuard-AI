@@ -211,8 +211,11 @@ async def run(args) -> dict:
 
     async def listener(n: int) -> None:
         base = args.ws or args.api.replace("https://", "wss://").replace("http://", "ws://").replace("/api", "")
-        ws_url = base + f"/ws/telemetry?token={token}"
         try:
+            # A single-use ticket, as the dashboard does: the session token is
+            # no longer accepted in the URL (POST /auth/ws-ticket).
+            ticket = (await client.post(f"{args.api}/auth/ws-ticket", headers=auth)).json()["ticket"]
+            ws_url = base + f"/ws/telemetry?ticket={ticket}"
             async with websockets.connect(ws_url, ssl=ctx if ws_url.startswith("wss") else None, max_queue=None) as ws:
                 while not stop.is_set():
                     try:

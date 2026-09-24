@@ -29,6 +29,8 @@ Icon
 /secrets/
 /certs/
 /acme/
+# The device CA (scripts/device-ca.sh): its key, database and issued device keys.
+/device-ca/
 /backups/
 # scripts/deploy.sh state: which image tag is deployed, and which was before it.
 /.deploy/

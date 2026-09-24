@@ -256,6 +256,53 @@ The runs behind this section: `2026-09-23-capacity-rerun.json` and
 `2026-09-23-late-delivery-before-fix.json` and `-after-fix.json` (the one that
 did, either side of the fix).
 
+## 7. Refusing what the detector cannot rate (Phase 4)
+
+Section 6 left detection *declining* late packets: no false alerts, but a
+detector that goes quiet under stress. Ingest now refuses such a packet before
+storage, with 503 and `Retry-After`, asking the guard's own question
+(`services/ingest_staleness.py`). Same run as section 6: 40 drones, 100
+packets/second for two minutes, one packet in ten held back 60 s.
+
+| | 2026-09-23 (declined) | first attempt | **final** |
+|---|---|---|---|
+| packets the guard declined to rate | 40 | 0 | **0** |
+| false GPS_SPOOFING incidents | 0 | **40** | **0** |
+| late packets answered 503, not stored | — | 600 | **1,080** |
+| accepted, p50 / p99 latency | 12,000, 4.4 / 12.7 ms | 11,400, 4.8 / 28 ms | 10,920, 5.1 / 52.7 ms |
+| WebSocket delivery | 12,000 / 12,000 | 0 (tool) | **10,920 / 10,920** |
+
+**The first attempt found a false positive the guard already had.** It refused
+a packet only against deliveries from the last second. When the run ended and
+fresh traffic stopped, the held-back packets kept draining, one per drone every
+four seconds. Four seconds is long enough for a reboot by the gap alone, so the
+guard read each drone's first drained packet as a reset and rated it on arrival
+time: 590 m in 4.4 s, one false GPS_SPOOFING per drone. The same hole existed
+before for any single late packet after a pause; refusing the packets around it
+made it reliable.
+
+**A reset restarts the clock.** After a reboot or a counter wrap `time_boot_ms`
+counts up from zero, so the first packet after one cannot show more uptime than
+has passed since the last delivery (plus the 10 s `GUARD_DEVICE_CLOCK_MAX_LEAD_S`
+slack). The drained packets showed a minute or two. The guard now declines such
+a packet instead of rating it on arrival (`KinematicGuard.could_have_reset`),
+and ingest refuses it, comparing against the drone's whole window rather than
+the last second. A clock that merely repeats is still rated on arrival: it is
+stalled, not late.
+
+The 120 held-back packets that were stored had been sampled in the run's last
+12 s. By the time they arrived they were within the 10 s reorder tolerance of
+the drone's newest packet, so the guard paired them on the device clock and
+rated them normally.
+
+The first attempt's WebSocket figure is the load tool's: it still opened the
+socket with the session token in the URL, which Phase 4 removed. It now fetches
+a single-use ticket as the dashboard does. The 80 SIGNAL_LOSS_JAMMING incidents
+across the two runs are the heartbeat monitor noticing that each run's 40
+drones went silent when it ended, which is its job.
+
+Run: `2026-09-24-late-delivery-stale-rejection.json`.
+
 ## Recommendations
 
 1. **Size fleets below the ingest limit per uplink**, or raise
@@ -274,7 +321,11 @@ did, either side of the fix).
    degraded exactly when it matters. Either run more workers (needs Prometheus
    multiprocess mode) or refuse telemetry the server cannot reach in time.
    Watch `swarmguard_guard_declined_total`: it is the number that says the
-   detector is coasting.
+   detector is coasting. **Done in Phase 4**, both: more workers (item 6), and
+   late packets refused with 503 before storage, section 7.
 6. **Plan for about 200 packets/second per process.** Four times the ingest
    limit, so one process serves a fleet behind several uplinks, and the number
-   to divide when sizing for more.
+   to divide when sizing for more. **Done in Phase 4**: `UVICORN_WORKERS` runs
+   more of them, and two hold 400/s with a half-second median where one was at
+   six seconds. Each worker opens its own pool, so start-up refuses a worker
+   count whose pools would exceed PostgreSQL's `max_connections`.

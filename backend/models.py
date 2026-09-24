@@ -29,7 +29,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, true
 
 from database import Base
 
@@ -57,6 +57,12 @@ class User(Base):
     # issued token and compared on each request, so a single UPDATE invalidates
     # all of a user's outstanding sessions without needing a blocklist.
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+    # A disabled account cannot sign in and cannot use a token it already holds.
+    # Deleting the row would work too, and would also erase the account every
+    # audit row refers to; this is the reversible version.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true(), default=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 

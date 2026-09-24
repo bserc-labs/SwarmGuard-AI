@@ -120,3 +120,98 @@ def change_password(
         "message": "Password updated. All sessions have been signed out.",
         "sessions_revoked": True,
     }
+
+
+# Declared after the /me routes on purpose: FastAPI matches in declaration
+# order, and "/{user_id}" would otherwise swallow "/me" and try to read it
+# as an id.
+def _managed_user(db: Session, user_id: int, tenant: TenantContext) -> models.User:
+    """The account an administrator is acting on, inside their own tenant.
+
+    A user in another organization is reported as absent rather than forbidden:
+    whether an id exists elsewhere is not this tenant's business.
+    """
+    user = (
+        db.query(models.User)
+        .filter(
+            models.User.id == user_id,
+            models.User.organization_id == tenant.organization_id,
+        )
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.patch("/{user_id}", response_model=schemas.UserOut)
+def update_user(
+    user_id: int,
+    changes: schemas.UserAdminUpdate,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.USER_MANAGE)),
+):
+    """Change another account's role, or disable and re-enable it.
+
+    Both revoke the account's live sessions by bumping `token_version`: a role
+    change must not leave a token carrying the old one in circulation, and a
+    disabled account must stop working now rather than when its token expires.
+
+    An administrator cannot change their own account here, which is also what
+    keeps an organization from locking itself out: only an administrator can
+    reach this route, so the one making the change always remains one.
+    """
+    user = _managed_user(db, user_id, tenant)
+
+    if user.id == tenant.user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Use your own profile routes to change your account; another administrator must change your role.",
+        )
+
+    before = f"role={user.role} active={user.is_active}"
+    if changes.role is not None:
+        user.role = changes.role
+    if changes.is_active is not None:
+        user.is_active = changes.is_active
+
+    if changes.role is not None or changes.is_active is not None:
+        user.token_version = (user.token_version or 0) + 1
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
+        action="USER_UPDATED",
+        resource="user", resource_id=user.username,
+        previous_state=before,
+        new_state=f"role={user.role} active={user.is_active}",
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_permission(Permissions.USER_MANAGE)),
+):
+    """Remove an account.
+
+    Prefer disabling it: the audit trail names accounts, and a deleted one
+    leaves rows pointing at a username nobody can look up. This exists for the
+    cases where a record must actually go.
+    """
+    user = _managed_user(db, user_id, tenant)
+
+    if user.id == tenant.user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    audit_service.log_from_context(
+        db=db, tenant=tenant,
+        action="USER_DELETED",
+        resource="user", resource_id=user.username,
+        previous_state=f"role={user.role} active={user.is_active}",
+    )
+    db.delete(user)
+    db.commit()

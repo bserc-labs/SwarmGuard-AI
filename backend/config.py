@@ -127,12 +127,18 @@ class Settings(BaseSettings):
     # looks like protection.
     LOGIN_RATE_LIMIT: str = "5/minute"
 
-    # Telemetry ingest per client address. Measured (reports/06-LOAD-TEST-
-    # RESULTS.md): precise at the limit, and the limiter -- not the pool or the
-    # CPU -- is what caps throughput. Keyed by client address, so every drone
-    # behind one ground-station uplink shares it: 20 drones get 2.5 Hz each.
-    # Raise it for a larger fleet behind one uplink, or for a capacity test.
+    # Telemetry ingest per drone. Measured (reports/06-LOAD-TEST-RESULTS.md):
+    # precise at the limit, and the limiter -- not the pool or the CPU -- is
+    # what caps throughput. Keyed on the per-device credential; a drone still on
+    # the shared fleet key counts against its client address, so every such
+    # drone behind one uplink shares it (utils/limiter.py, device_or_address).
     INGEST_RATE_LIMIT: str = "50/second"
+    # Refuse, with 503 and Retry-After, a packet the kinematic guard could not
+    # rate: its device clock more than GUARD_DEVICE_CLOCK_MAX_REORDER_S behind
+    # the drone's recent packets, and not explainable by a clock reset. Under
+    # overload that is the backlog, and storing it only buys a declined
+    # detection cycle. services/ingest_staleness.py.
+    INGEST_REJECT_STALE: bool = True
 
     # AI models & thresholds (for future use)
     THREAT_ANOMALY_THRESHOLD: float = 0.8
@@ -146,6 +152,13 @@ class Settings(BaseSettings):
     # shows no more shared_key traffic, and a lost airframe stops being a lost
     # fleet. See docs/OPERATIONS.md, "Device credentials".
     DEVICE_SHARED_KEY_ENABLED: bool = True
+    # Refuse ingest that did not arrive through the mTLS port (8443) with a
+    # client certificate for this drone. Off by default: a drone needs a
+    # certificate from scripts/device-ca.sh first. Turn it on once
+    # swarmguard_device_certificate_total{outcome="absent"} stops moving; from
+    # then on a device key read off a captured airframe is not enough on its
+    # own. services/device_certificates.py.
+    DEVICE_MTLS_REQUIRED: bool = False
 
     # MAVLink Configurations.
     #
@@ -215,6 +228,21 @@ class Settings(BaseSettings):
     # and slack. HTTP_MAX_IN_FLIGHT + BACKGROUND_THREADS + this must fit in
     # DB_POOL_SIZE + DB_MAX_OVERFLOW; startup refuses otherwise.
     DB_POOL_RESERVE: int = 4
+
+    # --- Workers ---------------------------------------------------------------
+    #
+    # One uvicorn worker handles about 200 telemetry packets a second on two
+    # cores (reports/06-LOAD-TEST-RESULTS.md). More workers multiply that, and
+    # multiply the connection pool with it: every worker has its own. The
+    # entrypoint turns on Prometheus multiprocess mode when this is above one,
+    # because otherwise a scrape would see whichever worker answered.
+    UVICORN_WORKERS: int = 1
+    # PostgreSQL's own ceiling, `max_connections` (100 by default). Every
+    # worker's pool counts against it, and so does everything else connecting to
+    # the same server -- psql, a backup job, another service. Startup refuses a
+    # configuration that could exceed it rather than letting the Nth worker
+    # discover it at run time.
+    DB_SERVER_MAX_CONNECTIONS: int = 100
 
     # --- CORS ----------------------------------------------------------------
     #
@@ -368,6 +396,14 @@ class Settings(BaseSettings):
             return None
         return _validate_secret(str(v).strip(), "SECRET_KEY_PREVIOUS")
 
+    @field_validator("SENTRY_DSN", mode="before")
+    @classmethod
+    def _blank_sentry_dsn_is_unset(cls, v: str | None) -> str | None:
+        # Compose mounts an empty file when error tracking is off.
+        if v is None:
+            return None
+        return str(v).strip() or None
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _warn_on_weak_database_password(cls, v: str) -> str:
@@ -402,6 +438,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
                 "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _pools_fit_the_server(self) -> "Settings":
+        """Every worker has its own pool; together they must fit max_connections."""
+        if self.UVICORN_WORKERS < 1:
+            raise ValueError("UVICORN_WORKERS must be at least 1.")
+        pool = self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+        total = pool * self.UVICORN_WORKERS
+        if total > self.DB_SERVER_MAX_CONNECTIONS:
+            raise ValueError(
+                f"{self.UVICORN_WORKERS} workers x (DB_POOL_SIZE + DB_MAX_OVERFLOW = {pool}) = "
+                f"{total} connections, but DB_SERVER_MAX_CONNECTIONS is "
+                f"{self.DB_SERVER_MAX_CONNECTIONS}. Each worker opens its own pool. Lower the "
+                "pool per worker, run fewer workers, or raise PostgreSQL's max_connections and "
+                "this setting with it."
             )
         return self
 

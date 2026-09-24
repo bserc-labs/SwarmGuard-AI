@@ -8,11 +8,13 @@ import models
 import schemas
 from config import get_settings
 from database import get_db
-from middleware.auth_middleware import get_current_user
+from middleware.auth_middleware import get_current_user, oauth2_scheme
+from services import ws_tickets
 from services.audit_service import audit_service
 from services.auth_service import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
+    decode_access_token,
     verify_password,
 )
 
@@ -75,6 +77,17 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_active:
+        # Audited separately: "the password was right and the account is
+        # disabled" is a different event to a failed password, and the one an
+        # investigator wants to see. The caller is told no more than before.
+        _log_audit(db, user.username, "LOGIN_DISABLED", client_ip, organization_id=user.organization_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={
@@ -117,3 +130,33 @@ def logout(
     )
 
     return {"message": "Signed out. All sessions for this account are now invalid."}
+
+
+@router.post("/ws-ticket", response_model=schemas.WebSocketTicket)
+@limiter.limit("60/minute")
+def websocket_ticket(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    current_user: models.User = Depends(get_current_user),
+):
+    """A single-use ticket for opening the telemetry socket.
+
+    A browser cannot set headers on a WebSocket handshake, so the credential
+    travels in the URL, where proxy logs and browser history keep it. The client
+    used to send the session token itself. A ticket opens one socket, lives half
+    a minute, and is worthless once spent or logged.
+
+    Rate limited because it is a credential factory: a stolen session should not
+    also be an unbounded supply of them.
+    """
+    claims = decode_access_token(token) or {}
+    return {
+        "ticket": ws_tickets.issue(
+            username=current_user.username,
+            organization_id=current_user.organization_id,
+            token_version=current_user.token_version or 0,
+            # The socket must not outlive the session it was opened from.
+            session_expires_at=int(claims.get("exp", 0)),
+        ),
+        "expires_in": int(ws_tickets.TICKET_LIFETIME.total_seconds()),
+    }
