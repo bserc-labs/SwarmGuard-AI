@@ -46,6 +46,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
 
+    # A disabled account stops working now. Disabling also bumps token_version,
+    # so this is belt and braces -- but the belt is what an operator relies on
+    # when they disable an account during an incident.
+    if not user.is_active:
+        raise credentials_exception
+
     # Session revocation. A token minted before the user's password or role
     # changed carries a stale version and is rejected. Tokens issued before this
     # column existed have no claim at all, so they are treated as revoked.

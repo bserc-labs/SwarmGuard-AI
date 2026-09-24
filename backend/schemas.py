@@ -51,6 +51,7 @@ class UserOut(BaseModel):
     email: str | None
     role: str
     organization_id: int | None = None
+    is_active: bool = True
     created_at: datetime
 
     model_config = {
@@ -61,6 +62,17 @@ class UserUpdate(BaseModel):
     email: str | None = Field(None, max_length=MAX_EMAIL_LENGTH, pattern=EMAIL_PATTERN)
 
     _normalise_email = field_validator("email", mode="before")(_blank_email_is_none)
+
+
+class UserAdminUpdate(BaseModel):
+    """What an administrator may change about somebody else's account.
+
+    Not the password: an administrator resets a forgotten one by disabling the
+    account, not by choosing a new secret for its owner.
+    """
+
+    role: UserRole | None = None
+    is_active: bool | None = None
 
 class PasswordUpdate(BaseModel):
     current_password: str

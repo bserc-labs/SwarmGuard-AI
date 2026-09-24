@@ -77,6 +77,17 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_active:
+        # Audited separately: "the password was right and the account is
+        # disabled" is a different event to a failed password, and the one an
+        # investigator wants to see. The caller is told no more than before.
+        _log_audit(db, user.username, "LOGIN_DISABLED", client_ip, organization_id=user.organization_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={

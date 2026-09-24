@@ -76,6 +76,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/users/"): TENANT_DATA,
     ("GET", "/users/me"): SELF,
     ("PATCH", "/users/me"): SELF,
+    # Administering somebody else's account: both scope the lookup to the
+    # caller's organization, and a user elsewhere reads as absent.
+    ("PATCH", "/users/{user_id}"): TENANT_DATA,
+    ("DELETE", "/users/{user_id}"): TENANT_DATA,
     ("POST", "/users/me/password"): SELF,
 
     # --- telemetry ----------------------------------------------------------
