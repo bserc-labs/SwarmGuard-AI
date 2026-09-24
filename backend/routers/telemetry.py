@@ -24,18 +24,19 @@ from services.audit_service import audit_service
 from services.detection_pipeline import run_detection
 from services.telemetry_service import telemetry_service
 from services.ws_manager import ws_manager
-from utils.limiter import limiter
+from utils.limiter import device_or_address, limiter
 from utils.logger import logger
 from utils.metrics import DEVICE_AUTH, INGEST
 
 settings = get_settings()
-# See Settings.INGEST_RATE_LIMIT: measured, and keyed per client address.
+# See Settings.INGEST_RATE_LIMIT: measured. Keyed per device credential, so a
+# fleet behind one uplink does not divide one allowance between its drones.
 INGEST_RATE_LIMIT = settings.INGEST_RATE_LIMIT
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 @router.post("/ingest")
-@limiter.limit(INGEST_RATE_LIMIT)
+@limiter.limit(INGEST_RATE_LIMIT, key_func=device_or_address)
 def ingest_telemetry(
     request: Request,
     packet: schemas.TelemetryPacket, 

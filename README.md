@@ -354,7 +354,7 @@ cd frontend && npm run test
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
 | `REDIS_URL` | — | Required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
-| `INGEST_RATE_LIMIT` | `50/second` | Telemetry packets per client address. Every drone behind one uplink shares it; see [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md) |
+| `INGEST_RATE_LIMIT` | `50/second` | Telemetry packets **per device credential**, so drones behind one uplink do not divide one allowance. A drone still using the shared fleet key is limited per client address instead; see [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md) |
 | `HTTP_MAX_IN_FLIGHT` | `40` | Requests inside the API at once; the rest wait at the door ([Admission](docs/OPERATIONS.md#metrics)) |
 | `HTTP_ADMISSION_WAIT_S` | `5` | How long a request waits for a slot before a 503 with `Retry-After` |
 | `BACKGROUND_THREADS` | `12` | Threads for detection, MAVLink persistence and background loops |

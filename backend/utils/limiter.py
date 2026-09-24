@@ -1,9 +1,15 @@
+import hashlib
 import os
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from utils.logger import logger
+
+# Per-device credentials carry this prefix (services/device_credentials.py).
+# Matched here rather than imported, so the limiter -- which runs before any
+# dependency resolves -- stays free of the service layer and its database.
+DEVICE_KEY_PREFIX = "sgd_"
 
 # Counters live in Redis so they survive a restart and are shared across
 # workers and replicas. In memory they reset on every restart and are per
@@ -47,6 +53,29 @@ else:
         "Counters will not be shared across workers and reset on restart."
     )
     limiter = Limiter(key_func=get_remote_address)
+
+
+def device_or_address(request) -> str:
+    """Rate-limit a drone by its own credential, or by address if it has none.
+
+    Keyed on the client address, one ground station's uplink is one bucket, and
+    the fleet behind it divides the ingest limit between them: the load test of
+    2026-09-22 measured twenty drones sharing 50 packets/second, 2.5 Hz each,
+    and one noisy airframe can spend the whole allowance.
+
+    A per-device credential is a stable identity that arrives with the packet,
+    so each drone gets its own bucket and cannot starve its neighbours. The key
+    is a digest, never the credential itself: limiter keys end up in Redis and
+    in error messages.
+
+    The shared fleet key identifies no one -- every drone presents the same
+    string -- so it keeps the old address bucket rather than putting the whole
+    fleet in one. That is another reason to finish migrating off it.
+    """
+    presented = request.headers.get("x-drone-api-key") or ""
+    if presented.startswith(DEVICE_KEY_PREFIX):
+        return "device:" + hashlib.sha256(presented.encode()).hexdigest()[:32]
+    return get_remote_address(request)
 
 
 def storage_healthy() -> tuple[bool, str]:
