@@ -1,7 +1,18 @@
 # Phase 4 — what is left, and how to do it
 
-Phases 0 to 3 are done. This plan covers what they deliberately left open, what
-the load test recommended, and what the audit found and nobody has fixed yet.
+**Status: six of the eight items are done** (4.1, 4.2, 4.3, 4.6, 4.7, 4.8, plus
+the small corrections in 4.9), each with tests and, where it is a capacity
+claim, a measurement. Two remain, and both need a decision rather than an
+afternoon:
+
+| Open | Why it is not done here |
+|---|---|
+| 4.4 mTLS for device identity | About a week, and most of it is certificate issuance and rotation for devices — an operational design, not a code change. Per-device keys made it optional rather than urgent. |
+| 4.5 Purge the committed database blobs | Rewrites history and force-pushes, so every clone has to be re-made. That is the repository owner's call and a moment everyone agrees on, not something to slip into a pull request. |
+
+What each item was, and what it is now, follows. Phases 0 to 3 are done; this
+plan covers what they deliberately left open, what the load test recommended,
+and what the audit found and nobody had fixed.
 
 Each item says what is wrong, how we know, what the fix is, and **how we will
 know it worked** — because Phase 3's lesson is that a system is only as good as
@@ -17,7 +28,7 @@ Order and effort are at the end.
 The measurements are in [`06-LOAD-TEST-RESULTS.md`](06-LOAD-TEST-RESULTS.md).
 These two are its open recommendations.
 
-### 4.1 Shed load before the queue outgrows the detector's tolerance
+### 4.1 Shed load before the queue outgrows the detector's tolerance ✅
 
 **What is wrong.** One process handles about 200 packets/second. Past that the
 queue grows in front of the application, where admission cannot see it: at
@@ -49,7 +60,7 @@ numbers, not the incident count, which is already zero.
 **Effort.** 2–3 days for workers plus multiprocess metrics; 1 day for staleness
 rejection.
 
-### 4.2 Rate-limit per device credential, not per client address
+### 4.2 Rate-limit per device credential, not per client address ✅
 
 **What is wrong.** `INGEST_RATE_LIMIT` counts per client address, so every
 drone behind one ground station shares 50 packets/second: twenty drones get
@@ -71,7 +82,7 @@ Today it does not.
 
 ## B. Identity and secrets
 
-### 4.3 Get the WebSocket token out of the URL
+### 4.3 Get the WebSocket token out of the URL ✅
 
 **What is wrong.** `frontend/src/services/websocket.ts` appends the JWT as
 `?token=…`. Query strings land in proxy logs, browser history and referrer
@@ -123,7 +134,7 @@ returns nothing) and the hashes no longer authenticate anywhere.
 
 ## C. Detection completeness
 
-### 4.6 Wire MAVLink telemetry into detection
+### 4.6 Wire MAVLink telemetry into detection ✅
 
 **What is wrong.** `services/mavlink_receiver.py` validates and stores packets,
 and stops there. Telemetry that arrives over MAVLink is never scored: the
@@ -141,7 +152,7 @@ incident, mirroring the HTTP test that exists.
 
 **Effort.** 2 days, including the budget question.
 
-### 4.7 Route heartbeat incidents through the incident engine
+### 4.7 Route heartbeat incidents through the incident engine ✅
 
 **What is wrong.** `services/heartbeat_service.py` writes `Incident` rows
 directly. It therefore skips suppression, escalation and the advisory lock that
@@ -160,14 +171,14 @@ escalates, not ten incidents.
 
 ## D. Product gaps
 
-### 4.8 Administration of users
+### 4.8 Administration of users ✅
 
 `routers/users.py` can create a user, list users, and let one edit their own
 profile and password. There is no route to change another user's role, disable
 an account, or delete one. Today an operator who leaves cannot be removed
 except in the database. **Effort:** 2 days with tenancy tests and audit rows.
 
-### 4.9 Small things
+### 4.9 Small things ✅
 
 - `docs/DATABASE_SCHEMA.md` still advertises "SQLite 3 (Development)".
   `database.py` refuses to start on SQLite. Correct the document.
