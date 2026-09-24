@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from services.auth_service import create_access_token, decode_access_token
-from utils.logger import logger
+from utils.shared_store import redis_client
 
 TICKET_TYPE = "ws_ticket"
 TICKET_LIFETIME = timedelta(seconds=30)
@@ -48,23 +48,6 @@ def issue(*, username: str, organization_id: int, token_version: int, session_ex
     )
 
 
-def _storage():
-    """The limiter's Redis, reused. None when it is not configured or reachable."""
-    from utils.limiter import REDIS_URL
-
-    if not REDIS_URL:
-        return None
-    try:
-        import redis
-
-        client = redis.Redis.from_url(REDIS_URL, socket_timeout=1, socket_connect_timeout=1)
-        client.ping()
-        return client
-    except Exception as exc:
-        logger.warning(f"WebSocket tickets cannot reach Redis, single use is per process: {exc}")
-        return None
-
-
 # Fallback when Redis is not configured: one process, one set. It is not shared
 # across workers, which is exactly why Redis is preferred.
 _spent_here: set[str] = set()
@@ -72,7 +55,7 @@ _spent_here: set[str] = set()
 
 def _claim(jti: str) -> bool:
     """Mark a ticket spent. False if it was already."""
-    store = _storage()
+    store = redis_client()
     if store is None:
         if jti in _spent_here:
             return False

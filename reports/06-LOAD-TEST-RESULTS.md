@@ -277,4 +277,7 @@ did, either side of the fix).
    detector is coasting.
 6. **Plan for about 200 packets/second per process.** Four times the ingest
    limit, so one process serves a fleet behind several uplinks, and the number
-   to divide when sizing for more.
+   to divide when sizing for more. **Done in Phase 4**: `UVICORN_WORKERS` runs
+   more of them, and two hold 400/s with a half-second median where one was at
+   six seconds. Each worker opens its own pool, so start-up refuses a worker
+   count whose pools would exceed PostgreSQL's `max_connections`.

@@ -216,6 +216,21 @@ class Settings(BaseSettings):
     # DB_POOL_SIZE + DB_MAX_OVERFLOW; startup refuses otherwise.
     DB_POOL_RESERVE: int = 4
 
+    # --- Workers ---------------------------------------------------------------
+    #
+    # One uvicorn worker handles about 200 telemetry packets a second on two
+    # cores (reports/06-LOAD-TEST-RESULTS.md). More workers multiply that, and
+    # multiply the connection pool with it: every worker has its own. The
+    # entrypoint turns on Prometheus multiprocess mode when this is above one,
+    # because otherwise a scrape would see whichever worker answered.
+    UVICORN_WORKERS: int = 1
+    # PostgreSQL's own ceiling, `max_connections` (100 by default). Every
+    # worker's pool counts against it, and so does everything else connecting to
+    # the same server -- psql, a backup job, another service. Startup refuses a
+    # configuration that could exceed it rather than letting the Nth worker
+    # discover it at run time.
+    DB_SERVER_MAX_CONNECTIONS: int = 100
+
     # --- CORS ----------------------------------------------------------------
     #
     # Comma-separated origins allowed to call the API from a browser with
@@ -402,6 +417,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY_PREVIOUS is the same as SECRET_KEY: that is not a rotation. "
                 "Generate a new SECRET_KEY, or clear SECRET_KEY_PREVIOUS."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _pools_fit_the_server(self) -> "Settings":
+        """Every worker has its own pool; together they must fit max_connections."""
+        if self.UVICORN_WORKERS < 1:
+            raise ValueError("UVICORN_WORKERS must be at least 1.")
+        pool = self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+        total = pool * self.UVICORN_WORKERS
+        if total > self.DB_SERVER_MAX_CONNECTIONS:
+            raise ValueError(
+                f"{self.UVICORN_WORKERS} workers x (DB_POOL_SIZE + DB_MAX_OVERFLOW = {pool}) = "
+                f"{total} connections, but DB_SERVER_MAX_CONNECTIONS is "
+                f"{self.DB_SERVER_MAX_CONNECTIONS}. Each worker opens its own pool. Lower the "
+                "pool per worker, run fewer workers, or raise PostgreSQL's max_connections and "
+                "this setting with it."
             )
         return self
 

@@ -200,10 +200,33 @@ profile so the default stack is unchanged. A real deployment points its own
 Prometheus at `http://backend:8000/metrics` and copies the rules file; the
 alerts there are the ones above, each with a next step in its description.
 
-**Single process.** uvicorn runs one worker here. With `--workers N` each
-worker keeps its own counters and a scrape sees one of them; that needs
-prometheus_client's multiprocess mode (`PROMETHEUS_MULTIPROC_DIR`), which is a
-deliberate later step.
+**More than one worker.** `UVICORN_WORKERS` (default 1) is the number of
+uvicorn processes. One handles about 200 telemetry packets a second on two
+cores; two hold 400/s with a half-second median where one was at six seconds.
+Measured on the development stack:
+
+| | one worker | two workers |
+|---|---|---|
+| 200/s sustained | queue grows, p50 ≈ 7 s | p50 4 ms, p95 9 ms |
+| 400/s sustained | p50 6.2 s | p50 0.5 s, p95 2.0 s |
+| memory | 230 MiB | 449 MiB |
+
+Three things follow from running more than one, and the code handles each:
+
+- **Metrics are aggregated.** The entrypoint sets `PROMETHEUS_MULTIPROC_DIR`
+  and empties it, every worker writes there, and a scrape sums them. Check it
+  worked: `swarmguard_db_pool_size` should be the per-worker pool times the
+  worker count.
+- **Pools multiply.** Each worker opens its own, so `UVICORN_WORKERS ×
+  (DB_POOL_SIZE + DB_MAX_OVERFLOW)` must fit `DB_SERVER_MAX_CONNECTIONS`
+  (PostgreSQL's `max_connections`, 100 by default). Start-up refuses a
+  configuration that would not, naming the numbers. Divide the pool by the
+  worker count, or raise `max_connections` and this setting together.
+- **Background passes are claimed.** The heartbeat monitor and the two
+  retention checks are application work, not per-worker work. Each pass is
+  claimed in Redis for just under its interval, so one worker runs it and the
+  others skip. Without Redis every worker runs every pass, which is correct for
+  one worker and duplicated for several.
 
 ## Error tracking
 

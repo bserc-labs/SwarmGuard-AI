@@ -34,6 +34,7 @@ from routers import (
 )
 from services.audit_service import purge_expired_audit_logs
 from services.heartbeat_service import check_drone_heartbeats
+from services.leader import once_across_workers
 from services.readiness import Probe, check_readiness
 from services.retention import check_retention_policy
 from services.supervisor import Supervisor
@@ -170,7 +171,11 @@ app.include_router(geofence.router)
 # after the routers exist: it needs the endpoint -> template map, and Starlette
 # records only the endpoint on the scope.
 app.add_middleware(metrics.MetricsMiddleware, route_of_endpoint=metrics.route_templates(app))
-metrics.register_collector("db-pool", metrics.PoolCollector(engine))
+if not metrics.MULTIPROCESS:
+    # Reads the live pool when scraped. With several workers a scrape is summed
+    # from files instead, which a live collector cannot write to, so the pool is
+    # sampled into gauges by a background pass (pool_sample_pass).
+    metrics.register_collector("db-pool", metrics.PoolCollector(engine))
 
 
 # The loops below are single passes; the Supervisor runs each on its interval,
@@ -184,6 +189,9 @@ supervisor = Supervisor(logger)
 HEARTBEAT_INTERVAL_S = 10.0
 RETENTION_INTERVAL_S = 3600.0
 AUDIT_RETENTION_INTERVAL_S = 86400.0
+# Often enough that a scrape a second apart sees a moving pool, cheap because
+# it reads numbers the pool already holds.
+POOL_SAMPLE_INTERVAL_S = 1.0
 
 
 async def heartbeat_pass() -> None:
@@ -259,11 +267,39 @@ async def audit_retention_pass() -> None:
                     f"{get_settings().AUDIT_RETENTION_DAYS} days.")
 
 
+async def pool_sample_pass() -> None:
+    """Write this worker's connection-pool numbers for the scrape to sum.
+
+    Only does anything with several workers: one process answers /metrics for
+    all of them, and a collector reading live state can only see its own pool.
+    """
+    metrics.sample_pool(engine)
+
+
+# Each pass is one-per-application work, not one-per-worker: with --workers N
+# every worker would sweep for silent drones and check retention on the same
+# interval. services/leader.py lets one of them have each pass.
 # run_first=False: drones get one interval to report after a start before any
 # of them is declared silent, as before.
-supervisor.register("heartbeat-monitor", heartbeat_pass, HEARTBEAT_INTERVAL_S, run_first=False)
-supervisor.register("telemetry-retention", retention_pass, RETENTION_INTERVAL_S)
-supervisor.register("audit-retention", audit_retention_pass, AUDIT_RETENTION_INTERVAL_S)
+supervisor.register(
+    "heartbeat-monitor",
+    once_across_workers("heartbeat-monitor", HEARTBEAT_INTERVAL_S, heartbeat_pass),
+    HEARTBEAT_INTERVAL_S,
+    run_first=False,
+)
+supervisor.register(
+    "telemetry-retention",
+    once_across_workers("telemetry-retention", RETENTION_INTERVAL_S, retention_pass),
+    RETENTION_INTERVAL_S,
+)
+supervisor.register(
+    "audit-retention",
+    once_across_workers("audit-retention", AUDIT_RETENTION_INTERVAL_S, audit_retention_pass),
+    AUDIT_RETENTION_INTERVAL_S,
+)
+if metrics.MULTIPROCESS:
+    # Not claimed: every worker reports its own pool, and the scrape adds them.
+    supervisor.register("pool-sample", pool_sample_pass, POOL_SAMPLE_INTERVAL_S)
 metrics.register_collector("supervisor", metrics.SupervisorCollector(supervisor))
 
 

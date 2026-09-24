@@ -11,27 +11,42 @@ a route *template* (`/incidents/{id}`), never a raw path, and never a
 drone id or an organization id -- a label value per drone would be a time
 series per drone, and the fleet is the one thing that grows without bound.
 
-Single process. uvicorn runs one worker here; with `--workers N` each worker
-would keep its own counters and a scrape would see one of them at random.
-That is the multiprocess mode of prometheus_client (PROMETHEUS_MULTIPROC_DIR),
-which is a deliberate later step, not a default.
+One worker or several. With `--workers N` each process keeps its own counters,
+so a scrape would otherwise see whichever one answered. Set
+`PROMETHEUS_MULTIPROC_DIR` -- the entrypoint does when `UVICORN_WORKERS > 1` --
+and every process writes to files there instead, which `render` sums into one
+view of the whole application. Two consequences worth knowing: a gauge needs a
+`multiprocess_mode` to say how workers combine (`livesum` here: add them up),
+and a collector that reads live state at scrape time has nothing to write to
+those files, so the pool is sampled into gauges instead (`sample_pool`).
 """
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterable
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     REGISTRY,
+    CollectorRegistry,
     Counter,
     Gauge,
     Histogram,
     generate_latest,
+    multiprocess,
 )
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.registry import Collector
+
+# With more than one uvicorn worker, each process keeps its own counters and a
+# scrape would see whichever one answered. prometheus_client's multiprocess mode
+# has every process write to files in a shared directory, and the scrape sums
+# them. The entrypoint sets this when UVICORN_WORKERS > 1 and empties the
+# directory first, because stale files from a previous boot would be added in.
+MULTIPROCESS_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
+MULTIPROCESS = bool(MULTIPROCESS_DIR)
 
 # --- HTTP ---------------------------------------------------------------------------
 HTTP_REQUESTS = Counter(
@@ -50,7 +65,9 @@ UNMATCHED_ROUTE = "unmatched"
 # --- ingest -------------------------------------------------------------------------------
 HTTP_IN_FLIGHT = Gauge(
     "swarmguard_http_in_flight",
-    "HTTP requests admitted into the application and not yet finished (middleware/admission.py).",
+    "HTTP requests admitted into the application and not yet finished (middleware/admission.py). "
+    "Summed across workers: admission bounds each one separately.",
+    **({"multiprocess_mode": "livesum"} if MULTIPROCESS else {}),
 )
 HTTP_ADMISSION_REJECTED = Counter(
     "swarmguard_http_admission_rejected_total",
@@ -97,7 +114,8 @@ INCIDENTS = Counter(
 # --- websockets ------------------------------------------------------------------------------------
 WS_CONNECTIONS = Gauge(
     "swarmguard_websocket_connections",
-    "Open WebSocket connections held by this process.",
+    "Open WebSocket connections, summed across workers.",
+    **({"multiprocess_mode": "livesum"} if MULTIPROCESS else {}),
 )
 WS_BROADCASTS = Counter(
     "swarmguard_websocket_broadcasts_total",
@@ -135,6 +153,11 @@ class PoolCollector(Collector):
     The pool was sized to 20 + 40 by reasoning in database.py and never
     measured. `checked_out` against `max` is the number that says whether that
     reasoning held.
+
+    Only registered when this process is the whole application. Under
+    `--workers N` prometheus_client aggregates from files each process writes,
+    and a collector that reads live state has nothing to write to them, so the
+    pool is sampled into the gauges below instead. See `sample_pool`.
     """
 
     def __init__(self, engine) -> None:
@@ -155,6 +178,42 @@ class PoolCollector(Collector):
             "pool_size + max_overflow: the hard ceiling before a checkout waits.",
             value=size + getattr(pool, "_max_overflow", 0),
         )
+
+
+# The same five numbers, as gauges each worker writes, for when there is more
+# than one. `livesum` adds the workers together, which is what an operator wants
+# from every one of these: the fleet's connections against the fleet's ceiling.
+_POOL_GAUGE_KWARGS = {"multiprocess_mode": "livesum"} if MULTIPROCESS else {}
+POOL_CHECKED_OUT = Gauge(
+    "swarmguard_db_pool_checked_out", "Connections currently in use.", **_POOL_GAUGE_KWARGS
+) if MULTIPROCESS else None
+POOL_CHECKED_IN = Gauge(
+    "swarmguard_db_pool_checked_in", "Idle connections in the pool.", **_POOL_GAUGE_KWARGS
+) if MULTIPROCESS else None
+POOL_OVERFLOW = Gauge(
+    "swarmguard_db_pool_overflow", "Connections open beyond pool_size.", **_POOL_GAUGE_KWARGS
+) if MULTIPROCESS else None
+POOL_SIZE = Gauge(
+    "swarmguard_db_pool_size", "Configured pool_size.", **_POOL_GAUGE_KWARGS
+) if MULTIPROCESS else None
+POOL_MAX = Gauge(
+    "swarmguard_db_pool_max",
+    "pool_size + max_overflow: the hard ceiling before a checkout waits.",
+    **_POOL_GAUGE_KWARGS,
+) if MULTIPROCESS else None
+
+
+def sample_pool(engine) -> None:
+    """Write this worker's pool numbers into the gauges. No-op when single-process."""
+    if not MULTIPROCESS:
+        return
+    pool = engine.pool
+    size = pool.size()
+    POOL_CHECKED_OUT.set(pool.checkedout())
+    POOL_CHECKED_IN.set(pool.checkedin())
+    POOL_OVERFLOW.set(pool.overflow())
+    POOL_SIZE.set(size)
+    POOL_MAX.set(size + getattr(pool, "_max_overflow", 0))
 
 
 class SupervisorCollector(Collector):
@@ -259,4 +318,13 @@ def route_templates(app) -> dict:
 
 
 def render(registry=REGISTRY) -> tuple[bytes, str]:
+    """The exposition text for a scrape.
+
+    With several workers the answer is not this process's registry but the sum
+    of every worker's files, gathered fresh each time: whichever worker happens
+    to serve /metrics reports for all of them.
+    """
+    if MULTIPROCESS and registry is REGISTRY:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
     return generate_latest(registry), CONTENT_TYPE_LATEST

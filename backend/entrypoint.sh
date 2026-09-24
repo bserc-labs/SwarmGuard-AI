@@ -58,6 +58,20 @@ case "$MODE" in
     fi
 
     echo "[entrypoint] Starting API server..."
+    # One worker handles about 200 telemetry packets a second on two cores
+    # (reports/06-LOAD-TEST-RESULTS.md); more workers multiply that. Each keeps
+    # its own counters, so above one they have to be aggregated from files in a
+    # shared directory, which is emptied first: files left by a previous boot
+    # would be summed into this one's numbers. Settings refuse a worker count
+    # whose pools would exceed PostgreSQL's max_connections.
+    WORKERS="${UVICORN_WORKERS:-1}"
+    if [ "$WORKERS" -gt 1 ]; then
+      PROMETHEUS_MULTIPROC_DIR="${PROMETHEUS_MULTIPROC_DIR:-/tmp/swarmguard-metrics}"
+      export PROMETHEUS_MULTIPROC_DIR
+      rm -rf "$PROMETHEUS_MULTIPROC_DIR"
+      mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+      echo "[entrypoint] $WORKERS workers; metrics aggregated via $PROMETHEUS_MULTIPROC_DIR"
+    fi
     # X-Forwarded-For is honoured only from FORWARDED_ALLOW_IPS, which compose
     # sets to the nginx container's static address. The fallback used to be
     # "*": the header was trusted from any peer, so a client could pick its own
@@ -68,6 +82,7 @@ case "$MODE" in
     exec uvicorn main:app \
       --host 0.0.0.0 \
       --port 8000 \
+      --workers "$WORKERS" \
       --proxy-headers \
       --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
     ;;

@@ -28,10 +28,13 @@ stress, and `swarmguard_guard_declined_total` is the only thing that says so.
 
 **The fix**, in the order that gets the most for the least:
 
-1. **More workers.** `uvicorn --workers N` multiplies capacity by N on a
-   multi-core host. It needs prometheus_client's multiprocess mode
-   (`PROMETHEUS_MULTIPROC_DIR`), which is why Phase 2 deferred it. Without
-   that, a scrape sees one worker's counters and every dashboard is wrong.
+1. **More workers.** ✅ Done. `UVICORN_WORKERS` runs N uvicorn processes; the
+   entrypoint turns on prometheus_client's multiprocess mode so a scrape
+   reports the whole application, start-up refuses a worker count whose pools
+   would exceed PostgreSQL's `max_connections`, and background passes are
+   claimed in Redis so they run once per interval rather than once per worker.
+   Measured: two workers hold 400 packets/second with a half-second median,
+   where one was at six seconds.
 2. **Refuse telemetry the server cannot reach in time.** A packet whose
    detection cannot run for a minute is not worth the alert it might raise.
    The ingest route can compare the device's sample clock against the window
