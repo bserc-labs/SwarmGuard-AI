@@ -48,6 +48,14 @@ from prometheus_client.registry import Collector
 MULTIPROCESS_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
 MULTIPROCESS = bool(MULTIPROCESS_DIR)
 
+
+def gauge(name: str, documentation: str) -> Gauge:
+    """Create a gauge that can be summed across uvicorn workers when needed."""
+    if MULTIPROCESS:
+        return Gauge(name, documentation, multiprocess_mode="livesum")
+    return Gauge(name, documentation)
+
+
 # --- HTTP ---------------------------------------------------------------------------
 HTTP_REQUESTS = Counter(
     "swarmguard_http_requests_total",
@@ -63,11 +71,10 @@ HTTP_LATENCY = Histogram(
 UNMATCHED_ROUTE = "unmatched"
 
 # --- ingest -------------------------------------------------------------------------------
-HTTP_IN_FLIGHT = Gauge(
+HTTP_IN_FLIGHT = gauge(
     "swarmguard_http_in_flight",
     "HTTP requests admitted into the application and not yet finished (middleware/admission.py). "
     "Summed across workers: admission bounds each one separately.",
-    **({"multiprocess_mode": "livesum"} if MULTIPROCESS else {}),
 )
 HTTP_ADMISSION_REJECTED = Counter(
     "swarmguard_http_admission_rejected_total",
@@ -120,10 +127,9 @@ INCIDENTS = Counter(
 )
 
 # --- websockets ------------------------------------------------------------------------------------
-WS_CONNECTIONS = Gauge(
+WS_CONNECTIONS = gauge(
     "swarmguard_websocket_connections",
     "Open WebSocket connections, summed across workers.",
-    **({"multiprocess_mode": "livesum"} if MULTIPROCESS else {}),
 )
 WS_BROADCASTS = Counter(
     "swarmguard_websocket_broadcasts_total",
@@ -191,30 +197,38 @@ class PoolCollector(Collector):
 # The same five numbers, as gauges each worker writes, for when there is more
 # than one. `livesum` adds the workers together, which is what an operator wants
 # from every one of these: the fleet's connections against the fleet's ceiling.
-_POOL_GAUGE_KWARGS = {"multiprocess_mode": "livesum"} if MULTIPROCESS else {}
-POOL_CHECKED_OUT = Gauge(
-    "swarmguard_db_pool_checked_out", "Connections currently in use.", **_POOL_GAUGE_KWARGS
-) if MULTIPROCESS else None
-POOL_CHECKED_IN = Gauge(
-    "swarmguard_db_pool_checked_in", "Idle connections in the pool.", **_POOL_GAUGE_KWARGS
-) if MULTIPROCESS else None
-POOL_OVERFLOW = Gauge(
-    "swarmguard_db_pool_overflow", "Connections open beyond pool_size.", **_POOL_GAUGE_KWARGS
-) if MULTIPROCESS else None
-POOL_SIZE = Gauge(
-    "swarmguard_db_pool_size", "Configured pool_size.", **_POOL_GAUGE_KWARGS
-) if MULTIPROCESS else None
-POOL_MAX = Gauge(
-    "swarmguard_db_pool_max",
-    "pool_size + max_overflow: the hard ceiling before a checkout waits.",
-    **_POOL_GAUGE_KWARGS,
-) if MULTIPROCESS else None
+POOL_CHECKED_OUT = (
+    gauge("swarmguard_db_pool_checked_out", "Connections currently in use.") if MULTIPROCESS else None
+)
+POOL_CHECKED_IN = (
+    gauge("swarmguard_db_pool_checked_in", "Idle connections in the pool.") if MULTIPROCESS else None
+)
+POOL_OVERFLOW = (
+    gauge("swarmguard_db_pool_overflow", "Connections open beyond pool_size.") if MULTIPROCESS else None
+)
+POOL_SIZE = gauge("swarmguard_db_pool_size", "Configured pool_size.") if MULTIPROCESS else None
+POOL_MAX = (
+    gauge(
+        "swarmguard_db_pool_max",
+        "pool_size + max_overflow: the hard ceiling before a checkout waits.",
+    )
+    if MULTIPROCESS
+    else None
+)
 
 
 def sample_pool(engine) -> None:
     """Write this worker's pool numbers into the gauges. No-op when single-process."""
     if not MULTIPROCESS:
         return
+    if (
+        POOL_CHECKED_OUT is None
+        or POOL_CHECKED_IN is None
+        or POOL_OVERFLOW is None
+        or POOL_SIZE is None
+        or POOL_MAX is None
+    ):
+        raise RuntimeError("Multiprocess pool gauges were not initialized.")
     pool = engine.pool
     size = pool.size()
     POOL_CHECKED_OUT.set(pool.checkedout())

@@ -396,6 +396,14 @@ class Settings(BaseSettings):
             return None
         return _validate_secret(str(v).strip(), "SECRET_KEY_PREVIOUS")
 
+    @field_validator("SENTRY_DSN", mode="before")
+    @classmethod
+    def _blank_sentry_dsn_is_unset(cls, v: str | None) -> str | None:
+        # Compose mounts an empty file when error tracking is off.
+        if v is None:
+            return None
+        return str(v).strip() or None
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _warn_on_weak_database_password(cls, v: str) -> str:
