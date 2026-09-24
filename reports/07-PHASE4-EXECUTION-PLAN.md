@@ -1,14 +1,16 @@
 # Phase 4 — what is left, and how to do it
 
-**Status: six of the eight items are done** (4.1, 4.2, 4.3, 4.6, 4.7, 4.8, plus
-the small corrections in 4.9), each with tests and, where it is a capacity
-claim, a measurement. Two remain, and both need a decision rather than an
-afternoon:
+**Status: every item is built** (4.1 to 4.9), each with tests and, where it is
+a capacity or security claim, a measurement against the running stack. One
+step is deliberately left to a person:
 
-| Open | Why it is not done here |
+| Waiting on | Why |
 |---|---|
-| 4.4 mTLS for device identity | About a week, and most of it is certificate issuance and rotation for devices — an operational design, not a code change. Per-device keys made it optional rather than urgent. |
-| 4.5 Purge the committed database blobs | Rewrites history and force-pushes, so every clone has to be re-made. That is the repository owner's call and a moment everyone agrees on, not something to slip into a pull request. |
+| 4.5, the force-push | `scripts/purge-db-history.sh` rewrites a mirror, verifies it and stops. Pushing changes every commit id and makes every clone obsolete: the repository owner's call, after rotating the five exposed accounts and warning everyone with a clone. |
+
+mTLS (4.4) is built and off by default: port 8443 admits no one until an
+operator creates the device CA, and `DEVICE_MTLS_REQUIRED` stays off until the
+fleet has certificates. Both are operations, described in `docs/OPERATIONS.md`.
 
 What each item was, and what it is now, follows. Phases 0 to 3 are done; this
 plan covers what they deliberately left open, what the load test recommended,
@@ -46,11 +48,15 @@ stress, and `swarmguard_guard_declined_total` is the only thing that says so.
    claimed in Redis so they run once per interval rather than once per worker.
    Measured: two workers hold 400 packets/second with a half-second median,
    where one was at six seconds.
-2. **Refuse telemetry the server cannot reach in time.** A packet whose
-   detection cannot run for a minute is not worth the alert it might raise.
-   The ingest route can compare the device's sample clock against the window
-   the drone's recent packets occupy and reject the ones that are already
-   stale, with `503` and `Retry-After`, before they reach storage.
+2. **Refuse telemetry the server cannot reach in time.** ✅ Done. A packet
+   whose device clock is too far behind the drone's recent packets for the
+   guard to rate, and which a clock reset cannot explain, is answered `503`
+   with `Retry-After` and not stored (`services/ingest_staleness.py`). It asks
+   the guard's own question, so the packet refused is exactly the one the
+   guard would have declined. Measured: `guard_declined` 40 → **0**, 1,080 late
+   packets answered 503, no false incidents. The first attempt found a false
+   positive the guard already had — a late packet after a pause read as a
+   reboot — now fixed in the guard too (06-LOAD-TEST-RESULTS.md, section 7).
 
 **How we will know.** Rerun the capacity phases: the backlog visible as 503s
 rather than as minutes of latency, and `swarmguard_guard_declined_total` at
@@ -100,7 +106,7 @@ a token from the query string.
 
 **Effort.** 2 days.
 
-### 4.4 mTLS for device identity
+### 4.4 mTLS for device identity ✅
 
 **What is wrong.** A device key is a bearer secret. Anyone who reads it from a
 recovered airframe can send telemetry as that drone until it is revoked.
@@ -114,12 +120,26 @@ payload without one is refused at the proxy, not the application.
 
 **Effort.** 1 week, most of it certificate issuance and rotation for devices.
 
-### 4.5 Purge the committed database blobs from history
+**Done.** Port 8443 (`frontend/nginx.conf`) demands a certificate from the
+device CA and checks the CRL; only ingest exists there. `scripts/device-ca.sh`
+creates the CA and issues, lists and revokes certificates naming one drone in
+one organization (`CN=<drone>`, `O=org:<id>`); the CA key never goes to the
+server. The API refuses a certificate presented for another drone, and with
+`DEVICE_MTLS_REQUIRED` refuses ingest that did not come through 8443; the
+device key is still required alongside. On 443 nginx blanks the certificate
+headers so they cannot be forged. With no CA mounted the port starts and
+admits no one. Verified through real nginx: no certificate and a revoked one
+are refused by nginx (400), the drone's own is stored (200), another drone's is
+refused by the API (403), forged headers on 443 are ignored.
 
-**What is wrong.** Three commits in history add a `.db` file
-(`1447c14`, `bd6903e`, `d32ac73`). The file is untracked today, but the blobs —
-including four password hashes — are still in the repository and in every
-clone.
+### 4.5 Purge the committed database blobs from history ⏸ prepared
+
+**What is wrong.** `backend/swarmguard.db` was added, modified in nine commits
+and deleted twice, and `swarmguard 2.db` and `swarmguard 3.db` were added in
+`1447c14`: nine database blobs in all. (This plan used to say three commits;
+`git log --all -- '*.db'` says otherwise.) The files are untracked today, but
+the blobs — with password hashes for five accounts: admin, analyst, commander,
+observer, operator — are still in the repository and in every clone.
 
 **The fix.** `git filter-repo` to drop the paths, force-push, and rotate
 anything the blobs contained that is still valid. This rewrites history, so it
@@ -127,6 +147,14 @@ needs a quiet moment and everyone re-cloning.
 
 **How we will know.** The blobs are unreachable (`git log --all -- '*.db'`
 returns nothing) and the hashes no longer authenticate anywhere.
+
+**Prepared.** `scripts/purge-db-history.sh <source> <workdir>` mirror-clones,
+names the accounts to rotate from the users table in each blob, rewrites
+history with git-filter-repo, verifies that no database blob is reachable, and
+prints the push commands without running them. Rehearsed on a mirror of the
+local repository: 9 blobs removed, none left, 160 commits to 159, 14.6 to 12.4
+MiB. The push, the rotation and asking GitHub to drop old pull-request refs are
+the owner's; `docs/OPERATIONS.md` has the sequence.
 
 **Effort.** Half a day, plus coordination.
 
@@ -197,6 +225,8 @@ except in the database. **Effort:** 2 days with tenancy tests and audit rows.
 | A Sentry project DSN | error tracking | stays off; scrubbing is tested |
 | An alert receiver (email, chat, pager) | Prometheus rules | alerts fire into Prometheus only |
 | A LiveReview AI key (BYOK) | the commit gate | reviews cannot run on the free plan |
+| New passwords for admin, analyst, commander, observer, operator, then the force-push | 4.5 | the hashes stay in every clone |
+| A device CA, certificates on the drones | 4.4 enforced (`DEVICE_MTLS_REQUIRED`) | 8443 admits no one; device keys on 443 as today |
 
 ---
 
@@ -204,14 +234,14 @@ except in the database. **Effort:** 2 days with tenancy tests and audit rows.
 
 | Order | Item | Why here |
 |---|---|---|
-| 1 | 4.1 shed load / workers | It is the one open defect with false CRITICAL alerts behind it |
-| 2 | 4.7 heartbeat through the engine | One day, removes duplicate incidents an operator sees today |
-| 3 | 4.6 MAVLink into detection | A whole ingest path with no detector is a bigger hole than it looks |
-| 4 | 4.2 per-device rate limit | Cheap now that credentials exist |
-| 5 | 4.3 WebSocket ticket | Security debt with a known shape |
-| 6 | 4.5 history purge | Needs a quiet moment and everyone re-cloning |
-| 7 | 4.8 user administration | Product gap, no security consequence today |
-| 8 | 4.4 mTLS | The largest, and optional while device keys are revocable |
+| 1 | 4.1 shed load / workers ✅ | It is the one open defect with false CRITICAL alerts behind it |
+| 2 | 4.7 heartbeat through the engine ✅ | One day, removes duplicate incidents an operator sees today |
+| 3 | 4.6 MAVLink into detection ✅ | A whole ingest path with no detector is a bigger hole than it looks |
+| 4 | 4.2 per-device rate limit ✅ | Cheap now that credentials exist |
+| 5 | 4.3 WebSocket ticket ✅ | Security debt with a known shape |
+| 6 | 4.5 history purge ⏸ | Prepared and rehearsed; the push needs the owner, a quiet moment and everyone re-cloning |
+| 7 | 4.8 user administration ✅ | Product gap, no security consequence today |
+| 8 | 4.4 mTLS ✅ | The largest; built, and off until the fleet has certificates |
 
 **Total:** about three weeks, 4.4 excluded.
 

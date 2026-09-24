@@ -134,23 +134,23 @@ false alerts over them, but detection is degraded exactly when it matters, and
 earlier or more workers, both recorded as recommendations. Also unproven here: mTLS for airborne assets, which
 remains the right long-term answer to 3.2.
 
-**Phase 4 is done bar two items that need a decision** — branch
+**Phase 4 is built; one step waits on the owner** — branch
 `feat/phase4-hardening`, one commit per item, planned in
 [`07-PHASE4-EXECUTION-PLAN.md`](07-PHASE4-EXECUTION-PLAN.md). Gates: **ruff
-clean, mypy clean, 897 passed** (from 839 at the end of Phase 3), frontend
+clean, mypy clean, 952 passed** (from 839 at the end of Phase 3), frontend
 109/109, single alembic head `n4c5d6e7f8a9`.
 
 | Item | Status |
 |---|---|
-| 4.1 One process, ~200 packets/s, and detection goes quiet past it | ✅ `UVICORN_WORKERS`: metrics aggregate across workers, start-up refuses a worker count whose pools would exceed `max_connections`, background passes are claimed in Redis so they run once. Measured: two workers hold 400/s at a 0.5 s median where one was at 6 s |
+| 4.1 One process, ~200 packets/s, and detection goes quiet past it | ✅ `UVICORN_WORKERS`: metrics aggregate across workers, start-up refuses a worker count whose pools would exceed `max_connections`, background passes are claimed in Redis so they run once. Measured: two workers hold 400/s at a 0.5 s median where one was at 6 s. And telemetry too late to rate is answered 503 before storage: guard declines 40 → 0 under late delivery, and a late-packet-read-as-reboot false positive found and fixed on the way |
 | 4.2 One uplink, one rate-limit bucket for the whole fleet | ✅ keyed on the device credential, so a noisy airframe cannot starve its neighbours; the shared fleet key still counts per address |
 | 4.3 The session JWT travelled in the WebSocket URL | ✅ `POST /auth/ws-ticket`: 30 s, single use, refused on replay, and a session token is not accepted as one |
 | 4.6 MAVLink telemetry stored and never scored | ✅ every packet starts the same detection cycle the HTTP route does; a spoofed MAVLink track now files an incident |
 | 4.7 Heartbeat incidents bypassed the incident engine | ✅ through the engine: suppression, escalation, the advisory lock, thresholds and a recommended action |
 | 4.8 No way to change a role, disable an account or delete one | ✅ `PATCH`/`DELETE /users/{id}`, audited, sessions revoked, and an organization cannot lock itself out |
 | 4.9 Documents that had drifted | ✅ SQLite claim, route count, entity diagram |
-| 4.4 mTLS for device identity | ⏳ about a week, most of it certificate issuance and rotation: an operational design |
-| 4.5 Committed database blobs in git history | ⏳ rewrites history and force-pushes; the owner's call, not a pull request's |
+| 4.4 mTLS for device identity | ✅ port 8443 demands a device-CA certificate and checks the CRL; the API refuses one for another drone, and with `DEVICE_MTLS_REQUIRED` anything not through 8443. `scripts/device-ca.sh` issues and revokes. Off until the fleet has certificates |
+| 4.5 Committed database blobs in git history | ⏸ `scripts/purge-db-history.sh` prepared and rehearsed (9 blobs, 5 accounts to rotate); the force-push is the owner's call |
 
 The descriptions below are kept as the record of what was missing.
 
