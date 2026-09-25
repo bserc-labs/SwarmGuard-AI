@@ -16,14 +16,17 @@ spoofed position jumps, so the two diverge.
 
 | Subsystem | State |
 |---|---|
-| Telemetry ingest (REST + MAVLink) | Working |
+| Telemetry ingest (REST + MAVLink), both scored by detection | Working |
+| Refusing telemetry too late to rate (503 before storage) | Working, on by default |
 | Tier 1 detection — kinematic guard | Working, **live** |
 | Tier 2 detection — ML anomaly model | Trained, **disabled** — see Results |
 | Explainable incidents | Working |
-| WebSocket live feed | Working |
+| WebSocket live feed (single-use tickets) | Working |
 | Multi-tenant isolation (RBAC + org scoping) | Working |
+| Device identity by client certificate (mTLS, port 8443) | Built, **off** until a device CA is mounted |
+| User administration (role, disable, delete) | API working; the dashboard lists users only |
 | Operator dashboard (11 screens) | Working |
-| Ping DoS / jamming classification | Not implemented — see Scope |
+| Ping DoS / jamming classification by the ML model | Not implemented — see Scope. The guard flags satellite loss and the heartbeat monitor flags a silent drone |
 
 ---
 
@@ -55,6 +58,15 @@ This is the floor, not the ceiling: it catches gross manipulation, not subtle
 drift. But it is deterministic, has no false positives on physically valid
 flight, requires no training data, and does not degrade when deployed somewhere
 that looks nothing like the training set.
+
+Rates are divided by the drone's own sample clock (`sample_time_ms`), not by
+when packets happened to arrive. A packet delivered so late that neither clock
+gives a trustworthy interval gets **no verdict** rather than a false alarm,
+and is counted in `swarmguard_guard_declined_total`. Ingest asks the same
+question first and refuses such a packet with **503 and `Retry-After`**, so an
+overloaded link shows up at the sender instead of as a detector that has
+quietly stopped rating ([`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md),
+section 7).
 
 ### Tier 2 — ML anomaly model (disabled by default)
 
@@ -187,9 +199,15 @@ carry that geography into its decision boundary.
 ## Architecture
 
 ```
-MAVLink / REST  ─▶  /telemetry/ingest  ─▶  TimescaleDB
-                            │
-                            └─▶ detection_pipeline (background)
+REST via nginx :443 (device key), or :8443 (device key + client certificate)
+        │
+        ▼
+/telemetry/ingest ── too late to rate? ──▶ 503 Retry-After, not stored
+        │
+        ▼
+TimescaleDB  ◀── MAVLink receiver
+        │
+        └─▶ detection_pipeline (background, for both paths)
                                      │
                                      ├─▶ Tier 1: KinematicGuard      ── fires ──┐
                                      │      (deterministic physics)             │
@@ -233,6 +251,21 @@ Full documentation: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 - **Device authentication** — `/telemetry/ingest` requires both an operator
   bearer token and a device key: one per drone, stored as a digest, revocable on
   its own; the shared fleet key can be switched off once no drone uses it
+- **Device certificates (mTLS)** — port 8443 accepts ingest only from a drone
+  holding an unrevoked certificate from the device CA (`scripts/device-ca.sh`),
+  refused by nginx before the API sees the request; the API refuses a
+  certificate presented for another drone, and `DEVICE_MTLS_REQUIRED` makes a
+  device key alone insufficient ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#device-certificates-mtls-on-port-8443))
+- **WebSocket tickets** — the live feed is opened with a single-use ticket from
+  `POST /auth/ws-ticket` that expires in 30 seconds; the session token never
+  appears in a URL
+- **User administration** — `PATCH`/`DELETE /users/{id}` change a role, disable
+  or delete an account, revoke its sessions, and are audited; an organization
+  cannot lock itself out
+- **Password rotation** — `backend/scripts/rotate_passwords.py` sets a new
+  random password on named accounts on the server that holds them, ends their
+  sessions and audits it; there is deliberately no API route for setting
+  someone else's password
 - **Secrets as files** — mounted at `/run/secrets`, never container environment
   variables; startup fails on absent, short, or publicly-known secrets
   (`backend/config.py`)
@@ -293,7 +326,10 @@ The application is served over **HTTPS on `:443`** (`https://localhost`). Port 8
 only redirects. With no certificate in `./certs` the container generates a
 self-signed one, so expect a browser warning locally; `scripts/make-dev-cert.sh`
 makes that certificate stable, and a real deployment mounts its own
-([`docs/OPERATIONS.md`](docs/OPERATIONS.md#tls)). The API is published on loopback only —
+([`docs/OPERATIONS.md`](docs/OPERATIONS.md#tls)). Port **8443** is telemetry
+ingest for drones with a client certificate; until a device CA is mounted
+(`scripts/device-ca.sh init`, then `SWARMGUARD_DEVICE_TRUST_DIR`) it admits no
+one, and drones ingest over 443 with their device keys. The API is published on loopback only —
 `http://localhost:8000` (OpenAPI docs at `/docs`) — for the local demo and
 scripts; everything else reaches it through nginx at `/api`. Every variable in
 `.env` is passed to the backend container; the compose file overrides
@@ -331,9 +367,17 @@ the dashboard in real time via WebSocket.
 ## Testing
 
 ```bash
-cd backend && pytest                 # requires a running TimescaleDB
+cd backend && pytest                 # requires a running TimescaleDB and Redis
 cd frontend && npm run test
 ```
+
+A few tests skip unless their tool is present: the live security suite needs a
+running server with `ADMIN_PASSWORD` set (CI runs it), and the history-purge
+test needs `git-filter-repo`.
+
+Load testing: `scripts/loadtest.py` drives a fleet with per-drone keys against
+a running stack and records ingest, detection and WebSocket delivery; results
+and method are in [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md).
 
 ## Configuration
 
@@ -346,13 +390,14 @@ cd frontend && npm run test
 | `GUARD_MIN_SATELLITES` | `6` | Satellite-loss floor |
 | `GUARD_DEVICE_CLOCK_MAX_LEAD_S` | `10` | How far the device sample clock (`sample_time_ms`) may exceed packet arrival spacing before it is disbelieved for that pair |
 | `GUARD_DEVICE_CLOCK_MAX_REORDER_S` | `10` | How far behind the rest of the window a late packet's device clock may be and still be rated against its neighbour, rather than taken for a reboot |
-| `GUARD_MIN_RESET_GAP_S` | `1` | The shortest arrival gap that could contain a device-clock reset. Closer together than this, a backwards clock is a late packet rather than a reboot, and the guard declines to rate instead of dividing by milliseconds |
+| `GUARD_MIN_RESET_GAP_S` | `1` | The shortest arrival gap that could contain a device-clock reset. Closer together than this, a backwards clock is a late packet rather than a reboot, and the guard declines to rate instead of dividing by milliseconds. A clock showing more uptime than has passed since the last delivery is also read as late, not reset |
+| `INGEST_REJECT_STALE` | `true` | Answer 503 with `Retry-After` to a packet too far behind the drone's recent ones for the guard to rate, instead of storing it ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#stale-telemetry)) |
 | `AI_INCIDENTS_ENABLED` | `false` | Let Tier 2 raise incidents — see Model results before enabling |
 | `MODEL_VERSION` | `v2` | Active model in the registry |
 | `MAVLINK_ENABLED` | `false` | Enable the MAVLink receiver |
 | `MAVLINK_ORGANIZATION_ID` | — | Required when MAVLink is enabled; telemetry without it is invisible to every tenant |
 | `WEBSOCKET_INTERVAL` | `0.1` | Broadcast interval (10 Hz) |
-| `REDIS_URL` | — | Required for multi-worker deployments |
+| `REDIS_URL` | — | Holds WebSocket tickets and background-pass claims; required for multi-worker deployments |
 | `LOGIN_RATE_LIMIT` | `5/minute` | Login attempts per client address; raise only for an ephemeral test deployment |
 | `INGEST_RATE_LIMIT` | `50/second` | Telemetry packets **per device credential**, so drones behind one uplink do not divide one allowance. A drone still using the shared fleet key is limited per client address instead; see [`reports/06-LOAD-TEST-RESULTS.md`](reports/06-LOAD-TEST-RESULTS.md) |
 | `HTTP_MAX_IN_FLIGHT` | `40` | Requests inside the API at once; the rest wait at the door ([Admission](docs/OPERATIONS.md#metrics)) |
@@ -379,6 +424,8 @@ cd frontend && npm run test
 | telemetry retention | 3 days | A TimescaleDB policy on one-day chunks, not a setting: change it with `alter_job` ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#telemetry-retention)) |
 | `AUDIT_RETENTION_DAYS` | `365` | Audit rows older than this are deleted daily through the append-only table's maintenance flag. `0` keeps everything |
 | `DEVICE_SHARED_KEY_ENABLED` | `true` | Accept the shared `DRONE_API_KEY` on ingest alongside per-device keys. Turn off once `swarmguard_device_auth_total{method="shared_key"}` stops moving ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#device-credentials-and-retiring-drone_api_key)) |
+| `DEVICE_MTLS_REQUIRED` | `false` | Refuse ingest that did not come through port 8443 with this drone's client certificate. Turn on once `swarmguard_device_certificate_total{outcome="absent"}` stops moving |
+| `SWARMGUARD_DEVICE_TRUST_DIR` | `./device-ca/trust` | Host directory with the device CA's `ca.crt` and `crl.pem` (public; the CA key stays off the server). Empty, port 8443 admits no one. Republish the CRL monthly: nginx refuses every certificate once it expires |
 | `SENTRY_DSN` | — | Error tracking. Unset, off. Under compose it is the secret file `sentry_dsn` |
 | `SWARMGUARD_ENV` / `SWARMGUARD_RELEASE` | `development` / image tag | Tags on every error and metric; `deploy.sh` sets the release |
 | `METRICS_TOKEN` | — | Bearer token required on `/metrics`. Unset, the endpoint relies on not being proxied and on the API port being loopback-only |
@@ -404,6 +451,11 @@ Ordered by what the measurements say matters:
 4. Widen the kinematic guard: IMU/GNSS cross-checks, geofence-rate limits.
 5. Model drift monitoring and scheduled retraining.
 6. Approval workflow for outbound drone commands (schema exists, UI pending).
+7. Dashboard controls for user administration (the API exists).
+8. Operations before the next milestone: rotate the five seed accounts whose
+   password hashes are in git history, then purge the committed databases
+   with `scripts/purge-db-history.sh` (prepared; the force-push is the owner's
+   call). Production and platform status: [`reports/03-PRODUCTION-ROADMAP.md`](reports/03-PRODUCTION-ROADMAP.md).
 
 ## License
 
